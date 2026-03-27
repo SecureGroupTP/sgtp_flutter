@@ -1,0 +1,361 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import '../blocs/chat/chat_bloc.dart';
+import '../blocs/chat/chat_event.dart';
+import '../blocs/setup/setup_bloc.dart';
+import '../blocs/setup/setup_event.dart';
+import '../blocs/setup/setup_state.dart';
+import 'chat_page.dart';
+
+class SetupPage extends StatefulWidget {
+  const SetupPage({super.key});
+
+  @override
+  State<SetupPage> createState() => _SetupPageState();
+}
+
+class _SetupPageState extends State<SetupPage> {
+  final _serverCtrl = TextEditingController();
+  final _roomCtrl = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    context.read<SetupBloc>().add(const SetupLoadData());
+  }
+
+  @override
+  void dispose() {
+    _serverCtrl.dispose();
+    _roomCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocConsumer<SetupBloc, SetupState>(
+      listener: (context, state) {
+        // Sync text controllers with state
+        if (_serverCtrl.text != state.serverAddress) {
+          _serverCtrl.text = state.serverAddress;
+          _serverCtrl.selection = TextSelection.fromPosition(
+            TextPosition(offset: _serverCtrl.text.length),
+          );
+        }
+
+        // Show error
+        if (state.error != null) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(
+              content: Text(state.error!),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ));
+        }
+
+        // Navigate to chat when config is ready
+        if (state.connectionConfig != null) {
+          final config = state.connectionConfig!;
+          final chatBloc = ChatBloc()..add(ChatConnect(config));
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => BlocProvider.value(
+                value: chatBloc,
+                child: const ChatPage(),
+              ),
+            ),
+          );
+        }
+      },
+      builder: (context, state) {
+        return Scaffold(
+          body: SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 32),
+                    _buildHeader(context),
+                    const SizedBox(height: 40),
+                    _buildServerField(context, state),
+                    const SizedBox(height: 16),
+                    _buildPrivateKeySection(context, state),
+                    const SizedBox(height: 16),
+                    _buildWhitelistSection(context, state),
+                    const SizedBox(height: 16),
+                    _buildRoomUUIDField(context, state),
+                    const SizedBox(height: 32),
+                    _buildConnectButton(context, state),
+                    if (state.myPublicKey != null) ...[
+                      const SizedBox(height: 24),
+                      _buildMyKeyInfo(context, state),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Icon(
+          Icons.lock_outline,
+          size: 64,
+          color: theme.colorScheme.primary,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'SGTP Chat',
+          style: theme.textTheme.headlineLarge?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Secure Group Transfer Protocol',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildServerField(BuildContext context, SetupState state) {
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: state.serverAddress),
+      optionsBuilder: (textEditingValue) {
+        if (textEditingValue.text.isEmpty) return state.savedAddresses;
+        return state.savedAddresses.where(
+          (addr) => addr.contains(textEditingValue.text),
+        );
+      },
+      onSelected: (value) {
+        context.read<SetupBloc>().add(SetupServerAddressChanged(value));
+      },
+      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+        // Sync our stored controller text into autocomplete controller
+        if (controller.text != state.serverAddress && state.serverAddress.isNotEmpty) {
+          controller.text = state.serverAddress;
+        }
+        return TextFormField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: const InputDecoration(
+            labelText: 'Server address',
+            hintText: 'host:7777',
+            prefixIcon: Icon(Icons.dns_outlined),
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (v) =>
+              context.read<SetupBloc>().add(SetupServerAddressChanged(v)),
+          validator: (v) =>
+              (v == null || v.trim().isEmpty) ? 'Required' : null,
+        );
+      },
+    );
+  }
+
+  Widget _buildPrivateKeySection(BuildContext context, SetupState state) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outline),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Private key', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    state.privateKeyPath ?? 'No file selected',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: state.privateKeyPath != null
+                          ? theme.colorScheme.onSurface
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.tonalIcon(
+                  onPressed: state.isLoading
+                      ? null
+                      : () => context
+                          .read<SetupBloc>()
+                          .add(const SetupPickPrivateKey()),
+                  icon: const Icon(Icons.file_open_outlined),
+                  label: const Text('Browse'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWhitelistSection(BuildContext context, SetupState state) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outline),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Trusted peers (whitelist)', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text(
+              'Select .pub key files of peers you trust',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    state.whitelistPaths.isEmpty
+                        ? 'No files selected'
+                        : '${state.whitelistPaths.length} file(s): ${state.whitelistPaths.take(2).join(', ')}${state.whitelistPaths.length > 2 ? '...' : ''}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: state.whitelistPaths.isNotEmpty
+                          ? theme.colorScheme.onSurface
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.tonalIcon(
+                  onPressed: state.isLoading
+                      ? null
+                      : () => context
+                          .read<SetupBloc>()
+                          .add(const SetupPickWhitelistFiles()),
+                  icon: const Icon(Icons.folder_open_outlined),
+                  label: const Text('Browse'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRoomUUIDField(BuildContext context, SetupState state) {
+    return TextFormField(
+      controller: _roomCtrl,
+      decoration: const InputDecoration(
+        labelText: 'Room UUID (optional)',
+        hintText: 'Leave empty to create new room',
+        prefixIcon: Icon(Icons.meeting_room_outlined),
+        border: OutlineInputBorder(),
+      ),
+      onChanged: (v) =>
+          context.read<SetupBloc>().add(SetupRoomUUIDChanged(v)),
+    );
+  }
+
+  Widget _buildConnectButton(BuildContext context, SetupState state) {
+    return FilledButton.icon(
+      onPressed: state.isLoading || !state.isReadyToConnect
+          ? null
+          : () => context.read<SetupBloc>().add(const SetupConnect()),
+      icon: state.isLoading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.login),
+      label: Text(state.isLoading ? 'Connecting...' : 'Connect'),
+      style: FilledButton.styleFrom(
+        minimumSize: const Size.fromHeight(52),
+      ),
+    );
+  }
+
+  Widget _buildMyKeyInfo(BuildContext context, SetupState state) {
+    final theme = Theme.of(context);
+    final pubHex = state.myPublicKey!
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+
+    return Card(
+      color: theme.colorScheme.secondaryContainer,
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline,
+                    size: 16, color: theme.colorScheme.onSecondaryContainer),
+                const SizedBox(width: 8),
+                Text('Your public key (share with peers)',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.onSecondaryContainer,
+                    )),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    pubHex,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 18),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: pubHex));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Public key copied')),
+                    );
+                  },
+                  color: theme.colorScheme.onSecondaryContainer,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
