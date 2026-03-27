@@ -30,14 +30,30 @@ class ChatSendImage extends ChatEvent {
   final String mime;
   const ChatSendImage({required this.bytes, required this.name, required this.mime});
   @override
-  List<Object?> get props => [bytes, name, mime];
+  List<Object?> get props => [name, mime];
+}
+
+class ChatSendVideo extends ChatEvent {
+  final Uint8List bytes;
+  final String name;
+  final String mime;
+  const ChatSendVideo({required this.bytes, required this.name, required this.mime});
+  @override
+  List<Object?> get props => [name, mime];
+}
+
+class ChatSendVoice extends ChatEvent {
+  final Uint8List bytes;
+  final String mime;
+  const ChatSendVoice({required this.bytes, required this.mime});
+  @override
+  List<Object?> get props => [mime];
 }
 
 class ChatDisconnect extends ChatEvent {
   const ChatDisconnect();
 }
 
-// Internal event carrying SgtpEvent from the client stream
 class ChatInternalSgtpEvent extends ChatEvent {
   final SgtpEvent sgtpEvent;
   const ChatInternalSgtpEvent(this.sgtpEvent);

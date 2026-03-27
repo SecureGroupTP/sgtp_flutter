@@ -15,12 +15,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatConnect>(_onConnect);
     on<ChatSendMessage>(_onSendMessage);
     on<ChatSendImage>(_onSendImage);
+    on<ChatSendVideo>(_onSendVideo);
+    on<ChatSendVoice>(_onSendVoice);
     on<ChatDisconnect>(_onDisconnect);
     on<ChatInternalSgtpEvent>(_onSgtpEvent);
   }
 
   Future<void> _onConnect(ChatConnect event, Emitter<ChatState> emit) async {
-    // Dispose previous client if any
     await _eventSub?.cancel();
     await _client?.close();
 
@@ -40,7 +41,6 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       clearError: true,
     ));
 
-    // Subscribe to client events before connecting
     _eventSub = client.events.listen(
       (sgtpEvent) => add(ChatInternalSgtpEvent(sgtpEvent)),
       onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()))),
@@ -49,20 +49,24 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await client.connect();
   }
 
-  Future<void> _onSendMessage(
-    ChatSendMessage event,
-    Emitter<ChatState> emit,
-  ) async {
+  Future<void> _onSendMessage(ChatSendMessage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendMessage(event.text);
   }
 
-  Future<void> _onSendImage(
-    ChatSendImage event,
-    Emitter<ChatState> emit,
-  ) async {
+  Future<void> _onSendImage(ChatSendImage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendImage(event.bytes, event.name, event.mime);
+  }
+
+  Future<void> _onSendVideo(ChatSendVideo event, Emitter<ChatState> emit) async {
+    if (_client == null || state.status != ChatStatus.ready) return;
+    await _client!.sendVideo(event.bytes, event.name, event.mime);
+  }
+
+  Future<void> _onSendVoice(ChatSendVoice event, Emitter<ChatState> emit) async {
+    if (_client == null || state.status != ChatStatus.ready) return;
+    await _client!.sendVoice(event.bytes, event.mime);
   }
 
   Future<void> _onDisconnect(ChatDisconnect event, Emitter<ChatState> emit) async {
@@ -99,9 +103,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
       case SgtpPeerJoined(:final peerUUID):
         if (!state.peerUUIDs.contains(peerUUID)) {
-          emit(state.copyWith(
-            peerUUIDs: [...state.peerUUIDs, peerUUID],
-          ));
+          emit(state.copyWith(peerUUIDs: [...state.peerUUIDs, peerUUID]));
         }
 
       case SgtpPeerLeft(:final peerUUID):
@@ -110,10 +112,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ));
 
       case SgtpError(:final error):
-        emit(state.copyWith(
-          status: ChatStatus.error,
-          errorMessage: error,
-        ));
+        emit(state.copyWith(status: ChatStatus.error, errorMessage: error));
 
       case SgtpDisconnected():
         emit(state.copyWith(status: ChatStatus.disconnected));

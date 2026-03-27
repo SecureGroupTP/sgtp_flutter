@@ -1,0 +1,18 @@
+name: Build Windows
+on: [push, workflow_dispatch]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgtp-windows
+          path: build/windows/x64/runner/Release/

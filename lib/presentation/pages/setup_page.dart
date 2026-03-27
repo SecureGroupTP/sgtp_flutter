@@ -38,15 +38,12 @@ class _SetupPageState extends State<SetupPage> {
   Widget build(BuildContext context) {
     return BlocConsumer<SetupBloc, SetupState>(
       listener: (context, state) {
-        // Sync text controllers with state
         if (_serverCtrl.text != state.serverAddress) {
           _serverCtrl.text = state.serverAddress;
           _serverCtrl.selection = TextSelection.fromPosition(
-            TextPosition(offset: _serverCtrl.text.length),
-          );
+              TextPosition(offset: _serverCtrl.text.length));
         }
 
-        // Show error
         if (state.error != null) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
@@ -56,7 +53,6 @@ class _SetupPageState extends State<SetupPage> {
             ));
         }
 
-        // Navigate to chat when config is ready
         if (state.connectionConfig != null) {
           final config = state.connectionConfig!;
           final chatBloc = ChatBloc()..add(ChatConnect(config));
@@ -110,26 +106,15 @@ class _SetupPageState extends State<SetupPage> {
     final theme = Theme.of(context);
     return Column(
       children: [
-        Icon(
-          Icons.lock_outline,
-          size: 64,
-          color: theme.colorScheme.primary,
-        ),
+        Icon(Icons.lock_outline, size: 64, color: theme.colorScheme.primary),
         const SizedBox(height: 16),
-        Text(
-          'SGTP Chat',
-          style: theme.textTheme.headlineLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: theme.colorScheme.primary,
-          ),
-        ),
+        Text('SGTP Chat',
+            style: theme.textTheme.headlineLarge?.copyWith(
+                fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
         const SizedBox(height: 8),
-        Text(
-          'Secure Group Transfer Protocol',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
+        Text('Secure Group Transfer Protocol',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
       ],
     );
   }
@@ -139,16 +124,14 @@ class _SetupPageState extends State<SetupPage> {
       initialValue: TextEditingValue(text: state.serverAddress),
       optionsBuilder: (textEditingValue) {
         if (textEditingValue.text.isEmpty) return state.savedAddresses;
-        return state.savedAddresses.where(
-          (addr) => addr.contains(textEditingValue.text),
-        );
+        return state.savedAddresses
+            .where((addr) => addr.contains(textEditingValue.text));
       },
-      onSelected: (value) {
-        context.read<SetupBloc>().add(SetupServerAddressChanged(value));
-      },
+      onSelected: (value) =>
+          context.read<SetupBloc>().add(SetupServerAddressChanged(value)),
       fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
-        // Sync our stored controller text into autocomplete controller
-        if (controller.text != state.serverAddress && state.serverAddress.isNotEmpty) {
+        if (controller.text != state.serverAddress &&
+            state.serverAddress.isNotEmpty) {
           controller.text = state.serverAddress;
         }
         return TextFormField(
@@ -183,6 +166,10 @@ class _SetupPageState extends State<SetupPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Private key', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text('Your ed25519 private key file (OpenSSH format)',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -230,37 +217,45 @@ class _SetupPageState extends State<SetupPage> {
           children: [
             Text('Trusted peers (whitelist)', style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
-            Text(
-              'Select .pub key files of peers you trust',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
+            Text('Select a folder with .pub key files, or pick individual files',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             const SizedBox(height: 8),
+            if (state.whitelistPaths.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '${state.whitelistPaths.length} key(s) loaded: '
+                  '${state.whitelistPaths.take(3).join(', ')}'
+                  '${state.whitelistPaths.length > 3 ? '…' : ''}',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.primary),
+                ),
+              ),
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    state.whitelistPaths.isEmpty
-                        ? 'No files selected'
-                        : '${state.whitelistPaths.length} file(s): ${state.whitelistPaths.take(2).join(', ')}${state.whitelistPaths.length > 2 ? '...' : ''}',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: state.whitelistPaths.isNotEmpty
-                          ? theme.colorScheme.onSurface
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                  child: FilledButton.tonalIcon(
+                    onPressed: state.isLoading
+                        ? null
+                        : () => context
+                            .read<SetupBloc>()
+                            .add(const SetupPickWhitelistFolder()),
+                    icon: const Icon(Icons.folder_open_outlined),
+                    label: const Text('Folder'),
                   ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton.tonalIcon(
-                  onPressed: state.isLoading
-                      ? null
-                      : () => context
-                          .read<SetupBloc>()
-                          .add(const SetupPickWhitelistFiles()),
-                  icon: const Icon(Icons.folder_open_outlined),
-                  label: const Text('Browse'),
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: state.isLoading
+                        ? null
+                        : () => context
+                            .read<SetupBloc>()
+                            .add(const SetupPickWhitelistFiles()),
+                    icon: const Icon(Icons.file_present_outlined),
+                    label: const Text('Files'),
+                  ),
                 ),
               ],
             ),
@@ -275,9 +270,10 @@ class _SetupPageState extends State<SetupPage> {
       controller: _roomCtrl,
       decoration: const InputDecoration(
         labelText: 'Room UUID (optional)',
-        hintText: 'Leave empty to create new room',
+        hintText: 'Leave empty to create a new random room',
         prefixIcon: Icon(Icons.meeting_room_outlined),
         border: OutlineInputBorder(),
+        helperText: 'Paste a 32-char hex UUID (without dashes) to join existing room',
       ),
       onChanged: (v) =>
           context.read<SetupBloc>().add(SetupRoomUUIDChanged(v)),
@@ -297,9 +293,7 @@ class _SetupPageState extends State<SetupPage> {
             )
           : const Icon(Icons.login),
       label: Text(state.isLoading ? 'Connecting...' : 'Connect'),
-      style: FilledButton.styleFrom(
-        minimumSize: const Size.fromHeight(52),
-      ),
+      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
     );
   }
 
@@ -321,33 +315,29 @@ class _SetupPageState extends State<SetupPage> {
             Row(
               children: [
                 Icon(Icons.info_outline,
-                    size: 16, color: theme.colorScheme.onSecondaryContainer),
+                    size: 16,
+                    color: theme.colorScheme.onSecondaryContainer),
                 const SizedBox(width: 8),
                 Text('Your public key (share with peers)',
                     style: theme.textTheme.titleSmall?.copyWith(
-                      color: theme.colorScheme.onSecondaryContainer,
-                    )),
+                        color: theme.colorScheme.onSecondaryContainer)),
               ],
             ),
             const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    pubHex,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      color: theme.colorScheme.onSecondaryContainer,
-                    ),
-                  ),
+                  child: Text(pubHex,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                          color: theme.colorScheme.onSecondaryContainer)),
                 ),
                 IconButton(
                   icon: const Icon(Icons.copy, size: 18),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: pubHex));
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Public key copied')),
-                    );
+                        const SnackBar(content: Text('Public key copied')));
                   },
                   color: theme.colorScheme.onSecondaryContainer,
                 ),

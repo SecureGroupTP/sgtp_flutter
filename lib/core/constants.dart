@@ -30,22 +30,23 @@ class SgtpConstants {
   static const int pktHsr = 0x000D;
   static const int pktHsra = 0x000E;
 
-  /// Chat key rotation interval in seconds
+  /// Chat key rotation interval in seconds (§1: CK_ROTATION_INTERVAL = 180s)
   static const int ckRotationInterval = 180;
 
-  /// Timestamp validity window in milliseconds
+  /// Timestamp validity window in milliseconds (§1: TIMESTAMP_WINDOW = 30 000ms)
   static const int timestampWindow = 30000;
 
-  /// Maximum payload size (16 MiB)
+  /// Maximum payload size (§1: MAX_PAYLOAD_LENGTH = 16 MiB)
   static const int maxPayloadSize = 16 * 1024 * 1024;
 
-  /// Delay before sending INFO request after first PONG, in milliseconds
-  static const int infoDelayMs = 500;
+  /// Delay before sending INFO request after first PING/PONG, in milliseconds
+  /// (§1: INFO_DELAY = 1s)
+  static const int infoDelayMs = 1000;
 
-  /// PING timeout in seconds
+  /// PING timeout in seconds (§1: PING_TIMEOUT = 30s)
   static const int pingTimeout = 30;
 
-  /// Message failed max retries
+  /// Message failed max retries (§1: MESSAGE_FAILED_RETRIES = 3)
   static const int messageFailedRetries = 3;
 
   /// Header size in bytes
@@ -54,12 +55,18 @@ class SgtpConstants {
   /// Signature size in bytes
   static const int signatureSize = 64;
 
-  /// PING/PONG payload length
+  /// PING/PONG payload length: 32 (x25519) + 32 (ed25519) + 12 ("Client Hello") = 76
   static const int pingPayloadLength = 76;
 
-  /// CHAT_KEY payload length
+  /// Minimum PING/PONG payload: 32 + 32 = 64
+  static const int pingPayloadMinLength = 64;
+
+  /// CHAT_KEY payload length: 8 (epoch) + 48 (ciphertext) = 56
   static const int chatKeyPayloadLength = 56;
 
-  /// FIN payload length
+  /// FIN payload length: 8 (nonce) + 16 (poly1305 tag) = 24
   static const int finPayloadLength = 24;
+
+  /// Chunk size for large media files (8 MiB raw)
+  static const int mediaChunkSize = 8 * 1024 * 1024;
 }

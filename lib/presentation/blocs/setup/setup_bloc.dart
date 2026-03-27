@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -19,6 +20,7 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     on<SetupLoadData>(_onLoadData);
     on<SetupServerAddressChanged>(_onServerAddressChanged);
     on<SetupPickPrivateKey>(_onPickPrivateKey);
+    on<SetupPickWhitelistFolder>(_onPickWhitelistFolder);
     on<SetupPickWhitelistFiles>(_onPickWhitelistFiles);
     on<SetupRoomUUIDChanged>(_onRoomUUIDChanged);
     on<SetupConnect>(_onConnect);
@@ -34,17 +36,11 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     ));
   }
 
-  void _onServerAddressChanged(
-    SetupServerAddressChanged event,
-    Emitter<SetupState> emit,
-  ) {
+  void _onServerAddressChanged(SetupServerAddressChanged event, Emitter<SetupState> emit) {
     emit(state.copyWith(serverAddress: event.address, clearError: true));
   }
 
-  Future<void> _onPickPrivateKey(
-    SetupPickPrivateKey event,
-    Emitter<SetupState> emit,
-  ) async {
+  Future<void> _onPickPrivateKey(SetupPickPrivateKey event, Emitter<SetupState> emit) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
@@ -59,14 +55,11 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
         return;
       }
 
-      // Parse OpenSSH private key
       final parsed = parseOpenSshPrivateKey(bytes);
-      final pubKey = parsed.publicKey;
-
       emit(state.copyWith(
         privateKeyPath: file.name,
         privateKeyBytes: bytes,
-        myPublicKey: pubKey,
+        myPublicKey: parsed.publicKey,
         clearError: true,
       ));
     } catch (e) {
@@ -74,6 +67,50 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     }
   }
 
+  /// Pick a FOLDER containing whitelist .pub files.
+  Future<void> _onPickWhitelistFolder(
+    SetupPickWhitelistFolder event,
+    Emitter<SetupState> emit,
+  ) async {
+    try {
+      final dirPath = await FilePicker.platform.getDirectoryPath();
+      if (dirPath == null) return;
+
+      final dir = Directory(dirPath);
+      final paths = <String>[];
+      final bytesList = <Uint8List>[];
+
+      await for (final entity in dir.list(recursive: false)) {
+        if (entity is File) {
+          try {
+            final bytes = await entity.readAsBytes();
+            final pubKey = tryParsePublicKeyFile(bytes);
+            if (pubKey != null) {
+              paths.add(entity.path.split(Platform.pathSeparator).last);
+              bytesList.add(pubKey);
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (bytesList.isEmpty) {
+        emit(state.copyWith(
+          error: 'No valid ed25519 public keys found in folder "$dirPath"',
+        ));
+        return;
+      }
+
+      emit(state.copyWith(
+        whitelistPaths: paths,
+        whitelistBytes: bytesList,
+        clearError: true,
+      ));
+    } catch (e) {
+      emit(state.copyWith(error: 'Failed to load whitelist folder: $e'));
+    }
+  }
+
+  /// Pick individual whitelist files.
   Future<void> _onPickWhitelistFiles(
     SetupPickWhitelistFiles event,
     Emitter<SetupState> emit,
@@ -92,7 +129,6 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       for (final file in result.files) {
         final bytes = file.bytes;
         if (bytes == null) continue;
-        // Try to parse as public key
         final pubKey = tryParsePublicKeyFile(bytes);
         if (pubKey != null) {
           paths.add(file.name);
@@ -130,28 +166,28 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     emit(state.copyWith(isLoading: true, clearError: true));
 
     try {
-      // Parse private key
       final privKeyBytes = state.privateKeyBytes!;
       final parsed = parseOpenSshPrivateKey(privKeyBytes);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
 
-      // Build whitelist: set of hex-encoded ed25519 public keys
       final whitelist = state.whitelistBytes
           .map((b) => b.map((x) => x.toRadixString(16).padLeft(2, '0')).join())
           .toSet();
 
-      // Parse room UUID
       Uint8List roomUUID;
       final uuidStr = state.roomUUID.trim().replaceAll('-', '');
       if (uuidStr.isEmpty) {
-        roomUUID = Uint8List(16); // zeros = create new
+        roomUUID = Uint8List(16); // zeros = create new random room
       } else {
         try {
+          if (uuidStr.length != 32) {
+            throw const FormatException('UUID must be 32 hex chars (without dashes)');
+          }
           roomUUID = _hexToBytes(uuidStr);
-        } catch (_) {
+        } catch (e) {
           emit(state.copyWith(
             isLoading: false,
-            error: 'Invalid room UUID format',
+            error: 'Invalid room UUID format: $e',
           ));
           return;
         }
@@ -165,7 +201,6 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
         whitelist: whitelist,
       );
 
-      // Save server address
       await _settings.saveAddress(state.serverAddress.trim());
       final updated = await _settings.getSavedAddresses();
 
@@ -176,17 +211,13 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
         clearError: true,
       ));
     } catch (e) {
-      emit(state.copyWith(
-        isLoading: false,
-        error: 'Setup error: $e',
-      ));
+      emit(state.copyWith(isLoading: false, error: 'Setup error: $e'));
     }
   }
 
   Uint8List _hexToBytes(String hex) {
-    if (hex.length != 32) throw FormatException('UUID must be 32 hex chars');
-    final result = Uint8List(16);
-    for (var i = 0; i < 16; i++) {
+    final result = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < result.length; i++) {
       result[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
     }
     return result;

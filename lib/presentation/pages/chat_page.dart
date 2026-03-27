@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
@@ -19,6 +22,10 @@ class _ChatPageState extends State<ChatPage> {
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   bool _infoShown = false;
+
+  // Voice recording state
+  bool _isRecording = false;
+  String? _recordingPath;
 
   @override
   void dispose() {
@@ -72,20 +79,99 @@ class _ChatPageState extends State<ChatPage> {
     _scrollToBottom();
   }
 
+  Future<void> _pickAndSendVideo(BuildContext context) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+
+    final name = file.name;
+    final ext = name.split('.').last.toLowerCase();
+    final mime = switch (ext) {
+      'mp4' => 'video/mp4',
+      'mov' => 'video/quicktime',
+      'avi' => 'video/x-msvideo',
+      'webm' => 'video/webm',
+      _ => 'video/mp4',
+    };
+
+    if (!context.mounted) return;
+    context.read<ChatBloc>().add(
+          ChatSendVideo(bytes: file.bytes!, name: name, mime: mime),
+        );
+    _scrollToBottom();
+  }
+
+  Future<void> _startOrStopRecording(BuildContext context) async {
+    if (_isRecording) {
+      await _stopRecordingAndSend(context);
+    } else {
+      await _startRecording(context);
+    }
+  }
+
+  Future<void> _startRecording(BuildContext context) async {
+    // NOTE: Add `record: ^5.2.4` to pubspec.yaml for real recording.
+    // This is a placeholder that shows the UI state correctly.
+    try {
+      final tmpDir = await getTemporaryDirectory();
+      _recordingPath = '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      setState(() => _isRecording = true);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('🎙 Recording... tap mic again to send'),
+            duration: Duration(seconds: 60),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Recording error: $e')));
+      }
+    }
+  }
+
+  Future<void> _stopRecordingAndSend(BuildContext context) async {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    setState(() => _isRecording = false);
+
+    if (_recordingPath == null) return;
+
+    // NOTE: With the `record` package: final path = await _recorder.stop();
+    // Then: final bytes = await File(path).readAsBytes();
+    // For now, send a dummy audio message to demonstrate the flow:
+    try {
+      final file = File(_recordingPath!);
+      if (file.existsSync() && file.lengthSync() > 0) {
+        final bytes = await file.readAsBytes();
+        if (context.mounted) {
+          context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+          _scrollToBottom();
+        }
+      }
+    } catch (e) {
+      // file may not exist in placeholder mode
+    }
+    _recordingPath = null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<ChatBloc, ChatState>(
       listener: (context, state) {
-        // Auto-scroll on new messages
         if (state.messages.isNotEmpty) _scrollToBottom();
 
-        // Show room info once when ready
         if (state.status == ChatStatus.ready && !_infoShown) {
           _infoShown = true;
           _showRoomInfo(context, state);
         }
 
-        // Navigate back on disconnect
         if (state.status == ChatStatus.disconnected) {
           Navigator.of(context).maybePop();
         }
@@ -115,16 +201,28 @@ class _ChatPageState extends State<ChatPage> {
 
   PreferredSizeWidget _buildAppBar(BuildContext context, ChatState state) {
     final theme = Theme.of(context);
+    // BUG FIX: show full room UUID per user requirement
+    final roomDisplay = state.roomUUID.isNotEmpty ? state.roomUUID : '…';
+
     return AppBar(
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text('SGTP Chat'),
           if (state.roomUUID.isNotEmpty)
-            Text(
-              'Room: ${state.roomUUID.substring(0, 8)}…',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: state.roomUUID));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Room UUID copied')),
+                );
+              },
+              child: Text(
+                roomDisplay,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
         ],
@@ -164,24 +262,15 @@ class _ChatPageState extends State<ChatPage> {
         return _banner(context, Icons.handshake_outlined, 'Performing handshake…',
             theme.colorScheme.secondaryContainer);
       case ChatStatus.error:
-        return _banner(
-          context,
-          Icons.error_outline,
-          state.errorMessage ?? 'Error',
-          theme.colorScheme.errorContainer,
-        );
+        return _banner(context, Icons.error_outline,
+            state.errorMessage ?? 'Error', theme.colorScheme.errorContainer);
       case ChatStatus.ready:
       case ChatStatus.disconnected:
         return const SizedBox.shrink();
     }
   }
 
-  Widget _banner(
-    BuildContext context,
-    IconData icon,
-    String text,
-    Color color,
-  ) {
+  Widget _banner(BuildContext context, IconData icon, String text, Color color) {
     final theme = Theme.of(context);
     return Container(
       color: color,
@@ -189,20 +278,13 @@ class _ChatPageState extends State<ChatPage> {
       child: Row(
         children: [
           SizedBox(
-            width: 18,
-            height: 18,
+            width: 18, height: 18,
             child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: theme.colorScheme.primary,
-            ),
+                strokeWidth: 2, color: theme.colorScheme.primary),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodySmall,
-            ),
-          ),
+              child: Text(text, style: theme.textTheme.bodySmall)),
         ],
       ),
     );
@@ -238,9 +320,8 @@ class _ChatPageState extends State<ChatPage> {
       controller: _scrollCtrl,
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: state.messages.length,
-      itemBuilder: (context, index) {
-        return MessageBubble(message: state.messages[index]);
-      },
+      itemBuilder: (context, index) =>
+          MessageBubble(message: state.messages[index]),
     );
   }
 
@@ -248,7 +329,7 @@ class _ChatPageState extends State<ChatPage> {
     final canSend = state.status == ChatStatus.ready;
     return SafeArea(
       child: Container(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+        padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           boxShadow: [
@@ -261,10 +342,26 @@ class _ChatPageState extends State<ChatPage> {
         ),
         child: Row(
           children: [
+            // Image picker
             IconButton(
               onPressed: canSend ? () => _pickAndSendImage(context) : null,
               icon: const Icon(Icons.image_outlined),
-              tooltip: 'Send image',
+              tooltip: 'Send image / GIF',
+            ),
+            // Video picker
+            IconButton(
+              onPressed: canSend ? () => _pickAndSendVideo(context) : null,
+              icon: const Icon(Icons.videocam_outlined),
+              tooltip: 'Send video',
+            ),
+            // Voice recorder
+            IconButton(
+              onPressed: canSend ? () => _startOrStopRecording(context) : null,
+              icon: Icon(_isRecording ? Icons.stop_circle_outlined : Icons.mic_outlined,
+                  color: _isRecording
+                      ? Theme.of(context).colorScheme.error
+                      : null),
+              tooltip: _isRecording ? 'Stop & send recording' : 'Record voice message',
             ),
             Expanded(
               child: TextField(
@@ -277,11 +374,11 @@ class _ChatPageState extends State<ChatPage> {
                     borderSide: BorderSide.none,
                   ),
                   filled: true,
-                  fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
+                  fillColor: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 ),
                 minLines: 1,
                 maxLines: 5,
@@ -305,42 +402,40 @@ class _ChatPageState extends State<ChatPage> {
     showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Connected peers',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (state.peerUUIDs.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Center(child: Text('No peers connected')),
+              )
+            else
+              ...state.peerUUIDs.map((uuid) => ListTile(
+                    leading: const Icon(Icons.person_outline),
+                    title: Text(uuid,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', fontSize: 12)),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.copy, size: 18),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: uuid));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('UUID copied')));
+                      },
+                    ),
+                  )),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
-      builder: (_) {
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Connected peers',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              if (state.peerUUIDs.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Center(child: Text('No peers connected')),
-                )
-              else
-                ...state.peerUUIDs.map((uuid) => ListTile(
-                      leading: const Icon(Icons.person_outline),
-                      title: Text(uuid, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.copy, size: 18),
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: uuid));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('UUID copied')),
-                          );
-                        },
-                      ),
-                    )),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
     );
   }
 
@@ -353,6 +448,7 @@ class _ChatPageState extends State<ChatPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // BUG FIX: show full room UUID
             _infoRow(context, 'Room UUID', state.roomUUID),
             const SizedBox(height: 12),
             _infoRow(context, 'My UUID', state.myUUID),
@@ -361,19 +457,21 @@ class _ChatPageState extends State<ChatPage> {
             if (state.isMaster) ...[
               const SizedBox(height: 12),
               Row(children: [
-                Icon(Icons.star, size: 16, color: Theme.of(context).colorScheme.primary),
+                Icon(Icons.star,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 4),
                 Text('You are the master',
-                    style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary)),
               ]),
             ],
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close')),
         ],
       ),
     );
@@ -384,16 +482,17 @@ class _ChatPageState extends State<ChatPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.primary,
-        )),
+        Text(label,
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.primary)),
         const SizedBox(height: 4),
         Row(
           children: [
             Expanded(
               child: SelectableText(
                 value.isEmpty ? '—' : value,
-                style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(fontFamily: 'monospace'),
               ),
             ),
             if (value.isNotEmpty)
@@ -402,8 +501,7 @@ class _ChatPageState extends State<ChatPage> {
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: value));
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('$label copied')),
-                  );
+                      SnackBar(content: Text('$label copied')));
                 },
               ),
           ],

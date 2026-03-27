@@ -21,6 +21,12 @@ class SetupPickPrivateKey extends SetupEvent {
   const SetupPickPrivateKey();
 }
 
+/// Pick a FOLDER of .pub files (all files in the directory are loaded).
+class SetupPickWhitelistFolder extends SetupEvent {
+  const SetupPickWhitelistFolder();
+}
+
+/// Pick individual .pub files.
 class SetupPickWhitelistFiles extends SetupEvent {
   const SetupPickWhitelistFiles();
 }
