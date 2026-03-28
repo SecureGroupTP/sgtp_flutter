@@ -26,10 +26,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatSendImage>(_onSendImage);
     on<ChatSendVideo>(_onSendVideo);
     on<ChatSendVoice>(_onSendVoice);
+    on<ChatSendVideoNote>(_onSendVideoNote);
     on<ChatSendMessageRead>(_onSendMessageRead);
     on<ChatDisconnect>(_onDisconnect);
     on<ChatUpdateMetadata>(_onUpdateMetadata);
     on<ChatSetUserAvatar>(_onSetUserAvatar);
+    on<ChatSetReply>(_onSetReply);
+    on<ChatClearReply>(_onClearReply);
+    on<ChatToggleReaction>(_onToggleReaction);
     on<ChatInternalSgtpEvent>(_onSgtpEvent);
   }
 
@@ -111,7 +115,47 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
   Future<void> _onSendMessage(ChatSendMessage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendMessage(event.text);
+    await _client!.sendMessage(
+      event.text,
+      replyToId:      event.replyToId,
+      replyToContent: event.replyToContent,
+      replyToSender:  event.replyToSender,
+    );
+    // Clear reply after send
+    if (event.replyToId != null) emit(state.copyWith(clearReply: true));
+  }
+
+  void _onSetReply(ChatSetReply event, Emitter<ChatState> emit) {
+    emit(state.copyWith(replyToMessage: event.message));
+  }
+
+  void _onClearReply(ChatClearReply event, Emitter<ChatState> emit) {
+    emit(state.copyWith(clearReply: true));
+  }
+
+  void _onToggleReaction(ChatToggleReaction event, Emitter<ChatState> emit) {
+    final current = Map<String, Map<String, Set<String>>>.from(state.reactions);
+    final msgReactions = Map<String, Set<String>>.from(current[event.messageId] ?? {});
+    final who = Set<String>.from(msgReactions[event.emoji] ?? {});
+    final adding = !who.contains(state.myUUID);
+    if (adding) {
+      who.add(state.myUUID);
+    } else {
+      who.remove(state.myUUID);
+    }
+    if (who.isEmpty) {
+      msgReactions.remove(event.emoji);
+    } else {
+      msgReactions[event.emoji] = who;
+    }
+    current[event.messageId] = msgReactions;
+    final updatedMsgs = state.messages.map<ChatMessage>((m) {
+      if (m.id == event.messageId) return m.copyWith(reactions: msgReactions);
+      return m;
+    }).toList();
+    emit(state.copyWith(reactions: current, messages: updatedMsgs));
+    // Send to peers
+    _client?.sendReaction(event.messageId, event.emoji, adding);
   }
 
   Future<void> _onSendImage(ChatSendImage event, Emitter<ChatState> emit) async {
@@ -127,6 +171,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onSendVoice(ChatSendVoice event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVoice(event.bytes, event.mime);
+  }
+
+  Future<void> _onSendVideoNote(ChatSendVideoNote event, Emitter<ChatState> emit) async {
+    if (_client == null || state.status != ChatStatus.ready) return;
+    await _client!.sendVideoNote(event.bytes, event.mime);
   }
 
   Future<void> _onSendMessageRead(ChatSendMessageRead event, Emitter<ChatState> emit) async {
@@ -222,7 +271,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         for (final e in clientPubKeys.entries) {
           updatedPubKeys.putIfAbsent(e.key, () => e.value);
         }
-        final updated = List<ChatMessage>.from(state.messages)..add(message);
+        // If a message with this id already exists (e.g. isSending echo being
+        // updated to isSending: false), replace it instead of appending.
+        final existingIdx = state.messages.indexWhere((m) => m.id == message.id);
+        final List<ChatMessage> updated;
+        if (existingIdx >= 0) {
+          updated = List<ChatMessage>.from(state.messages);
+          updated[existingIdx] = message;
+        } else {
+          updated = List<ChatMessage>.from(state.messages)..add(message);
+        }
         emit(state.copyWith(
           messages: updated,
           peerAvatars: updatedAvatars,
@@ -282,13 +340,34 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             : (_client?.roomUUIDHex ?? '');
         _saveMetadata(roomUUID, chatName, avatarBytes);
 
+      case SgtpMediaProgress(:final echoId, :final progress):
+        // Update sendProgress on the in-flight outgoing message
+        final updatedMsgs = state.messages.map<ChatMessage>((m) {
+          if (m.id == echoId) return m.copyWith(sendProgress: progress);
+          return m;
+        }).toList();
+        emit(state.copyWith(messages: updatedMsgs));
+
+      case SgtpReactionReceived(:final messageId, :final emoji, :final senderUUID, :final add):
+        final current     = Map<String, Map<String, Set<String>>>.from(state.reactions);
+        final msgReactions = Map<String, Set<String>>.from(current[messageId] ?? {});
+        final who          = Set<String>.from(msgReactions[emoji] ?? {});
+        if (add) { who.add(senderUUID); } else { who.remove(senderUUID); }
+        if (who.isEmpty) { msgReactions.remove(emoji); } else { msgReactions[emoji] = who; }
+        current[messageId] = msgReactions;
+        final updatedMsgs = state.messages.map<ChatMessage>((m) {
+          if (m.id == messageId) return m.copyWith(reactions: msgReactions);
+          return m;
+        }).toList();
+        emit(state.copyWith(reactions: current, messages: updatedMsgs));
+
       case SgtpMessageReadReceived(:final readMessageId, :final readerUUID):
         final current = Map<String, Set<String>>.from(state.readReceipts);
         final readers = Set<String>.from(current[readMessageId] ?? {});
         readers.add(readerUUID);
         current[readMessageId] = readers;
         // Also update the message in the list so readBy set is current
-        final updatedMsgs = state.messages.map((m) {
+        final updatedMsgs = state.messages.map<ChatMessage>((m) {
           if (m.id == readMessageId) {
             return m.copyWith(readBy: Set<String>.from(m.readBy)..add(readerUUID));
           }

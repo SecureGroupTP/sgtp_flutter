@@ -8,8 +8,11 @@ enum MessageType {
   gif,
   video,
   voice,
-  system,  // System messages: user joined/left
-  messageRead, // Read receipt
+  videoNote,   // Circular video message (кружок)
+  system,
+  messageRead,
+  reaction,
+  viewed,
 }
 
 /// Represents a chat message received or sent in the SGTP session.
@@ -21,7 +24,6 @@ class ChatMessage extends Equatable {
   final String senderUUID;
 
   /// Ed25519 public key hex of the sender (32 bytes = 64 hex chars).
-  /// Populated from handshake so we can identify peers even after they leave.
   final String? senderPublicKeyHex;
 
   /// Decrypted text content (empty for media messages)
@@ -54,7 +56,6 @@ class ChatMessage extends Equatable {
   final bool isFromMe;
 
   /// Sender's avatar bytes (if they sent one along with the message).
-  /// Used to display avatar next to message bubble.
   final Uint8List? senderAvatarBytes;
 
   /// For messageRead type: the message ID that was read.
@@ -62,6 +63,28 @@ class ChatMessage extends Equatable {
 
   /// Set of peer UUIDs who have read this message (local tracking only).
   final Set<String> readBy;
+
+  // ── Reply support ──────────────────────────────────────────────────────────
+
+  /// ID of the message being replied to (null if not a reply).
+  final String? replyToId;
+
+  /// Short preview text of the replied-to message.
+  final String? replyToContent;
+
+  /// Display name of the sender of the replied-to message.
+  final String? replyToSender;
+
+  // ── Reactions ──────────────────────────────────────────────────────────────
+
+  /// emoji → set of senderUUIDs who reacted with that emoji.
+  final Map<String, Set<String>> reactions;
+
+  /// True while this message is still being encrypted+sent.
+  final bool isSending;
+
+  /// Upload progress 0.0–1.0, only meaningful when isSending == true.
+  final double sendProgress;
 
   const ChatMessage({
     required this.id,
@@ -80,6 +103,12 @@ class ChatMessage extends Equatable {
     this.senderAvatarBytes,
     this.readMessageId,
     this.readBy = const {},
+    this.replyToId,
+    this.replyToContent,
+    this.replyToSender,
+    this.reactions = const {},
+    this.isSending = false,
+    this.sendProgress = 0.0,
   });
 
   ChatMessage copyWith({
@@ -99,44 +128,46 @@ class ChatMessage extends Equatable {
     Uint8List? senderAvatarBytes,
     String? readMessageId,
     Set<String>? readBy,
+    String? replyToId,
+    String? replyToContent,
+    String? replyToSender,
+    Map<String, Set<String>>? reactions,
+    bool? isSending,
+    double? sendProgress,
   }) {
     return ChatMessage(
-      id: id ?? this.id,
-      senderUUID: senderUUID ?? this.senderUUID,
-      senderPublicKeyHex: senderPublicKeyHex ?? this.senderPublicKeyHex,
-      content: content ?? this.content,
-      imageBytes: imageBytes ?? this.imageBytes,
-      videoBytes: videoBytes ?? this.videoBytes,
-      audioBytes: audioBytes ?? this.audioBytes,
-      mediaMime: mediaMime ?? this.mediaMime,
-      mediaName: mediaName ?? this.mediaName,
-      type: type ?? this.type,
-      receivedAt: receivedAt ?? this.receivedAt,
-      isFromHistory: isFromHistory ?? this.isFromHistory,
-      isFromMe: isFromMe ?? this.isFromMe,
-      senderAvatarBytes: senderAvatarBytes ?? this.senderAvatarBytes,
-      readMessageId: readMessageId ?? this.readMessageId,
-      readBy: readBy ?? this.readBy,
+      id:                   id ?? this.id,
+      senderUUID:           senderUUID ?? this.senderUUID,
+      senderPublicKeyHex:   senderPublicKeyHex ?? this.senderPublicKeyHex,
+      content:              content ?? this.content,
+      imageBytes:           imageBytes ?? this.imageBytes,
+      videoBytes:           videoBytes ?? this.videoBytes,
+      audioBytes:           audioBytes ?? this.audioBytes,
+      mediaMime:            mediaMime ?? this.mediaMime,
+      mediaName:            mediaName ?? this.mediaName,
+      type:                 type ?? this.type,
+      receivedAt:           receivedAt ?? this.receivedAt,
+      isFromHistory:        isFromHistory ?? this.isFromHistory,
+      isFromMe:             isFromMe ?? this.isFromMe,
+      senderAvatarBytes:    senderAvatarBytes ?? this.senderAvatarBytes,
+      readMessageId:        readMessageId ?? this.readMessageId,
+      readBy:               readBy ?? this.readBy,
+      replyToId:            replyToId ?? this.replyToId,
+      replyToContent:       replyToContent ?? this.replyToContent,
+      replyToSender:        replyToSender ?? this.replyToSender,
+      reactions:            reactions ?? this.reactions,
+      isSending:            isSending ?? this.isSending,
+      sendProgress:         sendProgress ?? this.sendProgress,
     );
   }
 
   @override
   List<Object?> get props => [
-        id,
-        senderUUID,
-        senderPublicKeyHex,
-        content,
-        imageBytes,
-        videoBytes,
-        audioBytes,
-        mediaMime,
-        mediaName,
-        type,
-        receivedAt,
-        isFromHistory,
-        isFromMe,
-        senderAvatarBytes,
-        readMessageId,
-        readBy,
+        id, senderUUID, senderPublicKeyHex, content,
+        imageBytes, videoBytes, audioBytes, mediaMime, mediaName,
+        type, receivedAt, isFromHistory, isFromMe, senderAvatarBytes,
+        readMessageId, readBy, replyToId, replyToContent, replyToSender,
+        reactions, isSending, sendProgress,
       ];
 }
+

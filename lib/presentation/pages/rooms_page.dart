@@ -69,9 +69,7 @@ class _RoomsPageState extends State<RoomsPage> {
       builder: (context, state) {
         return Scaffold(
           appBar: _buildAppBar(context, state),
-          body: state.rooms.isEmpty
-              ? _buildEmpty(context)
-              : _buildRoomList(context, state),
+          body: _buildRoomList(context, state),
           floatingActionButton: FloatingActionButton(
             onPressed: () => _showAddSheet(context),
             tooltip: 'Add room',
@@ -164,9 +162,11 @@ class _RoomsPageState extends State<RoomsPage> {
 
   Widget _buildRoomList(BuildContext context, RoomsState state) {
     final theme = Theme.of(context);
-    // Determine which saved UUIDs are not currently active
-    final activeUUIDs = state.rooms.map((r) => r.roomUUID).toSet();
+    final activeUUIDs    = state.rooms.map((r) => r.roomUUID).toSet();
     final savedNotActive = _savedUUIDs.where((u) => !activeUUIDs.contains(u)).toList();
+    final hasAnything    = state.rooms.isNotEmpty || savedNotActive.isNotEmpty;
+
+    if (!hasAnything) return _buildEmpty(context);
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),

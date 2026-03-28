@@ -11,24 +11,21 @@ import '../../domain/entities/message.dart';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
-
-  /// sessionUUID → nickname (resolved from whitelist file names).
   final Map<String, String> peerNicknames;
-
-  /// The local user's UUID (to determine "me").
   final String myUUID;
-
-  /// Per-peer avatars: sessionUUID → bytes (learned from incoming messages).
   final Map<String, Uint8List> peerAvatars;
-
-  /// The local user's own avatar bytes.
   final Uint8List? userAvatarBytes;
-
-  /// Read receipts: messageId → set of readerUUIDs.
   final Map<String, Set<String>> readReceipts;
-
-  /// Number of peers currently online (for "seen by all" check).
   final int peerCount;
+
+  /// Called when user wants to reply to this message.
+  final VoidCallback? onReply;
+
+  /// Called when user picks an emoji reaction.
+  final void Function(String emoji)? onReact;
+
+  /// Emoji list shown in long-press reaction popup.
+  final List<String> quickEmojis;
 
   const MessageBubble({
     super.key,
@@ -39,6 +36,9 @@ class MessageBubble extends StatelessWidget {
     this.userAvatarBytes,
     this.readReceipts = const {},
     this.peerCount = 0,
+    this.onReply,
+    this.onReact,
+    this.quickEmojis = const ['👍','❤️','😂','😮','😢','🔥','👏','🎉','🤔','💯'],
   });
 
   @override
@@ -62,62 +62,231 @@ class MessageBubble extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    // Voice messages have no bubble frame
+    // Voice messages: no bubble frame but need reactions row — fall through to
+    // the main Column below. Only skip if it's truly invisible.
     if (message.type == MessageType.voice) {
-      return _withAvatar(
+      final voiceWidget = _withAvatar(
         context: context,
         isMe: isMe,
         child: Container(
           margin: EdgeInsets.only(
             left: isMe ? 48 : 8,
             right: isMe ? 8 : 48,
-            top: 4,
-            bottom: 4,
+            top: 4, bottom: 4,
           ),
           child: _buildVoiceContent(
               context, theme, cs.onSurfaceVariant, senderLabel, timeStr, isMe),
         ),
+      );
+      final reactionsRow = _buildReactionsRow(theme, cs);
+      return Column(
+        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          voiceWidget,
+          if (reactionsRow != null)
+            Padding(
+              padding: EdgeInsets.only(
+                left: isMe ? 0 : 44,
+                right: isMe ? 44 : 0,
+              ),
+              child: Transform.translate(
+                offset: const Offset(0, -8),
+                child: reactionsRow,
+              ),
+            ),
+          if (isMe) _buildReadReceipts(theme, cs),
+        ],
       );
     }
 
     final bgColor   = isMe ? cs.primaryContainer : cs.surfaceContainerHighest;
     final textColor = isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant;
 
+    // Reply preview strip
+    Widget? replyPreview;
+    if (message.replyToId != null) {
+      replyPreview = Container(
+        margin: EdgeInsets.only(
+          left: isMe ? 48 : 8,
+          right: isMe ? 8 : 48,
+          top: 4,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest.withAlpha(180),
+          borderRadius: BorderRadius.circular(10),
+          border: Border(
+            left: BorderSide(color: cs.primary, width: 3),
+          ),
+        ),
+        child: Row(children: [
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (message.replyToSender != null)
+                Text(message.replyToSender!,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                        color: cs.primary, fontWeight: FontWeight.bold)),
+              Text(message.replyToContent ?? '…',
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant)),
+            ],
+          )),
+        ]),
+      );
+    }
+
+    final innerBubble = Container(
+      margin: EdgeInsets.only(
+        left: isMe ? 48 : 8,
+        right: isMe ? 8 : 48,
+        top: replyPreview != null ? 1 : 4,
+        bottom: 4,
+      ),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(replyPreview != null ? 4 : 16),
+          topRight: Radius.circular(replyPreview != null ? 4 : 16),
+          bottomLeft: Radius.circular(isMe ? 16 : 4),
+          bottomRight: Radius.circular(isMe ? 4 : 16),
+        ),
+      ),
+      child: _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
+    );
+
     final bubble = Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-        child: Container(
-          margin: EdgeInsets.only(
-            left: isMe ? 48 : 8,
-            right: isMe ? 8 : 48,
-            top: 4,
-            bottom: 4,
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        child: GestureDetector(
+          // Double-tap → reply
+          onDoubleTap: onReply,
+          // Long-press / right-click → reaction picker
+          onLongPress: onReact == null ? null : () =>
+              _showReactionPicker(context, theme),
+          onSecondaryTap: onReact == null ? null : () =>
+              _showReactionPicker(context, theme),
+          // translucent so child GestureDetectors (e.g. video play button)
+          // receive taps but long-press/double-tap still reach this detector
+          behavior: HitTestBehavior.translucent,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              innerBubble,
+              // Sending progress overlay
+              if (message.isSending)
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(replyPreview != null ? 4 : 16),
+                      topRight: Radius.circular(replyPreview != null ? 4 : 16),
+                      bottomLeft: Radius.circular(isMe ? 16 : 4),
+                      bottomRight: Radius.circular(isMe ? 4 : 16),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        LinearProgressIndicator(
+                          value: message.sendProgress > 0 ? message.sendProgress : null,
+                          minHeight: 3,
+                          backgroundColor: cs.primary.withAlpha(40),
+                          valueColor: AlwaysStoppedAnimation<Color>(cs.primary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(16),
-              topRight: const Radius.circular(16),
-              bottomLeft: Radius.circular(isMe ? 16 : 4),
-              bottomRight: Radius.circular(isMe ? 4 : 16),
-            ),
-          ),
-          child: _buildContent(
-              context, theme, textColor, senderLabel, timeStr, isMe),
         ),
       ),
     );
 
+    // Reactions — positioned to slightly overlap the bottom of the bubble
+    final reactionsRow = _buildReactionsRow(theme, cs);
+
     return Column(
-      crossAxisAlignment:
-          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (replyPreview != null)
+          Align(
+            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+            child: replyPreview,
+          ),
         _withAvatar(context: context, isMe: isMe, child: bubble),
+        if (reactionsRow != null)
+          Padding(
+            padding: EdgeInsets.only(
+              left: isMe ? 0 : 44,
+              right: isMe ? 44 : 0,
+              // Negative top margin so reactions sit on the bubble border
+              bottom: 4,
+            ),
+            child: Transform.translate(
+              offset: const Offset(0, -8),
+              child: reactionsRow,
+            ),
+          ),
         if (isMe) _buildReadReceipts(theme, cs),
       ],
+    );
+  }
+
+  void _showReactionPicker(BuildContext context, ThemeData theme) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Wrap(
+            spacing: 8,
+            children: quickEmojis.map((e) => GestureDetector(
+              onTap: () { Navigator.pop(context); onReact?.call(e); },
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(e, style: const TextStyle(fontSize: 24)),
+              ),
+            )).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget? _buildReactionsRow(ThemeData theme, ColorScheme cs) {
+    if (message.reactions.isEmpty) return null;
+    return Wrap(
+      spacing: 4,
+      children: message.reactions.entries.map((e) {
+        final count = e.value.length;
+        final mine  = e.value.contains(myUUID);
+        return GestureDetector(
+          onTap: () => onReact?.call(e.key),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: mine
+                  ? cs.primaryContainer
+                  : cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: mine ? cs.primary : cs.outline.withAlpha(60),
+                  width: 1),
+            ),
+            child: Text('${e.key} $count',
+                style: theme.textTheme.labelSmall?.copyWith(
+                    color: mine ? cs.onPrimaryContainer : cs.onSurfaceVariant)),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -162,6 +331,25 @@ class MessageBubble extends StatelessWidget {
   /// Read receipts row (shown only for own messages).
   Widget _buildReadReceipts(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
+    final isMedia = message.type == MessageType.video ||
+        message.type == MessageType.voice;
+    final label = isMedia ? 'Watched' : 'Read';
+
+    if (message.isSending) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 40, bottom: 2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(width: 12, height: 12,
+              child: CircularProgressIndicator(strokeWidth: 1.5,
+                  color: cs.onSurfaceVariant.withAlpha(120))),
+          const SizedBox(width: 4),
+          Text('Sending…',
+              style: theme.textTheme.labelSmall?.copyWith(
+                  color: cs.onSurfaceVariant.withAlpha(120), fontSize: 10)),
+        ]),
+      );
+    }
+
     if (readers.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(right: 40, bottom: 2),
@@ -175,18 +363,18 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            readByAll ? Icons.done_all : Icons.done,
+            readByAll
+                ? (isMedia ? Icons.visibility : Icons.done_all)
+                : Icons.done,
             size: 14,
             color: readByAll ? cs.primary : cs.onSurfaceVariant.withAlpha(180),
           ),
-          if (readers.isNotEmpty) ...[
-            const SizedBox(width: 4),
-            Text(
-              'Seen by ${readers.length}',
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: cs.onSurfaceVariant.withAlpha(160), fontSize: 10),
-            ),
-          ],
+          const SizedBox(width: 4),
+          Text(
+            '$label by ${readers.length}',
+            style: theme.textTheme.labelSmall?.copyWith(
+                color: cs.onSurfaceVariant.withAlpha(160), fontSize: 10),
+          ),
         ],
       ),
     );
@@ -232,6 +420,8 @@ class MessageBubble extends StatelessWidget {
       case MessageType.video:
         return _buildVideoContent(
             context, theme, textColor, senderLabel, timeStr, isMe);
+      case MessageType.videoNote:
+        return _buildVideoNoteContent(context, theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.voice:
         return _buildVoiceContent(
             context, theme, textColor, senderLabel, timeStr, isMe);
@@ -239,6 +429,8 @@ class MessageBubble extends StatelessWidget {
         return _buildTextContent(
             theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.messageRead:
+      case MessageType.reaction:
+      case MessageType.viewed:
         return const SizedBox.shrink();
     }
   }
@@ -294,55 +486,62 @@ class MessageBubble extends StatelessWidget {
     bool isMe, {
     required bool animated,
   }) {
-    return ClipRRect(
-      borderRadius: BorderRadius.only(
-        topLeft: const Radius.circular(16),
-        topRight: const Radius.circular(16),
-        bottomLeft: Radius.circular(isMe ? 16 : 4),
-        bottomRight: Radius.circular(isMe ? 4 : 16),
-      ),
-      child: Column(
-        crossAxisAlignment:
-            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!isMe)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-              child: _senderLabel(theme, senderLabel),
-            ),
-          GestureDetector(
-            onTap: () => _showFullImage(context),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 300),
-              child: Image.memory(
-                message.imageBytes!,
-                fit: BoxFit.contain,
-                gaplessPlayback: animated,
-                errorBuilder: (_, __, ___) => const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Icon(Icons.broken_image_outlined, size: 48),
+    return GestureDetector(
+      onDoubleTap: onReply,
+      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      behavior: HitTestBehavior.translucent,
+      child: ClipRRect(
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: Radius.circular(isMe ? 16 : 4),
+          bottomRight: Radius.circular(isMe ? 4 : 16),
+        ),
+        child: Column(
+          crossAxisAlignment:
+              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!isMe)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: _senderLabel(theme, senderLabel),
+              ),
+            // Tap = fullscreen, double-tap = reply (handled by outer detector)
+            GestureDetector(
+              onTap: () => _showFullImage(context),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: Image.memory(
+                  message.imageBytes!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: animated,
+                  errorBuilder: (_, __, ___) => const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Icon(Icons.broken_image_outlined, size: 48),
+                  ),
                 ),
               ),
             ),
-          ),
-          if (animated)
-            Padding(
-              padding: const EdgeInsets.only(right: 8, top: 2),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Icon(Icons.gif_box_outlined,
-                      size: 16, color: theme.colorScheme.primary),
-                  const SizedBox(width: 4),
-                ],
+            if (animated)
+              Padding(
+                padding: const EdgeInsets.only(right: 8, top: 2),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Icon(Icons.gif_box_outlined,
+                        size: 16, color: theme.colorScheme.primary),
+                    const SizedBox(width: 4),
+                  ],
+                ),
               ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+              child: _timeLabel(theme, textColor, timeStr),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-            child: _timeLabel(theme, textColor, timeStr),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -372,22 +571,29 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  // ── Video ─────────────────────────────────────────────────────────────────
+  // ── Video Note (круглое видео) ─────────────────────────────────────────────
 
-  Widget _buildVideoContent(BuildContext context, ThemeData theme,
+  Widget _buildVideoNoteContent(BuildContext context, ThemeData theme,
       Color textColor, String senderLabel, String timeStr, bool isMe) {
-    return Padding(
-      padding: const EdgeInsets.all(8),
+    return GestureDetector(
+      onDoubleTap: onReply,
+      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      behavior: HitTestBehavior.translucent,
       child: Column(
-        crossAxisAlignment:
-            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isMe) _senderLabel(theme, senderLabel),
-          const SizedBox(height: 4),
-          _VideoThumbnail(
-            videoBytes: message.videoBytes!,
-            mediaName: message.mediaName ?? 'video',
+          if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
+          SizedBox(
+            width: 200,
+            height: 200,
+            child: ClipOval(
+              child: _VideoThumbnail(
+                videoBytes: message.videoBytes!,
+                mediaName: message.mediaName ?? 'video',
+              ),
+            ),
           ),
           const SizedBox(height: 4),
           _timeLabel(theme, textColor, timeStr),
@@ -396,23 +602,60 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  // ── Video ─────────────────────────────────────────────────────────────────
+
+  Widget _buildVideoContent(BuildContext context, ThemeData theme,
+      Color textColor, String senderLabel, String timeStr, bool isMe) {
+    return GestureDetector(
+      onDoubleTap: onReply,
+      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      // translucent so video play-button tap still works
+      behavior: HitTestBehavior.translucent,
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment:
+              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!isMe) _senderLabel(theme, senderLabel),
+            const SizedBox(height: 4),
+            _VideoThumbnail(
+              videoBytes: message.videoBytes!,
+              mediaName: message.mediaName ?? 'video',
+            ),
+            const SizedBox(height: 4),
+            _timeLabel(theme, textColor, timeStr),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Voice ─────────────────────────────────────────────────────────────────
 
   Widget _buildVoiceContent(BuildContext context, ThemeData theme,
       Color textColor, String senderLabel, String timeStr, bool isMe) {
-    return Column(
-      crossAxisAlignment:
-          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
-        _VoicePlayer(
-          audioBytes: message.audioBytes!,
-          mediaMime: message.mediaMime ?? 'audio/m4a',
-        ),
-        const SizedBox(height: 2),
-        _timeLabel(theme, textColor, timeStr),
-      ],
+    return GestureDetector(
+      onDoubleTap: onReply,
+      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      behavior: HitTestBehavior.translucent,
+      child: Column(
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
+          _VoicePlayer(
+            audioBytes: message.audioBytes!,
+            mediaMime: message.mediaMime ?? 'audio/m4a',
+          ),
+          const SizedBox(height: 2),
+          _timeLabel(theme, textColor, timeStr),
+        ],
+      ),
     );
   }
 

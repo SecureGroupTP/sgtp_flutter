@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -42,18 +43,35 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// so we don't fire it twice.
   final Set<String> _sentReadReceipts = {};
 
+  /// Whether the text field has content (controls send vs mic button).
+  bool _hasText = false;
+
+  /// Upload progress 0.0–1.0 while sending media (null = idle).
+  double? _uploadProgress;
+
+  /// On mobile: false = voice mode 🎤, true = video note mode 🔵
+  bool _isVideoNoteMode = false;
+
+  /// True while a long-press recording is in progress (mobile hold-to-record)
+  bool _isHoldRecording = false;
+
   ChatBloc? _chatBloc;
 
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
+
+  // Quick emoji set for reactions
+  static const _quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉', '🤔', '💯'];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadInputDevices();
-    // Init notifications (no-op on Windows/Linux desktop)
+    _messageCtrl.addListener(() {
+      final has = _messageCtrl.text.trim().isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+    });
     NotificationService.init();
-    // When user taps "Mark as Read" on a notification → send read receipt
     NotificationService.onMarkAsRead = (messageId) {
       if (!_sentReadReceipts.contains(messageId)) {
         _sentReadReceipts.add(messageId);
@@ -128,11 +146,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool jump = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(_scrollCtrl.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        if (jump) {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        } else {
+          _scrollCtrl.animateTo(_scrollCtrl.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        }
       }
     });
   }
@@ -140,10 +162,78 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void _sendMessage(BuildContext context) {
     final text = _messageCtrl.text.trim();
     if (text.isEmpty) return;
-    context.read<ChatBloc>().add(ChatSendMessage(text));
+    final bloc  = context.read<ChatBloc>();
+    final reply = bloc.state.replyToMessage;
+    bloc.add(ChatSendMessage(
+      text,
+      replyToId:      reply?.id,
+      replyToContent: reply?.content.length != null && reply!.content.length > 80
+          ? '${reply.content.substring(0, 80)}…'
+          : reply?.content,
+      replyToSender:  reply != null
+          ? (bloc.state.peerNicknames[reply.senderUUID] ?? reply.senderUUID.substring(0, 8))
+          : null,
+    ));
     _messageCtrl.clear();
     _focusNode.requestFocus();
     _scrollToBottom();
+  }
+
+  /// Run a media send and show upload progress bar while in flight.
+  Future<void> _withProgress(Future<void> Function() fn) async {
+    setState(() => _uploadProgress = 0.05);
+    try {
+      // Simulate progress increments while the actual upload happens
+      for (var p = 0.1; p < 0.9; p += 0.15) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (mounted) setState(() => _uploadProgress = p);
+      }
+      await fn();
+    } finally {
+      if (mounted) setState(() => _uploadProgress = null);
+    }
+  }
+
+  Future<void> _pickAndSendMedia(BuildContext context) async {
+    // Show a bottom sheet to choose photo or video (Telegram-style single button)
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Photo / GIF'),
+              onTap: () => Navigator.pop(context, 'image'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam_outlined),
+              title: const Text('Video'),
+              onTap: () => Navigator.pop(context, 'video'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.radio_button_checked_outlined),
+              title: const Text('Video note (кружок)'),
+              subtitle: const Text('Circular video message'),
+              onTap: () => Navigator.pop(context, 'videonote'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_paste_outlined),
+              title: const Text('Paste from clipboard'),
+              onTap: () => Navigator.pop(context, 'paste'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted) return;
+    if (choice == 'image')     await _withProgress(() => _pickAndSendImage(context));
+    if (choice == 'video')     await _withProgress(() => _pickAndSendVideo(context));
+    if (choice == 'videonote') await _withProgress(() => _pickAndSendVideoNote(context));
+    if (choice == 'paste')     await _withProgress(() => _pasteImageFromClipboard(context));
   }
 
   Future<void> _pickAndSendImage(BuildContext context) async {
@@ -158,6 +248,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     };
     if (!context.mounted) return;
     context.read<ChatBloc>().add(ChatSendImage(bytes: file.bytes!, name: file.name, mime: mime));
+    _scrollToBottom();
+  }
+
+  Future<void> _pickAndSendVideoNote(BuildContext context) async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.video, withData: true);
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    if (file.bytes == null) return;
+    if (!context.mounted) return;
+    context.read<ChatBloc>().add(ChatSendVideoNote(bytes: file.bytes!, mime: 'video/mp4'));
     _scrollToBottom();
   }
 
@@ -180,8 +280,36 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _scrollToBottom();
   }
 
+  /// Desktop = Windows / macOS / Linux. Mobile = Android / iOS.
+  bool get _isDesktop =>
+      !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
   Future<void> _toggleRecording(BuildContext context) async {
-    if (_isRecording) { await _stopAndSend(context); } else { await _startRecording(context); }
+    if (_isRecording) {
+      await _stopAndSend(context);
+    } else {
+      await _startRecording(context);
+    }
+  }
+
+  /// Toggle between voice and video-note mode (mobile short tap).
+  void _toggleMode() {
+    if (_isRecording) return; // can't switch while recording
+    setState(() => _isVideoNoteMode = !_isVideoNoteMode);
+  }
+
+  /// Start hold-recording (mobile long-press down).
+  Future<void> _startHoldRecording(BuildContext context) async {
+    if (_isRecording) return;
+    setState(() => _isHoldRecording = true);
+    await _startRecording(context);
+  }
+
+  /// Stop hold-recording and send (mobile long-press up).
+  Future<void> _stopHoldRecording(BuildContext context) async {
+    if (!_isHoldRecording) return;
+    setState(() => _isHoldRecording = false);
+    await _stopAndSend(context);
   }
 
   Future<void> _startRecording(BuildContext context) async {
@@ -192,8 +320,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     try {
       final tmpDir = await getTemporaryDirectory();
       _recordingPath = '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-      await _recorder.start(RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000,
-          sampleRate: 44100, device: _selectedDevice), path: _recordingPath!);
+      await _recorder.start(RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+          device: _selectedDevice),
+          path: _recordingPath!);
       setState(() => _isRecording = true);
     } catch (e) {
       if (context.mounted) _showSnack(context, 'Record error: $e');
@@ -203,18 +335,24 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Future<void> _stopAndSend(BuildContext context) async {
     try {
       final path = await _recorder.stop();
-      setState(() => _isRecording = false);
+      setState(() { _isRecording = false; _isHoldRecording = false; });
       if (path == null) return;
       final file = File(path);
       if (!file.existsSync() || file.lengthSync() == 0) return;
       final bytes = await file.readAsBytes();
       if (context.mounted) {
-        context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+        if (_isVideoNoteMode) {
+          // Audio-only video note: wrap in voice for now
+          // (true camera video note needs camera plugin - use voice as fallback)
+          context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+        } else {
+          context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+        }
         _scrollToBottom();
       }
       await file.delete().catchError((_) {});
     } catch (e) {
-      setState(() => _isRecording = false);
+      setState(() { _isRecording = false; _isHoldRecording = false; });
       if (context.mounted) _showSnack(context, 'Error: $e');
     }
   }
@@ -309,7 +447,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     return BlocConsumer<ChatBloc, ChatState>(
       listener: (context, state) {
         _chatBloc ??= context.read<ChatBloc>();
-        if (state.messages.isNotEmpty) _scrollToBottom();
+        if (state.messages.isNotEmpty) {
+          // Jump instantly on first load, animate for new messages
+          final isFirst = !_infoShown;
+          _scrollToBottom(jump: isFirst);
+        }
         if (state.status == ChatStatus.ready && !_infoShown) {
           _infoShown = true;
         }
@@ -544,7 +686,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       itemCount: state.messages.length,
       itemBuilder: (context, index) {
         final msg = state.messages[index];
-        return MessageBubble(
+        final isInteractable = msg.type != MessageType.system &&
+            msg.type != MessageType.messageRead;
+
+        Widget bubble = MessageBubble(
           message: msg,
           peerNicknames: {
             ...state.peerNicknames,
@@ -556,7 +701,38 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           userAvatarBytes: state.userAvatarBytes,
           readReceipts: state.readReceipts,
           peerCount: state.peerUUIDs.length,
+          onReply: isInteractable ? () {
+            context.read<ChatBloc>().add(ChatSetReply(msg));
+          } : null,
+          onReact: isInteractable ? (emoji) {
+            context.read<ChatBloc>().add(
+                ChatToggleReaction(messageId: msg.id, emoji: emoji));
+          } : null,
+          quickEmojis: _quickEmojis,
         );
+
+        // Swipe right to reply
+        if (isInteractable) {
+          bubble = Dismissible(
+            key: ValueKey('swipe_${msg.id}'),
+            direction: DismissDirection.startToEnd,
+            confirmDismiss: (_) async {
+              context.read<ChatBloc>().add(ChatSetReply(msg));
+              return false; // don't actually dismiss
+            },
+            background: Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: Icon(Icons.reply_rounded,
+                    color: Theme.of(context).colorScheme.primary),
+              ),
+            ),
+            child: bubble,
+          );
+        }
+
+        return bubble;
       },
     );
   }
@@ -564,9 +740,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
     final theme   = Theme.of(context);
+    final reply   = state.replyToMessage;
+
     return SafeArea(
       child: Container(
-        padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
         decoration: BoxDecoration(
           color: theme.colorScheme.surface,
           boxShadow: [BoxShadow(color: theme.colorScheme.shadow.withAlpha(30),
@@ -575,62 +752,203 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ── Upload progress ────────────────────────────────────────────
+            if (_uploadProgress != null)
+              LinearProgressIndicator(value: _uploadProgress,
+                  minHeight: 3, color: theme.colorScheme.primary),
+
+            // ── Recording indicator ───────────────────────────────────────
             if (_isRecording)
               Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.fiber_manual_record, size: 12, color: theme.colorScheme.error),
-                  const SizedBox(width: 6),
-                  Text('Recording… tap again to send',
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                color: theme.colorScheme.errorContainer,
+                child: Row(children: [
+                  Icon(Icons.fiber_manual_record, size: 10, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                    _isVideoNoteMode
+                        ? 'Recording video note… tap ■ to send'
+                        : 'Recording… tap ■ to send',
                       style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onErrorContainer)),
+                          color: theme.colorScheme.onErrorContainer))),
+                  TextButton(
+                    onPressed: () async {
+                      await _recorder.stop();
+                      setState(() => _isRecording = false);
+                    },
+                    child: const Text('Cancel'),
+                  ),
                 ]),
               ),
-            Row(children: [
-              IconButton(
-                onPressed: canSend ? () => _pickAndSendImage(context) : null,
-                icon: const Icon(Icons.image_outlined), tooltip: 'Send photo / GIF',
-              ),
-              IconButton(
-                onPressed: canSend ? () => _pickAndSendVideo(context) : null,
-                icon: const Icon(Icons.videocam_outlined), tooltip: 'Send video',
-              ),
-              GestureDetector(
-                onLongPress: canSend ? () => _showMicPicker(context) : null,
-                child: IconButton(
-                  onPressed: canSend ? () => _toggleRecording(context) : null,
-                  icon: Icon(_isRecording ? Icons.stop_circle : Icons.mic_outlined,
-                      color: _isRecording ? theme.colorScheme.error : null),
-                  tooltip: _isRecording ? 'Stop & send' : 'Record voice',
-                ),
-              ),
-              Expanded(
-                child: TextField(
-                  controller: _messageCtrl, focusNode: _focusNode,
-                  enabled: canSend && !_isRecording,
-                  decoration: InputDecoration(
-                    hintText: _isRecording ? 'Recording…' : canSend ? 'Message…' : 'Waiting…',
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
-                    filled: true, fillColor: theme.colorScheme.surfaceContainerHighest,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+
+            // ── Reply preview ─────────────────────────────────────────────
+            if (reply != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                color: theme.colorScheme.secondaryContainer.withAlpha(120),
+                child: Row(children: [
+                  Container(width: 3, height: 36,
+                      color: theme.colorScheme.primary,
+                      margin: const EdgeInsets.only(right: 8)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          reply.isFromMe ? 'You' :
+                              (state.peerNicknames[reply.senderUUID] ??
+                               reply.senderUUID.substring(0, 8)),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          reply.type == MessageType.text
+                              ? reply.content
+                              : '[${reply.type.name}]',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
                   ),
-                  minLines: 1, maxLines: 5,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: canSend ? (_) => _sendMessage(context) : null,
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () =>
+                        context.read<ChatBloc>().add(const ChatClearReply()),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ]),
+              ),
+
+            // ── Input row ─────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
+              child: Row(children: [
+                // Single media button
+                IconButton(
+                  onPressed: canSend && _uploadProgress == null
+                      ? () => _pickAndSendMedia(context)
+                      : null,
+                  icon: const Icon(Icons.attach_file_outlined),
+                  tooltip: 'Attach media',
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton.filled(
-                onPressed: canSend && !_isRecording ? () => _sendMessage(context) : null,
-                icon: const Icon(Icons.send), tooltip: 'Send',
-              ),
-            ]),
+
+                // Text field
+                Expanded(
+                  child: TextField(
+                    controller: _messageCtrl, focusNode: _focusNode,
+                    enabled: canSend && !_isRecording,
+                    decoration: InputDecoration(
+                      hintText: _isRecording ? 'Recording…'
+                          : canSend ? 'Message…' : 'Waiting…',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none),
+                      filled: true,
+                      fillColor: theme.colorScheme.surfaceContainerHighest,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ),
+                    minLines: 1, maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: canSend ? (_) => _sendMessage(context) : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+
+                // Send button when text typed / recording on desktop; mic/mode button otherwise
+                if (_hasText || (_isRecording && _isDesktop))
+                  IconButton.filled(
+                    onPressed: canSend && !_isRecording
+                        ? () => _sendMessage(context)
+                        : canSend && _isRecording
+                            ? () => _stopAndSend(context)
+                            : null,
+                    icon: const Icon(Icons.send),
+                    tooltip: 'Send',
+                  )
+                else if (_isDesktop)
+                  // ── Desktop: tap=start/stop, long-press=mic picker ──────────
+                  GestureDetector(
+                    onLongPress: canSend ? () => _showMicPicker(context) : null,
+                    child: IconButton.filled(
+                      onPressed: canSend ? () => _toggleRecording(context) : null,
+                      icon: Icon(_isRecording
+                          ? Icons.stop_rounded
+                          : Icons.mic_rounded),
+                      style: IconButton.styleFrom(
+                        backgroundColor: _isRecording
+                            ? theme.colorScheme.error
+                            : theme.colorScheme.primary,
+                        foregroundColor: _isRecording
+                            ? theme.colorScheme.onError
+                            : theme.colorScheme.onPrimary,
+                      ),
+                      tooltip: _isRecording
+                          ? 'Tap to stop & send'
+                          : 'Tap to record  •  Hold to pick mic',
+                    ),
+                  )
+                else
+                  // ── Mobile: short tap = toggle mode, hold = record ──────────
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Mode icon (voice ↔ video note) — short tap switches
+                      if (!_isRecording)
+                        GestureDetector(
+                          onTap: _toggleMode,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              _isVideoNoteMode
+                                  ? Icons.mic_rounded
+                                  : Icons.radio_button_checked_outlined,
+                              size: 20,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      // Main record button — hold to record, release to send
+                      GestureDetector(
+                        onLongPressStart: canSend
+                            ? (_) => _startHoldRecording(context)
+                            : null,
+                        onLongPressEnd: canSend
+                            ? (_) => _stopHoldRecording(context)
+                            : null,
+                        // Also allow tap-to-toggle for accessibility
+                        child: IconButton.filled(
+                          onPressed: canSend && _isRecording
+                              ? () => _stopAndSend(context)
+                              : null,
+                          icon: _isRecording
+                              ? const Icon(Icons.stop_rounded)
+                              : Icon(_isVideoNoteMode
+                                  ? Icons.radio_button_checked
+                                  : Icons.mic_rounded),
+                          style: IconButton.styleFrom(
+                            backgroundColor: _isRecording
+                                ? theme.colorScheme.error
+                                : _isVideoNoteMode
+                                    ? Colors.blueAccent
+                                    : theme.colorScheme.primary,
+                            foregroundColor: theme.colorScheme.onPrimary,
+                          ),
+                          tooltip: _isRecording
+                              ? 'Release to send'
+                              : _isVideoNoteMode
+                                  ? 'Hold to record video note'
+                                  : 'Hold to record voice',
+                        ),
+                      ),
+                    ],
+                  ),
+              ]),
+            ),
           ],
         ),
       ),

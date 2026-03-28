@@ -72,6 +72,8 @@ class SgtpConfig {
   final String chatName;
   /// Initial avatar bytes (PNG/JPEG, ≤ 4 KB)
   final Uint8List? chatAvatarBytes;
+  /// How often (seconds) to send pings and prune stale peers. Default 30.
+  final int pingIntervalSeconds;
 
   const SgtpConfig({
     required this.serverAddr,
@@ -81,12 +83,14 @@ class SgtpConfig {
     required this.whitelist,
     this.chatName = 'Chat',
     this.chatAvatarBytes,
+    this.pingIntervalSeconds = 30,
   });
 
   SgtpConfig copyWithRoomUUID(Uint8List roomUUID) => SgtpConfig(
     serverAddr: serverAddr, roomUUID: roomUUID,
     identityKeyPair: identityKeyPair, myPublicKey: myPublicKey,
     whitelist: whitelist, chatName: chatName, chatAvatarBytes: chatAvatarBytes,
+    pingIntervalSeconds: pingIntervalSeconds,
   );
 
   SgtpConfig copyWithMeta({String? name, Uint8List? avatar}) => SgtpConfig(
@@ -95,6 +99,7 @@ class SgtpConfig {
     whitelist: whitelist,
     chatName: name ?? chatName,
     chatAvatarBytes: avatar ?? chatAvatarBytes,
+    pingIntervalSeconds: pingIntervalSeconds,
   );
 }
 
@@ -154,6 +159,28 @@ class SgtpMessageReadReceived extends SgtpEvent {
   });
 }
 
+/// Upload progress for our own outgoing media.
+class SgtpMediaProgress extends SgtpEvent {
+  final String echoId;   // ChatMessage.id of the pending outgoing message
+  final String messageId;
+  final double progress; // 0.0–1.0
+  SgtpMediaProgress({required this.echoId, required this.messageId, required this.progress});
+}
+
+/// A peer added or removed an emoji reaction on a message.
+class SgtpReactionReceived extends SgtpEvent {
+  final String messageId;
+  final String emoji;
+  final String senderUUID;
+  final bool   add; // true = add, false = remove
+  SgtpReactionReceived({
+    required this.messageId,
+    required this.emoji,
+    required this.senderUUID,
+    required this.add,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Client state
 // ---------------------------------------------------------------------------
@@ -198,6 +225,7 @@ class SgtpClient {
 
   bool   _isMaster         = false;
   Timer? _ckRotationTimer;
+  Timer? _keepaliveTimer;   // actively pings all known peers to keep connections alive
   bool   _infoTimerStarted  = false;
   final Set<String> _pendingHandshakes = {};
   bool   _chatRequestSent   = false;
@@ -205,6 +233,9 @@ class SgtpClient {
 
   final Map<String, int> _peerLastSeen = {};
   Timer? _stalePruneTimer;
+  /// Peers already announced via SgtpPeerJoined this session.
+  /// Prevents duplicate "joined" messages from keepalive pings / prune races.
+  final Set<String> _announcedJoins = {};
 
   final List<_HistoryRecord> _historyStore = [];
   bool _historyRequested = false;
@@ -251,8 +282,15 @@ class SgtpClient {
       _eventController.add(SgtpHandshaking());
       _socket!.listen(_onData,
           onError: _onSocketError, onDone: _onSocketDone, cancelOnError: false);
-      _stalePruneTimer = Timer.periodic(const Duration(seconds: 60),
-          (_) => _pruneStale());
+      _stalePruneTimer = Timer.periodic(
+          Duration(seconds: _config.pingIntervalSeconds),
+          (_) => _pruneStale(thresholdMs: _config.pingIntervalSeconds * 3 * 1000));
+
+      // Actively ping all known peers every interval so both sides stay alive
+      // even when no messages are sent (fixes "peer left" when idle).
+      _keepaliveTimer = Timer.periodic(
+          Duration(seconds: _config.pingIntervalSeconds),
+          (_) => _sendKeepalive());
       await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       Future.delayed(Duration(milliseconds: SgtpConstants.infoDelayMs), () async {
         if (_state == _ClientState.waitingHandshake && _peers.isEmpty && !_readyEmitted) {
@@ -268,7 +306,11 @@ class SgtpClient {
     }
   }
 
-  Future<void> sendMessage(String text) async {
+  Future<void> sendMessage(String text, {
+    String? replyToId,
+    String? replyToContent,
+    String? replyToSender,
+  }) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
     final msgUUID   = generateUUIDv7();
     final nonce     = _myNonce++;
@@ -278,6 +320,9 @@ class SgtpClient {
       'pub': myPubHex,
       if (_myUserAvatar != null && _myUserAvatar!.isNotEmpty)
         'avatar': base64.encode(_myUserAvatar!),
+      if (replyToId != null) 'reply_to_id': replyToId,
+      if (replyToContent != null) 'reply_to_content': replyToContent,
+      if (replyToSender != null) 'reply_to_sender': replyToSender,
     };
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
     try {
@@ -292,10 +337,32 @@ class SgtpClient {
         senderPublicKeyHex: myPubHex,
         content: text, receivedAt: DateTime.now(), isFromHistory: false, isFromMe: true,
         senderAvatarBytes: _myUserAvatar,
+        replyToId: replyToId,
+        replyToContent: replyToContent,
+        replyToSender: replyToSender,
       )));
     } catch (e) {
       _eventController.add(SgtpError(error: 'Failed to send message: $e'));
     }
+  }
+
+  /// Send an emoji reaction on a message. Peers receive it and update their UI.
+  Future<void> sendReaction(String messageId, String emoji, bool add) async {
+    if (_state != _ClientState.ready || _chatKey == null) return;
+    try {
+      final payload = <String, dynamic>{
+        'v': 1, 'type': 'reaction',
+        'msg_id': messageId,
+        'emoji':  emoji,
+        'add':    add,
+        'pub':    _hex(_config.myPublicKey),
+      };
+      final msgUUID = generateUUIDv7();
+      final nonce   = _myNonce++;
+      final plain   = Uint8List.fromList(utf8.encode(json.encode(payload)));
+      final cipher  = await encrypt(plain, _chatKey!, nonce);
+      await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+    } catch (_) {}
   }
 
   /// Send a read receipt for a given message ID.
@@ -337,11 +404,21 @@ class SgtpClient {
 
   Future<void> _sendMedia(
     Uint8List bytes, String name, String mime, String mediaType,
-    {ChatMessage? echoMessage}) async {
+    {ChatMessage? echoMessage,
+     void Function(double progress)? onProgress}) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
     const chunkSize   = SgtpConstants.mediaChunkSize;
-    final fileId      = uuidBytesToHex(generateUUIDv7());
+    final fileId      = echoMessage?.id ?? uuidBytesToHex(generateUUIDv7());
     final totalChunks = (bytes.length / chunkSize).ceil().clamp(1, 9999);
+
+    // Emit echo immediately so the sender sees the bubble right away.
+    // The echo id IS the fileId so read-receipts from receivers will match.
+    if (echoMessage != null) {
+      _eventController.add(SgtpMessageReceived(
+          message: echoMessage.copyWith(
+              id: fileId, isSending: true, sendProgress: 0.0)));
+    }
+
     try {
       for (int i = 0; i < totalChunks; i++) {
         final start = i * chunkSize;
@@ -357,9 +434,22 @@ class SgtpClient {
         final plain   = Uint8List.fromList(utf8.encode(json.encode(payload)));
         final cipher  = await encrypt(plain, _chatKey!, nonce);
         await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+
+        // Report progress
+        final progress = (i + 1) / totalChunks;
+        onProgress?.call(progress);
+        if (echoMessage != null) {
+          _eventController.add(SgtpMediaProgress(
+              messageId: fileId,
+              echoId: fileId,
+              progress: progress));
+        }
       }
+      // Mark as sent
       if (echoMessage != null) {
-        _eventController.add(SgtpMessageReceived(message: echoMessage));
+        _eventController.add(SgtpMessageReceived(
+            message: echoMessage.copyWith(
+                id: fileId, isSending: false, sendProgress: 1.0)));
       }
     } catch (e) {
       _eventController.add(SgtpError(error: 'Failed to send $mediaType: $e'));
@@ -389,6 +479,17 @@ class SgtpClient {
           id: uuidBytesToHex(generateUUIDv7()), senderUUID: uuidBytesToHex(_myUUID),
           content: name, audioBytes: bytes, mediaMime: mime, mediaName: name,
           type: MessageType.voice, receivedAt: DateTime.now(),
+          isFromHistory: false, isFromMe: true));
+  }
+
+  /// Send a circular video note (кружок).
+  Future<void> sendVideoNote(Uint8List bytes, String mime) {
+    final name = 'videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    return _sendMedia(bytes, name, mime, 'video_note',
+        echoMessage: ChatMessage(
+          id: uuidBytesToHex(generateUUIDv7()), senderUUID: uuidBytesToHex(_myUUID),
+          content: name, videoBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.videoNote, receivedAt: DateTime.now(),
           isFromHistory: false, isFromMe: true));
   }
 
@@ -484,7 +585,9 @@ class SgtpClient {
   Future<void> _onIntent(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
-    await _pruneStale(thresholdMs: 30 * 1000);
+    // Use configurable threshold (not hardcoded 30s) to avoid kicking
+    // peers whose last ping happened to be at the interval boundary
+    await _pruneStale(thresholdMs: _config.pingIntervalSeconds * 4 * 1000);
     await _sendPing(f.senderUUID);
   }
 
@@ -531,8 +634,10 @@ class SgtpClient {
     _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
     await _sendPong(f.senderUUID);
     _scheduleInfo();
-    if (!_eventController.isClosed) {
-      _peerPublicKeys[h] = edH;
+    // Only announce if we have NOT announced this peer yet this session.
+    _peerPublicKeys[h] = edH;
+    if (!_eventController.isClosed && !_announcedJoins.contains(h)) {
+      _announcedJoins.add(h);
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
   }
@@ -555,8 +660,9 @@ class SgtpClient {
         ed25519PubKey: ed, sharedKey: ss, handshakeComplete: true);
     _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
     _pendingHandshakes.remove(h);
-    if (!_eventController.isClosed && prev?.handshakeComplete != true) {
-      _peerPublicKeys[h] = edH;
+    _peerPublicKeys[h] = edH;
+    if (!_eventController.isClosed && !_announcedJoins.contains(h)) {
+      _announcedJoins.add(h);
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
     if (_state == _ClientState.ready && _isMaster) {
@@ -745,11 +851,16 @@ class SgtpClient {
             senderPublicKeyHex: senderPub ?? _peerPublicKeys[sH],
             content: (p['text'] as String?) ?? '',
             receivedAt: recvAt, isFromHistory: history, isFromMe: false,
-            senderAvatarBytes: senderAvatar)));
-        case 'image': await _mediaPayload(msgId, sH, p, 'image', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
-        case 'gif':   await _mediaPayload(msgId, sH, p, 'gif',   history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
-        case 'video': await _mediaPayload(msgId, sH, p, 'video', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
-        case 'voice': await _mediaPayload(msgId, sH, p, 'voice', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+            senderAvatarBytes: senderAvatar,
+            replyToId:      p['reply_to_id'] as String?,
+            replyToContent: p['reply_to_content'] as String?,
+            replyToSender:  p['reply_to_sender'] as String?,
+          )));
+        case 'image': await _mediaPayload(msgId, sH, p, 'image',      history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'gif':   await _mediaPayload(msgId, sH, p, 'gif',        history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'video': await _mediaPayload(msgId, sH, p, 'video',      history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'video_note': await _mediaPayload(msgId, sH, p, 'video_note', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'voice': await _mediaPayload(msgId, sH, p, 'voice',      history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
         case 'message_read':
           if (!history) {
             final readMsgId = p['msg_id'] as String?;
@@ -758,6 +869,20 @@ class SgtpClient {
                 readMessageId: readMsgId,
                 readerUUID: sH,
                 readerPublicKeyHex: senderPub ?? _peerPublicKeys[sH],
+              ));
+            }
+          }
+        case 'reaction':
+          if (!history) {
+            final msgId = p['msg_id'] as String?;
+            final emoji = p['emoji'] as String?;
+            final add   = (p['add'] as bool?) ?? true;
+            if (msgId != null && emoji != null) {
+              _eventController.add(SgtpReactionReceived(
+                messageId: msgId,
+                emoji:     emoji,
+                senderUUID: sH,
+                add:       add,
               ));
             }
           }
@@ -788,8 +913,9 @@ class SgtpClient {
     final totalSize  = (p['size']   as num?)?.toInt() ?? 0;
     final chunk      = base64.decode(p['data'] as String? ?? '');
     if (!p.containsKey('chunk')) {
+      // Single-chunk: use fileId as message id so it matches sender's echo id
       _eventController.add(SgtpMessageReceived(
-          message: _media(id, sender, name, mime, type, chunk, history, recvAt,
+          message: _media(fileId, sender, name, mime, type, chunk, history, recvAt,
               senderPub: senderPub, senderAvatar: senderAvatar)));
       return;
     }
@@ -821,6 +947,11 @@ class SgtpClient {
           senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
           content: name, videoBytes: bytes, mediaMime: mime, mediaName: name,
           type: MessageType.video, receivedAt: recvAt, isFromHistory: history, isFromMe: false,
+          senderAvatarBytes: senderAvatar),
+      'video_note' => ChatMessage(id: id, senderUUID: sender,
+          senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
+          content: name, videoBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.videoNote, receivedAt: recvAt, isFromHistory: history, isFromMe: false,
           senderAvatarBytes: senderAvatar),
       'voice' => ChatMessage(id: id, senderUUID: sender,
           senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
@@ -955,6 +1086,7 @@ class SgtpClient {
     _peers.remove(h);
     _pendingHandshakes.remove(h);
     _peerLastSeen.remove(h);
+    _announcedJoins.remove(h);  // allow re-announce if they rejoin later
     _eventController.add(SgtpPeerLeft(peerUUID: h));
     if (_state == _ClientState.ready) {
       if (_peers.isEmpty) {
@@ -981,6 +1113,14 @@ class SgtpClient {
   Future<void> _sendPing(Uint8List r) async {
     if (_ephemeralX25519Pub == null) return;
     await _sendFrame(buildPingFrame(_roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey));
+  }
+
+  /// Proactively ping every connected peer to keep connections alive.
+  Future<void> _sendKeepalive() async {
+    if (_state != _ClientState.ready) return;
+    for (final peer in _peers.values.toList()) {
+      await _sendPing(peer.uuidBytes);
+    }
   }
 
   Future<void> _sendPong(Uint8List r) async {
@@ -1014,9 +1154,10 @@ class SgtpClient {
 
   Future<void> _cleanup() async {
     _state = _ClientState.disconnected;
-    _ckRotationTimer?.cancel(); _hsiTimer?.cancel(); _stalePruneTimer?.cancel();
-    _ckRotationTimer = null; _hsiTimer = null; _stalePruneTimer = null;
+    _ckRotationTimer?.cancel(); _hsiTimer?.cancel(); _stalePruneTimer?.cancel(); _keepaliveTimer?.cancel();
+    _ckRotationTimer = null; _hsiTimer = null; _stalePruneTimer = null; _keepaliveTimer = null;
     _peerLastSeen.clear();
+    _announcedJoins.clear();
     _infoTimerStarted = false; _chatRequestSent = false;
     _readyEmitted = false; _historyRequested = false; _isMaster = false;
     _peers.clear(); _pendingHandshakes.clear();

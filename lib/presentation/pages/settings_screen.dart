@@ -53,9 +53,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Uint8List? _userAvatar;
 
-  bool    _isLoading  = false;
+  bool    _isLoading    = false;
   bool    _isGenerating = false;
   String? _error;
+
+  /// Ping interval in seconds. Saved via SettingsRepository.
+  int _pingIntervalSeconds = 30;
 
   @override
   void initState() {
@@ -429,17 +432,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _tryApplyConfig() {
     if (_privateKeyBytes == null || _myPublicKey == null) return;
-    final server = _serverCtrl.text.trim();
+    var server = _serverCtrl.text.trim();
+    // Strip any scheme the mobile keyboard may have auto-inserted
+    server = server
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    // Sync the controller text silently if it changed
+    if (server != _serverCtrl.text) {
+      _serverCtrl.value = _serverCtrl.value.copyWith(
+        text: server,
+        selection: TextSelection.collapsed(offset: server.length),
+      );
+    }
     try {
       final parsed   = parseOpenSshPrivateKey(_privateKeyBytes!);
       final keyPair  = makeKeyPair(parsed.seed, parsed.publicKey);
       final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
       final newConfig = SgtpConfig(
-        serverAddr:      server.isEmpty ? 'localhost:7777' : server,
-        roomUUID:        Uint8List(16),
-        identityKeyPair: keyPair,
-        myPublicKey:     parsed.publicKey,
-        whitelist:       whitelist,
+        serverAddr:          server.isEmpty ? 'localhost:7777' : server,
+        roomUUID:            Uint8List(16),
+        identityKeyPair:     keyPair,
+        myPublicKey:         parsed.publicKey,
+        whitelist:           whitelist,
+        pingIntervalSeconds: _pingIntervalSeconds,
       );
       widget.onConfigChanged?.call(newConfig, _nicknames, server);
     } catch (e) { _setError('Config error: $e'); }
@@ -475,6 +491,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               prefixIcon: Icon(Icons.dns_outlined),
               border: OutlineInputBorder(),
             ),
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            enableSuggestions: false,
+            textCapitalization: TextCapitalization.none,
             onChanged: (_) => _tryApplyConfig(),
             onSubmitted: (_) => _tryApplyConfig(),
           ),
@@ -517,6 +537,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           const SizedBox(height: 8),
 
+          // ── Network / Ping ─────────────────────────────────────────────────
+          _sectionTitle('Network'),
+          const SizedBox(height: 8),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.colorScheme.outline),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Ping interval',
+                          style: theme.textTheme.bodyMedium),
+                      Text('${_pingIntervalSeconds}s',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  Slider(
+                    value: _pingIntervalSeconds.toDouble(),
+                    min: 5, max: 120, divisions: 23,
+                    label: '${_pingIntervalSeconds}s',
+                    onChanged: (v) {
+                      setState(() => _pingIntervalSeconds = v.round());
+                      _tryApplyConfig();
+                    },
+                  ),
+                  Text(
+                    'Peers who don\'t respond within ${_pingIntervalSeconds * 3}s will be removed. '
+                    'Lower values detect disconnects faster but use more traffic.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+
+          // ── Guide ──────────────────────────────────────────────────────────
+          _sectionTitle('Getting Started'),
+          const SizedBox(height: 8),
+          _buildGuideCard(theme),
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+
           // ── About ─────────────────────────────────────────────────────────
           _sectionTitle('About'),
           const SizedBox(height: 8),
@@ -535,6 +611,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+
+  // ── Guide card ────────────────────────────────────────────────────────────
+
+  Widget _buildGuideCard(ThemeData theme) {
+    const steps = [
+      (Icons.vpn_key_outlined,    'Private Key',   'Generate or import your Ed25519 identity key. This is your unique identity — never share the private key.'),
+      (Icons.people_outline,      'Whitelist',     'Add trusted peers\' public keys. Only whitelisted keys can join your rooms. Share your public key hex with friends.'),
+      (Icons.dns_outlined,        'Server',        'Enter the SGTP relay server address (host:port). All participants must use the same server.'),
+      (Icons.meeting_room_outlined,'Rooms',        'Create a new room or join one by UUID. Share the room UUID with peers so they can join.'),
+      (Icons.chat_bubble_outline, 'Chatting',      'Hold the mic button to record voice. Long-press a message to reply or react. Swipe right on a message to reply quickly.'),
+    ];
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outline),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          children: steps.map((s) => ListTile(
+            leading: Icon(s.$1, color: theme.colorScheme.primary, size: 22),
+            title: Text(s.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: Text(s.$3,
+                style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          )).toList(),
+        ),
       ),
     );
   }

@@ -41,6 +41,15 @@ class ChatState extends Equatable {
   /// Read receipts: messageId → set of readerUUIDs
   final Map<String, Set<String>> readReceipts;
 
+  /// The message currently being replied to (null = no reply).
+  final ChatMessage? replyToMessage;
+
+  /// Upload progress 0.0–1.0 (null = idle).
+  final double? uploadProgress;
+
+  /// Emoji reactions: messageId → emoji → Set<senderUUID> (local + received).
+  final Map<String, Map<String, Set<String>>> reactions;
+
   const ChatState({
     this.status = ChatStatus.connecting,
     this.messages = const [],
@@ -59,6 +68,9 @@ class ChatState extends Equatable {
     this.userAvatarBytes,
     this.peerAvatars = const {},
     this.readReceipts = const {},
+    this.replyToMessage,
+    this.uploadProgress,
+    this.reactions = const {},
   });
 
   ChatState copyWith({
@@ -79,9 +91,14 @@ class ChatState extends Equatable {
     Uint8List? userAvatarBytes,
     Map<String, Uint8List>? peerAvatars,
     Map<String, Set<String>>? readReceipts,
+    ChatMessage? replyToMessage,
+    double? uploadProgress,
+    Map<String, Map<String, Set<String>>>? reactions,
     bool clearError = false,
     bool clearAvatar = false,
     bool clearUserAvatar = false,
+    bool clearReply = false,
+    bool clearUpload = false,
   }) {
     return ChatState(
       status:         status ?? this.status,
@@ -101,6 +118,9 @@ class ChatState extends Equatable {
       userAvatarBytes: clearUserAvatar ? null : (userAvatarBytes ?? this.userAvatarBytes),
       peerAvatars:    peerAvatars ?? this.peerAvatars,
       readReceipts:   readReceipts ?? this.readReceipts,
+      replyToMessage: clearReply ? null : (replyToMessage ?? this.replyToMessage),
+      uploadProgress: clearUpload ? null : (uploadProgress ?? this.uploadProgress),
+      reactions:      reactions ?? this.reactions,
     );
   }
 
@@ -110,6 +130,6 @@ class ChatState extends Equatable {
         roomUUID, myUUID, myPublicKeyHex, errorMessage,
         nicknames, peerNicknames, peerNicknamesHistory, peerPublicKeys,
         chatName, chatAvatarBytes, userAvatarBytes,
-        peerAvatars, readReceipts,
+        peerAvatars, readReceipts, replyToMessage, uploadProgress, reactions,
       ];
 }

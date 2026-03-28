@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:equatable/equatable.dart';
 import '../../../data/sgtp_client.dart';
+import '../../../domain/entities/message.dart';
 
 abstract class ChatEvent extends Equatable {
   const ChatEvent();
@@ -23,9 +24,12 @@ class ChatReconnect extends ChatEvent {
 
 class ChatSendMessage extends ChatEvent {
   final String text;
-  const ChatSendMessage(this.text);
+  final String? replyToId;
+  final String? replyToContent;
+  final String? replyToSender;
+  const ChatSendMessage(this.text, {this.replyToId, this.replyToContent, this.replyToSender});
   @override
-  List<Object?> get props => [text];
+  List<Object?> get props => [text, replyToId];
 }
 
 class ChatSendImage extends ChatEvent {
@@ -50,6 +54,14 @@ class ChatSendVoice extends ChatEvent {
   final Uint8List bytes;
   final String mime;
   const ChatSendVoice({required this.bytes, required this.mime});
+  @override
+  List<Object?> get props => [mime];
+}
+
+class ChatSendVideoNote extends ChatEvent {
+  final Uint8List bytes;
+  final String mime;
+  const ChatSendVideoNote({required this.bytes, required this.mime});
   @override
   List<Object?> get props => [mime];
 }
@@ -81,6 +93,28 @@ class ChatSetUserAvatar extends ChatEvent {
   const ChatSetUserAvatar(this.avatarBytes);
   @override
   List<Object?> get props => [avatarBytes];
+}
+
+/// Set the message the user is replying to.
+class ChatSetReply extends ChatEvent {
+  final ChatMessage message;
+  const ChatSetReply(this.message);
+  @override
+  List<Object?> get props => [message.id];
+}
+
+/// Clear the current reply.
+class ChatClearReply extends ChatEvent {
+  const ChatClearReply();
+}
+
+/// Toggle an emoji reaction on a message.
+class ChatToggleReaction extends ChatEvent {
+  final String messageId;
+  final String emoji;
+  const ChatToggleReaction({required this.messageId, required this.emoji});
+  @override
+  List<Object?> get props => [messageId, emoji];
 }
 
 class ChatInternalSgtpEvent extends ChatEvent {
