@@ -29,6 +29,14 @@ class MessageBubble extends StatelessWidget {
     final timeStr = _formatTime(message.receivedAt);
     final senderLabel = _buildSenderLabel();
 
+    // System messages have no bubble frame
+    if (message.type == MessageType.system) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        child: _buildSystemContent(context, theme),
+      );
+    }
+
     // Voice messages have no bubble frame
     if (message.type == MessageType.voice) {
       return Align(
@@ -89,6 +97,8 @@ class MessageBubble extends StatelessWidget {
   Widget _buildContent(BuildContext context, ThemeData theme, Color textColor,
       String senderLabel, String timeStr, bool isMe) {
     switch (message.type) {
+      case MessageType.system:
+        return _buildSystemContent(context, theme);
       case MessageType.image:
         return _buildImageContent(context, theme, textColor, senderLabel,
             timeStr, isMe,
@@ -107,6 +117,24 @@ class MessageBubble extends StatelessWidget {
         return _buildTextContent(
             theme, textColor, senderLabel, timeStr, isMe);
     }
+  }
+
+  // ── System ────────────────────────────────────────────────────────────────
+
+  Widget _buildSystemContent(BuildContext context, ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        child: Text(
+          message.content,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontStyle: FontStyle.italic,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
   }
 
   // ── Text ──────────────────────────────────────────────────────────────────

@@ -4,8 +4,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
@@ -23,11 +25,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   final _messageCtrl  = TextEditingController();
   final _scrollCtrl   = ScrollController();
   final _recorder     = AudioRecorder();
+  final _focusNode    = FocusNode();
   bool _infoShown     = false;
   bool _isRecording   = false;
   String? _recordingPath;
   List<InputDevice> _inputDevices = [];
   InputDevice? _selectedDevice;
+  bool _isDraggingOver = false;
 
   // Keep a local reference for the lifecycle observer
   ChatBloc? _chatBloc;
@@ -47,6 +51,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
+    _focusNode.dispose();
     _recorder.dispose();
     super.dispose();
   }
@@ -85,6 +90,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     if (text.isEmpty) return;
     context.read<ChatBloc>().add(ChatSendMessage(text));
     _messageCtrl.clear();
+    _focusNode.requestFocus();
     _scrollToBottom();
   }
 
@@ -208,6 +214,42 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _pasteImageFromClipboard(BuildContext context) async {
+    try {
+      print('🔍 [Paste] Trying to get image from clipboard...');
+      final imageBytes = await Pasteboard.image;
+      
+      if (imageBytes == null) {
+        print('❌ [Paste] No image in clipboard');
+        _showFloatingSnackbar(context, 'No image in clipboard');
+        return;
+      }
+
+      print('✅ [Paste] Got image bytes: ${imageBytes.length} bytes');
+      
+      final name = 'clipboard_${DateTime.now().millisecondsSinceEpoch}.png';
+      final mime = 'image/png';
+      
+      print('📤 [Paste] Sending: $name (mime: $mime)');
+
+      if (!context.mounted) {
+        print('⚠️ [Paste] Context not mounted');
+        return;
+      }
+      
+      context.read<ChatBloc>().add(
+            ChatSendImage(bytes: imageBytes, name: name, mime: mime),
+          );
+      print('✅ [Paste] Event added to bloc');
+      
+      _scrollToBottom();
+      _showFloatingSnackbar(context, 'Image pasted and sent (${(imageBytes.length / 1024).toStringAsFixed(1)} KB)');
+    } catch (e) {
+      print('❌ [Paste] Error: $e');
+      _showFloatingSnackbar(context, 'Failed to paste image: $e');
+    }
+  }
+
   void _showFloatingSnackbar(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -294,14 +336,24 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               Navigator.of(context).pop();
             }
           },
-          child: Scaffold(
-            appBar: _buildAppBar(context, state),
-            body: Column(
-              children: [
-                _buildStatusBanner(context, state),
-                Expanded(child: _buildMessageList(state)),
-                _buildInputBar(context, state),
-              ],
+          child: RawKeyboardListener(
+            focusNode: FocusNode(),
+            onKey: (event) {
+              // Ctrl+V (Windows/Linux) or Cmd+V (Mac) to paste image
+              if (event.isKeyPressed(LogicalKeyboardKey.keyV) &&
+                  (event.isControlPressed || event.isMetaPressed)) {
+                _pasteImageFromClipboard(context);
+              }
+            },
+            child: Scaffold(
+              appBar: _buildAppBar(context, state),
+              body: Column(
+                children: [
+                  _buildStatusBanner(context, state),
+                  Expanded(child: _buildMessageList(state)),
+                  _buildInputBar(context, state),
+                ],
+              ),
             ),
           ),
         );
@@ -523,6 +575,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                 Expanded(
                   child: TextField(
                     controller: _messageCtrl,
+                    focusNode: _focusNode,
                     enabled: canSend && !_isRecording,
                     decoration: InputDecoration(
                       hintText: _isRecording

@@ -20,6 +20,10 @@ dependencies:
   media_kit: ^1.1.11
   media_kit_video: ^1.2.5
   media_kit_libs_video: ^1.0.5
+  pasteboard: ^0.2.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.0
+  super_drag_and_drop: ^0.8.0
 
 dev_dependencies:
   flutter_test:

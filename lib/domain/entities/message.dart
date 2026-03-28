@@ -8,6 +8,7 @@ enum MessageType {
   gif,
   video,
   voice,
+  system,  // System messages: user joined/left
 }
 
 /// Represents a chat message received or sent in the SGTP session.

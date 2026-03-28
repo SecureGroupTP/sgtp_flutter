@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../core/qr_data.dart';
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_state.dart';
 import '../blocs/rooms/rooms_bloc.dart';
 import '../blocs/rooms/rooms_event.dart';
 import '../blocs/rooms/rooms_state.dart';
+import '../widgets/qr_share_dialog.dart';
+import '../widgets/qr_scanner_dialog.dart';
 import 'chat_page.dart';
 
 class RoomsPage extends StatelessWidget {
@@ -145,6 +148,7 @@ class RoomsPage extends StatelessWidget {
         final entry = state.rooms[i];
         return _RoomTile(
           entry: entry,
+          serverAddress: state.serverAddress,
           onTap: () => _openRoom(context, entry),
           onRemove: () =>
               context.read<RoomsBloc>().add(RoomsRemoveRoom(entry.roomUUID)),
@@ -182,11 +186,13 @@ class RoomsPage extends StatelessWidget {
 
 class _RoomTile extends StatelessWidget {
   final RoomEntry entry;
+  final String serverAddress;
   final VoidCallback onTap;
   final VoidCallback onRemove;
 
   const _RoomTile({
     required this.entry,
+    required this.serverAddress,
     required this.onTap,
     required this.onRemove,
   });
@@ -238,6 +244,21 @@ class _RoomTile extends StatelessWidget {
                   Clipboard.setData(ClipboardData(text: entry.roomUUID));
                   ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Room UUID copied')));
+                case _RoomAction.shareQR:
+                  final qrData = QrShareData(
+                    type: 'room',
+                    roomUUID: entry.roomUUID,
+                    serverAddress: serverAddress,
+                    timestamp: DateTime.now().millisecondsSinceEpoch,
+                  );
+                  showDialog<void>(
+                    context: context,
+                    builder: (_) => QrShareDialog(
+                      data: qrData,
+                      title: 'Share Room',
+                      description: entry.label,
+                    ),
+                  );
                 case _RoomAction.remove:
                   onRemove();
               }
@@ -248,6 +269,14 @@ class _RoomTile extends StatelessWidget {
                 child: ListTile(
                   leading: Icon(Icons.copy),
                   title: Text('Copy UUID'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _RoomAction.shareQR,
+                child: ListTile(
+                  leading: Icon(Icons.qr_code_2),
+                  title: Text('Share QR code'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -289,7 +318,7 @@ class _RoomTile extends StatelessWidget {
   }
 }
 
-enum _RoomAction { copyUUID, remove }
+enum _RoomAction { copyUUID, shareQR, remove }
 
 // ── Add room bottom sheet ─────────────────────────────────────────────────
 
@@ -303,12 +332,47 @@ class _AddRoomSheet extends StatefulWidget {
 
 class _AddRoomSheetState extends State<_AddRoomSheet> {
   final _uuidCtrl = TextEditingController();
+  final _base64Ctrl = TextEditingController();
   bool _joining = false;
+  bool _showBase64Input = false;
 
   @override
   void dispose() {
     _uuidCtrl.dispose();
+    _base64Ctrl.dispose();
     super.dispose();
+  }
+
+  void _handleQrScanned(QrShareData data) {
+    print('✅ [QR] Room scanned: ${data.roomUUID}');
+    if (data.type == 'room' && data.roomUUID != null) {
+      _uuidCtrl.text = data.roomUUID!;
+      setState(() => _joining = true);
+      
+      // Auto-join if valid
+      widget.roomsBloc.add(RoomsJoinRoom(data.roomUUID!));
+      Navigator.of(context).pop();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid room QR code')),
+      );
+    }
+  }
+
+  void _handleBase64Input() {
+    final base64 = _base64Ctrl.text.trim();
+    if (base64.isEmpty) return;
+    
+    final data = QrShareData.fromBase64(base64);
+    if (data != null && data.type == 'room' && data.roomUUID != null) {
+      _uuidCtrl.text = data.roomUUID!;
+      setState(() => _joining = true);
+      print('✅ [QR] Base64 decoded: ${data.roomUUID}');
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid base64 format')),
+      );
+    }
   }
 
   @override
@@ -317,57 +381,122 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(
           24, 24, 24, MediaQuery.of(context).viewInsets.bottom + 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Add room', style: theme.textTheme.titleLarge),
-          const SizedBox(height: 24),
-          // Create new
-          FilledButton.icon(
-            onPressed: () {
-              widget.roomsBloc.add(const RoomsCreateRoom());
-              Navigator.of(context).pop();
-            },
-            icon: const Icon(Icons.add_circle_outline),
-            label: const Text('Create new room'),
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          ),
-          const SizedBox(height: 16),
-          const Row(children: [
-            Expanded(child: Divider()),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: Text('or'),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Add room', style: theme.textTheme.titleLarge),
+            const SizedBox(height: 24),
+            
+            // Create new
+            FilledButton.icon(
+              onPressed: () {
+                widget.roomsBloc.add(const RoomsCreateRoom());
+                Navigator.of(context).pop();
+              },
+              icon: const Icon(Icons.add_circle_outline),
+              label: const Text('Create new room'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             ),
-            Expanded(child: Divider()),
-          ]),
-          const SizedBox(height: 16),
-          // Join by UUID
-          TextField(
-            controller: _uuidCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Room UUID',
-              hintText: '32 hex chars (without dashes)',
-              prefixIcon: Icon(Icons.vpn_key_outlined),
-              border: OutlineInputBorder(),
+            const SizedBox(height: 16),
+            const Row(children: [
+              Expanded(child: Divider()),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Text('or'),
+              ),
+              Expanded(child: Divider()),
+            ]),
+            const SizedBox(height: 16),
+            
+            // Scan QR
+            FilledButton.tonalIcon(
+              onPressed: () {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute(
+                    fullscreenDialog: true,
+                    builder: (_) => QrScannerDialog(
+                      onQrScanned: _handleQrScanned,
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan QR code'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             ),
-            onChanged: (v) => setState(() => _joining = v.trim().isNotEmpty),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            onPressed: _joining
-                ? () {
-                    widget.roomsBloc
-                        .add(RoomsJoinRoom(_uuidCtrl.text.trim()));
-                    Navigator.of(context).pop();
-                  }
-                : null,
-            icon: const Icon(Icons.login),
-            label: const Text('Join room'),
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          ),
-        ],
+            const SizedBox(height: 12),
+            const Row(children: [
+              Expanded(child: Divider()),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Text('or'),
+              ),
+              Expanded(child: Divider()),
+            ]),
+            const SizedBox(height: 12),
+            
+            // Join by UUID or base64
+            if (!_showBase64Input) ...[
+              TextField(
+                controller: _uuidCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Room UUID',
+                  hintText: '32 hex chars (without dashes)',
+                  prefixIcon: Icon(Icons.vpn_key_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _joining = v.trim().isNotEmpty),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () => setState(() => _showBase64Input = true),
+                child: const Text('Or paste base64'),
+              ),
+            ] else ...[
+              TextField(
+                controller: _base64Ctrl,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Base64 QR data',
+                  hintText: 'Paste base64 string here',
+                  prefixIcon: Icon(Icons.vpn_key_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _joining = v.trim().isNotEmpty),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _showBase64Input = false;
+                    _base64Ctrl.clear();
+                  });
+                },
+                child: const Text('Back to UUID input'),
+              ),
+            ],
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: _joining
+                  ? () {
+                      if (_showBase64Input) {
+                        _handleBase64Input();
+                      } else if (_uuidCtrl.text.trim().isNotEmpty) {
+                        widget.roomsBloc
+                            .add(RoomsJoinRoom(_uuidCtrl.text.trim()));
+                        Navigator.of(context).pop();
+                      }
+                    }
+                  : null,
+              icon: const Icon(Icons.login),
+              label: const Text('Join room'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ],
+        ),
       ),
     );
   }

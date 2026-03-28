@@ -59,8 +59,22 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
   Future<void> _onSendImage(
       ChatSendImage event, Emitter<ChatState> emit) async {
-    if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendImage(event.bytes, event.name, event.mime);
+    print('📸 [Bloc] _onSendImage called: ${event.name} (${event.bytes.length} bytes, mime: ${event.mime})');
+    if (_client == null) {
+      print('❌ [Bloc] Client is null');
+      return;
+    }
+    if (state.status != ChatStatus.ready) {
+      print('⚠️ [Bloc] Status is ${state.status}, not ready');
+      return;
+    }
+    try {
+      print('📤 [Bloc] Sending image to client...');
+      await _client!.sendImage(event.bytes, event.name, event.mime);
+      print('✅ [Bloc] Image sent successfully');
+    } catch (e) {
+      print('❌ [Bloc] Error sending image: $e');
+    }
   }
 
   Future<void> _onSendVideo(
@@ -81,6 +95,22 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _eventSub?.cancel();
     _eventSub = null;
     emit(state.copyWith(status: ChatStatus.disconnected));
+  }
+
+  ChatMessage _createSystemMessage(String content) {
+    return ChatMessage(
+      id: _generateMessageId(),
+      senderUUID: 'system',
+      content: content,
+      type: MessageType.system,
+      receivedAt: DateTime.now(),
+      isFromHistory: false,
+      isFromMe: false,
+    );
+  }
+
+  String _generateMessageId() {
+    return DateTime.now().millisecondsSinceEpoch.toString().padLeft(16, '0');
   }
 
   void _onSgtpEvent(ChatInternalSgtpEvent event, Emitter<ChatState> emit) {
@@ -118,21 +148,52 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final updatedPeerNicknames = Map<String, String>.from(state.peerNicknames);
         if (nick != null) updatedPeerNicknames[peerUUID] = nick;
 
+        // Create system message
+        final displayName = nick ?? peerUUID.substring(0, 8);
+        final systemMsg = _createSystemMessage('👤 $displayName joined the chat');
+        final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
+
+        // Update history
+        final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
+        if (nick != null) updatedHistory[peerUUID] = nick;
+
         if (!state.peerUUIDs.contains(peerUUID)) {
           emit(state.copyWith(
-            peerUUIDs:     [...state.peerUUIDs, peerUUID],
-            peerNicknames: updatedPeerNicknames,
+            messages:               updatedMessages,
+            peerUUIDs:              [...state.peerUUIDs, peerUUID],
+            peerNicknames:          updatedPeerNicknames,
+            peerNicknamesHistory:   updatedHistory,
           ));
         } else {
-          emit(state.copyWith(peerNicknames: updatedPeerNicknames));
+          emit(state.copyWith(
+            messages:               updatedMessages,
+            peerNicknames:          updatedPeerNicknames,
+            peerNicknamesHistory:   updatedHistory,
+          ));
         }
 
       case SgtpPeerLeft(:final peerUUID):
+        // Get nickname before removing (use history if already left before)
+        final nick = state.peerNicknames[peerUUID] ?? state.peerNicknamesHistory[peerUUID];
+        
+        // Create system message with nickname
+        final displayName = nick ?? peerUUID.substring(0, 8);
+        final systemMsg = _createSystemMessage('👤 $displayName left the chat');
+        final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
+        
+        // Remove from active peers but keep in history
         final updatedNicknames = Map<String, String>.from(state.peerNicknames)
           ..remove(peerUUID);
+        
+        // Update history to preserve the nickname
+        final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
+        if (nick != null) updatedHistory[peerUUID] = nick;
+        
         emit(state.copyWith(
-          peerUUIDs:     state.peerUUIDs.where((id) => id != peerUUID).toList(),
-          peerNicknames: updatedNicknames,
+          messages:               updatedMessages,
+          peerUUIDs:              state.peerUUIDs.where((id) => id != peerUUID).toList(),
+          peerNicknames:          updatedNicknames,
+          peerNicknamesHistory:   updatedHistory,
         ));
 
       case SgtpError(:final error):

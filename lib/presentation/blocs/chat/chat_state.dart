@@ -20,6 +20,9 @@ class ChatState extends Equatable {
   /// Runtime: sessionUUID → nickname (populated as peers join, using [nicknames]).
   final Map<String, String> peerNicknames;
 
+  /// History: sessionUUID → nickname (keeps nicknames even after peer leaves)
+  final Map<String, String> peerNicknamesHistory;
+
   const ChatState({
     this.status = ChatStatus.connecting,
     this.messages = const [],
@@ -31,6 +34,7 @@ class ChatState extends Equatable {
     this.errorMessage,
     this.nicknames = const {},
     this.peerNicknames = const {},
+    this.peerNicknamesHistory = const {},
   });
 
   ChatState copyWith({
@@ -44,6 +48,7 @@ class ChatState extends Equatable {
     String? errorMessage,
     Map<String, String>? nicknames,
     Map<String, String>? peerNicknames,
+    Map<String, String>? peerNicknamesHistory,
     bool clearError = false,
   }) {
     return ChatState(
@@ -57,6 +62,7 @@ class ChatState extends Equatable {
       errorMessage:   clearError ? null : (errorMessage ?? this.errorMessage),
       nicknames:      nicknames ?? this.nicknames,
       peerNicknames:  peerNicknames ?? this.peerNicknames,
+      peerNicknamesHistory: peerNicknamesHistory ?? this.peerNicknamesHistory,
     );
   }
 
@@ -64,6 +70,6 @@ class ChatState extends Equatable {
   List<Object?> get props => [
         status, messages, peerUUIDs, isMaster,
         roomUUID, myUUID, myPublicKeyHex, errorMessage,
-        nicknames, peerNicknames,
+        nicknames, peerNicknames, peerNicknamesHistory,
       ];
 }
