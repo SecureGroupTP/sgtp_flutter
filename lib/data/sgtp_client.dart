@@ -194,6 +194,15 @@ class SgtpClient {
       _stalePruneTimer = Timer.periodic(const Duration(seconds: 60),
           (_) => _pruneStale());
       await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
+      // If no peers respond within infoDelayMs, go ready solo.
+      Future.delayed(Duration(milliseconds: SgtpConstants.infoDelayMs), () async {
+        if (_state == _ClientState.waitingHandshake && _peers.isEmpty && !_readyEmitted) {
+          debugPrint('[SGTP] no peers after delay, going ready solo');
+          _updateMaster();
+          _chatRequestSent = true;
+          await _issueCK();
+        }
+      });
     } catch (e) {
       _state = _ClientState.disconnected;
       _eventController.add(SgtpError(error: 'Connection failed: $e'));
@@ -526,8 +535,8 @@ class SgtpClient {
 
   Future<void> _checkChatReq() async {
     debugPrint('[SGTP] checkChatReq: sent=$_chatRequestSent pending=$_pendingHandshakes peers=${_peers.keys.toList()} allKeys=${_peers.values.every((p) => p.sharedKey.isNotEmpty)}');
-    if (_chatRequestSent || _pendingHandshakes.isNotEmpty || _peers.isEmpty) return;
-    if (!_peers.values.every((p) => p.sharedKey.isNotEmpty)) return;
+    if (_chatRequestSent || _pendingHandshakes.isNotEmpty) return;
+    if (_peers.isNotEmpty && !_peers.values.every((p) => p.sharedKey.isNotEmpty)) return;
     _updateMaster();
     debugPrint('[SGTP] checkChatReq: isMaster=$_isMaster');
     if (!_isMaster) {
@@ -546,8 +555,17 @@ class SgtpClient {
   }
 
   Future<void> _onChatRequest(ParsedFrame f) async {
-    debugPrint('[SGTP] CHAT_REQUEST from ${uuidBytesToHex(f.senderUUID)} → issueCK');
-    await _issueCK();
+    final sender = uuidBytesToHex(f.senderUUID);
+    debugPrint('[SGTP] CHAT_REQUEST from $sender chatKey=${_chatKey != null}');
+    if (_chatKey != null) {
+      // Already have a key — send it to this peer without rotating.
+      // (Rotation is only done by the periodic timer.)
+      debugPrint('[SGTP] CHAT_REQUEST: resending current key to $sender');
+      await _issueCKToPeer(sender);
+    } else {
+      debugPrint('[SGTP] CHAT_REQUEST: no key yet → issueCK');
+      await _issueCK();
+    }
   }
 
   /// Send the current chat key to a single peer (no rotation, no nonce reset).
@@ -567,7 +585,6 @@ class SgtpClient {
 
   Future<void> _issueCK() async {
     debugPrint('[SGTP] issueCK peers=${_peers.keys.toList()} readyEmitted=$_readyEmitted');
-    if (_peers.isEmpty) { debugPrint('[SGTP] issueCK: no peers, skip'); return; }
     final key = Uint8List.fromList(
         List.generate(32, (_) => Random.secure().nextInt(256)));
     _chatKey   = key;
