@@ -14,6 +14,8 @@ import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
 import '../blocs/chat/chat_state.dart';
 import '../widgets/message_bubble.dart';
+import '../../domain/entities/message.dart';
+import '../../core/notification_service.dart';
 
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
@@ -33,6 +35,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   List<InputDevice> _inputDevices = [];
   InputDevice? _selectedDevice;
 
+  /// True when this page is in the foreground and the app is active.
+  bool _isPageVisible = true;
+
+  /// IDs of messages for which we have already dispatched a read receipt,
+  /// so we don't fire it twice.
+  final Set<String> _sentReadReceipts = {};
+
   ChatBloc? _chatBloc;
 
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
@@ -42,6 +51,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadInputDevices();
+    // Init notifications (no-op on Windows/Linux desktop)
+    NotificationService.init();
+    // When user taps "Mark as Read" on a notification → send read receipt
+    NotificationService.onMarkAsRead = (messageId) {
+      if (!_sentReadReceipts.contains(messageId)) {
+        _sentReadReceipts.add(messageId);
+        _chatBloc?.add(ChatSendMessageRead(messageId));
+      }
+    };
   }
 
   @override
@@ -56,8 +74,50 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState appState) {
-    if (appState == AppLifecycleState.detached) {
-      _chatBloc?.add(const ChatDisconnect());
+    switch (appState) {
+      case AppLifecycleState.resumed:
+        // App came back to foreground
+        setState(() => _isPageVisible = true);
+        // Clear notifications that were shown while in background
+        NotificationService.cancelAll();
+        // Auto-reconnect if the connection dropped while minimised
+        final bloc = _chatBloc;
+        if (bloc != null &&
+            bloc.state.status == ChatStatus.disconnected) {
+          bloc.add(const ChatReconnect());
+        }
+        // Send read receipts for messages that arrived while in background
+        _flushPendingReadReceipts();
+        break;
+
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        // Going to background — keep TCP alive, just stop sending receipts
+        setState(() => _isPageVisible = false);
+        break;
+
+      case AppLifecycleState.detached:
+        // App is being terminated
+        _chatBloc?.add(const ChatDisconnect());
+        break;
+    }
+  }
+
+  /// Send read receipts for all messages that have not been acknowledged yet.
+  /// Called when the app returns to the foreground.
+  void _flushPendingReadReceipts() {
+    final bloc  = _chatBloc;
+    final state = bloc?.state;
+    if (bloc == null || state == null) return;
+    for (final msg in state.messages) {
+      if (!msg.isFromMe &&
+          msg.type != MessageType.system &&
+          msg.type != MessageType.messageRead &&
+          !_sentReadReceipts.contains(msg.id)) {
+        _sentReadReceipts.add(msg.id);
+        bloc.add(ChatSendMessageRead(msg.id));
+      }
     }
   }
 
@@ -252,6 +312,35 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         if (state.messages.isNotEmpty) _scrollToBottom();
         if (state.status == ChatStatus.ready && !_infoShown) {
           _infoShown = true;
+        }
+
+        // ── Read receipts + background notifications ─────────────────────
+        for (final msg in state.messages) {
+          if (msg.isFromMe) continue;
+          if (msg.type == MessageType.system) continue;
+          if (msg.type == MessageType.messageRead) continue;
+          if (_sentReadReceipts.contains(msg.id)) continue;
+
+          if (_isPageVisible) {
+            // Chat window is open → send receipt immediately
+            _sentReadReceipts.add(msg.id);
+            context.read<ChatBloc>().add(ChatSendMessageRead(msg.id));
+          } else {
+            // App in background → show notification so the user can read it
+            final senderLabel = state.peerNicknames[msg.senderUUID] ??
+                state.peerNicknamesHistory[msg.senderUUID] ??
+                (msg.senderUUID.length >= 8
+                    ? msg.senderUUID.substring(0, 8)
+                    : msg.senderUUID);
+            final body = msg.type == MessageType.text
+                ? msg.content
+                : '[${msg.type.name}]';
+            NotificationService.showMessage(
+              sender: senderLabel,
+              body:   body,
+              messageId: msg.id,
+            );
+          }
         }
         // Don't auto-pop — user can reconnect from the chat page
       },
@@ -453,9 +542,22 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       controller: _scrollCtrl,
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: state.messages.length,
-      itemBuilder: (context, index) => MessageBubble(
-        message: state.messages[index], peerNicknames: state.peerNicknames,
-      ),
+      itemBuilder: (context, index) {
+        final msg = state.messages[index];
+        return MessageBubble(
+          message: msg,
+          peerNicknames: {
+            ...state.peerNicknames,
+            ...state.peerNicknamesHistory,
+            ...state.nicknames,
+          },
+          myUUID: state.myUUID,
+          peerAvatars: state.peerAvatars,
+          userAvatarBytes: state.userAvatarBytes,
+          readReceipts: state.readReceipts,
+          peerCount: state.peerUUIDs.length,
+        );
+      },
     );
   }
 

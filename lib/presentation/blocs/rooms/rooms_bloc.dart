@@ -20,19 +20,30 @@ class _RoomsRefresh extends RoomsEvent {
 class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   final SgtpConfig _baseConfig;
   final Map<String, String> _nicknames;
+  Uint8List? _userAvatar;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
 
   RoomsBloc({
     required SgtpConfig baseConfig,
     required Map<String, String> nicknames,
     required String serverAddress,
+    Uint8List? userAvatar,
   })  : _baseConfig = baseConfig,
         _nicknames = nicknames,
+        _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
     on<RoomsCreateRoom>(_onCreate);
     on<RoomsJoinRoom>(_onJoin);
     on<RoomsRemoveRoom>(_onRemove);
     on<_RoomsRefresh>(_onRefresh);
+  }
+
+  /// Update the user avatar in all active room blocs.
+  void setUserAvatar(Uint8List? avatar) {
+    _userAvatar = avatar;
+    for (final room in state.rooms) {
+      room.chatBloc.add(ChatSetUserAvatar(avatar));
+    }
   }
 
   // ── Event handlers ────────────────────────────────────────────────────────
@@ -67,6 +78,11 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     final chatBloc = ChatBloc()
       ..add(ChatConnect(config, nicknames: _nicknames));
 
+    // Push user avatar into the new bloc
+    if (_userAvatar != null) {
+      chatBloc.add(ChatSetUserAvatar(_userAvatar));
+    }
+
     _chatSubs[hexUUID] = chatBloc.stream.listen((_) {
       add(const _RoomsRefresh());
     });
@@ -90,7 +106,6 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   void _onRefresh(_RoomsRefresh event, Emitter<RoomsState> emit) {
-    // Produces a new RoomsState instance (reference inequality) so BlocBuilder rebuilds.
     emit(state.copyWith());
   }
 

@@ -54,6 +54,14 @@ class ChatSendVoice extends ChatEvent {
   List<Object?> get props => [mime];
 }
 
+/// Send a read receipt for a given message id.
+class ChatSendMessageRead extends ChatEvent {
+  final String messageId;
+  const ChatSendMessageRead(this.messageId);
+  @override
+  List<Object?> get props => [messageId];
+}
+
 class ChatDisconnect extends ChatEvent {
   const ChatDisconnect();
 }
@@ -65,6 +73,14 @@ class ChatUpdateMetadata extends ChatEvent {
   const ChatUpdateMetadata({required this.name, this.avatarBytes});
   @override
   List<Object?> get props => [name];
+}
+
+/// Set the user's own avatar (for display next to own messages).
+class ChatSetUserAvatar extends ChatEvent {
+  final Uint8List? avatarBytes;
+  const ChatSetUserAvatar(this.avatarBytes);
+  @override
+  List<Object?> get props => [avatarBytes];
 }
 
 class ChatInternalSgtpEvent extends ChatEvent {

@@ -15,10 +15,30 @@ class MessageBubble extends StatelessWidget {
   /// sessionUUID → nickname (resolved from whitelist file names).
   final Map<String, String> peerNicknames;
 
+  /// The local user's UUID (to determine "me").
+  final String myUUID;
+
+  /// Per-peer avatars: sessionUUID → bytes (learned from incoming messages).
+  final Map<String, Uint8List> peerAvatars;
+
+  /// The local user's own avatar bytes.
+  final Uint8List? userAvatarBytes;
+
+  /// Read receipts: messageId → set of readerUUIDs.
+  final Map<String, Set<String>> readReceipts;
+
+  /// Number of peers currently online (for "seen by all" check).
+  final int peerCount;
+
   const MessageBubble({
     super.key,
     required this.message,
     this.peerNicknames = const {},
+    this.myUUID = '',
+    this.peerAvatars = const {},
+    this.userAvatarBytes,
+    this.readReceipts = const {},
+    this.peerCount = 0,
   });
 
   @override
@@ -37,10 +57,16 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    // messageRead is invisible in the list – handled by readReceipts tracking
+    if (message.type == MessageType.messageRead) {
+      return const SizedBox.shrink();
+    }
+
     // Voice messages have no bubble frame
     if (message.type == MessageType.voice) {
-      return Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      return _withAvatar(
+        context: context,
+        isMe: isMe,
         child: Container(
           margin: EdgeInsets.only(
             left: isMe ? 48 : 8,
@@ -57,7 +83,7 @@ class MessageBubble extends StatelessWidget {
     final bgColor   = isMe ? cs.primaryContainer : cs.surfaceContainerHighest;
     final textColor = isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant;
 
-    return Align(
+    final bubble = Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
         constraints:
@@ -83,15 +109,111 @@ class MessageBubble extends StatelessWidget {
         ),
       ),
     );
+
+    return Column(
+      crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _withAvatar(context: context, isMe: isMe, child: bubble),
+        if (isMe) _buildReadReceipts(theme, cs),
+      ],
+    );
+  }
+
+  /// Wraps child with a small avatar on the appropriate side.
+  Widget _withAvatar({
+    required BuildContext context,
+    required bool isMe,
+    required Widget child,
+  }) {
+    final avatarBytes = isMe ? userAvatarBytes : _senderAvatarBytes();
+    final avatar = CircleAvatar(
+      radius: 14,
+      backgroundImage: avatarBytes != null ? MemoryImage(avatarBytes) : null,
+      child: avatarBytes == null
+          ? Text(
+              _senderInitial(),
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+            )
+          : null,
+    );
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: isMe
+          ? [Expanded(child: child), const SizedBox(width: 4), avatar]
+          : [avatar, const SizedBox(width: 4), Expanded(child: child)],
+    );
+  }
+
+  Uint8List? _senderAvatarBytes() {
+    // Prefer avatar embedded in the message itself
+    if (message.senderAvatarBytes != null) return message.senderAvatarBytes;
+    // Fall back to peer avatar map
+    return peerAvatars[message.senderUUID];
+  }
+
+  String _senderInitial() {
+    final label = _buildSenderLabel();
+    return label.isNotEmpty ? label[0].toUpperCase() : '?';
+  }
+
+  /// Read receipts row (shown only for own messages).
+  Widget _buildReadReceipts(ThemeData theme, ColorScheme cs) {
+    final readers = readReceipts[message.id] ?? message.readBy;
+    if (readers.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 40, bottom: 2),
+        child: Icon(Icons.done, size: 14, color: cs.onSurfaceVariant.withAlpha(120)),
+      );
+    }
+    final readByAll = peerCount > 0 && readers.length >= peerCount;
+    return Padding(
+      padding: const EdgeInsets.only(right: 40, bottom: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            readByAll ? Icons.done_all : Icons.done,
+            size: 14,
+            color: readByAll ? cs.primary : cs.onSurfaceVariant.withAlpha(180),
+          ),
+          if (readers.isNotEmpty) ...[
+            const SizedBox(width: 4),
+            Text(
+              'Seen by ${readers.length}',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: cs.onSurfaceVariant.withAlpha(160), fontSize: 10),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   String _buildSenderLabel() {
     if (message.isFromMe) return 'Me';
+    // Try nickname by session UUID
+    final nick = peerNicknames[message.senderUUID];
+    if (nick != null) return nick;
+    // Try nickname by public key hex (works even after peer leaves)
+    if (message.senderPublicKeyHex != null) {
+      final nickByPub = peerNicknames.entries
+          .where((e) => e.key == message.senderPublicKeyHex)
+          .map((e) => e.value)
+          .firstOrNull;
+      if (nickByPub != null) return nickByPub;
+    }
+    // Fall back to short session UUID
     final short = message.senderUUID.length >= 8
         ? message.senderUUID.substring(0, 8)
         : message.senderUUID;
-    final nick = peerNicknames[message.senderUUID];
-    return nick != null ? '$nick | $short' : short;
+    // If we have a public key, use a shorter fingerprint
+    if (message.senderPublicKeyHex != null && message.senderPublicKeyHex!.length >= 8) {
+      return '~${message.senderPublicKeyHex!.substring(0, 8)}';
+    }
+    return short;
   }
 
   Widget _buildContent(BuildContext context, ThemeData theme, Color textColor,
@@ -116,6 +238,8 @@ class MessageBubble extends StatelessWidget {
       case MessageType.text:
         return _buildTextContent(
             theme, textColor, senderLabel, timeStr, isMe);
+      case MessageType.messageRead:
+        return const SizedBox.shrink();
     }
   }
 

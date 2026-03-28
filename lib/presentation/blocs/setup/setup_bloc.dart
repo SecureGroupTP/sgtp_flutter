@@ -42,7 +42,7 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       try {
         final parsed = parseOpenSshPrivateKey(savedKey.bytes);
         privKeyBytes = savedKey.bytes;
-        privKeyPath  = savedKey.path;
+        privKeyPath  = savedKey.name;
         myPubKey     = parsed.publicKey;
       } catch (_) {
         await _settings.clearPrivateKey();

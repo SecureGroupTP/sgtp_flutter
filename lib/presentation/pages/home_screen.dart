@@ -16,12 +16,14 @@ class HomeScreen extends StatefulWidget {
   final SgtpConfig initialConfig;
   final Map<String, String> nicknames;
   final String serverAddress;
+  final Uint8List? userAvatar;
 
   const HomeScreen({
     super.key,
     required this.initialConfig,
     required this.nicknames,
     required this.serverAddress,
+    this.userAvatar,
   });
 
   @override
@@ -34,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late Map<String, String> _nicknames;
   late String _serverAddress;
   late SgtpConfig _config;
+  Uint8List? _userAvatar;
 
   @override
   void initState() {
@@ -41,10 +44,12 @@ class _HomeScreenState extends State<HomeScreen> {
     _config        = widget.initialConfig;
     _nicknames     = widget.nicknames;
     _serverAddress = widget.serverAddress;
+    _userAvatar    = widget.userAvatar;
     _roomsBloc = RoomsBloc(
       baseConfig:    _config,
       nicknames:     _nicknames,
       serverAddress: _serverAddress,
+      userAvatar:    _userAvatar,
     );
   }
 
@@ -54,7 +59,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  /// Called from SettingsScreen when connection parameters change.
   void _onConfigChanged(SgtpConfig newConfig, Map<String, String> newNicknames, String newServer) {
     setState(() {
       _config        = newConfig;
@@ -66,7 +70,13 @@ class _HomeScreenState extends State<HomeScreen> {
       baseConfig:    newConfig,
       nicknames:     newNicknames,
       serverAddress: newServer,
+      userAvatar:    _userAvatar,
     );
+  }
+
+  void _onUserAvatarChanged(Uint8List? avatar) {
+    setState(() => _userAvatar = avatar);
+    _roomsBloc.setUserAvatar(avatar);
   }
 
   @override
@@ -79,9 +89,11 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             const RoomsPage(),
             SettingsScreen(
-              initialConfig:    _config,
-              initialNicknames: _nicknames,
-              onConfigChanged:  _onConfigChanged,
+              initialConfig:        _config,
+              initialNicknames:     _nicknames,
+              onConfigChanged:      _onConfigChanged,
+              onUserAvatarChanged:  _onUserAvatarChanged,
+              currentUserAvatar:    _userAvatar,
             ),
           ],
         ),
@@ -127,21 +139,19 @@ class _AppStartScreenState extends State<AppStartScreen> {
     final lastAddr  = await settings.getLastAddress();
 
     if (savedKey == null || lastAddr == null || lastAddr.isEmpty) {
-      // First run — show setup
       if (mounted) _goToSetup();
       return;
     }
 
-    // Try to restore saved config
     try {
       final parsed  = parseOpenSshPrivateKey(savedKey.bytes);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
 
-      final savedWl  = await settings.loadWhitelist();
-      final wlBytes  = savedWl?.bytesList ?? <Uint8List>[];
-      final wlPaths  = savedWl?.paths ?? <String>[];
-      final whitelist = wlBytes.map((b) => b.map((x) => x.toRadixString(16).padLeft(2, '0')).join()).toSet();
-      final nicknames = _buildNicknames(wlBytes, wlPaths);
+      final entries   = await settings.loadWhitelistEntries();
+      final whitelist = entries.map((e) => e.hexKey).toSet();
+      final nicknames = { for (final e in entries) e.hexKey: e.name };
+
+      final userAvatar = await settings.loadUserAvatar();
 
       final config = SgtpConfig(
         serverAddr:      lastAddr,
@@ -154,29 +164,20 @@ class _AppStartScreenState extends State<AppStartScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacement(MaterialPageRoute(
           builder: (_) => HomeScreen(
-            initialConfig: config, nicknames: nicknames, serverAddress: lastAddr,
+            initialConfig: config,
+            nicknames:     nicknames,
+            serverAddress: lastAddr,
+            userAvatar:    userAvatar,
           ),
         ));
       }
     } catch (_) {
-      // Saved key is invalid — back to setup
       if (mounted) _goToSetup();
     }
   }
 
   void _goToSetup() {
     Navigator.of(context).pushReplacementNamed('/setup');
-  }
-
-  Map<String, String> _buildNicknames(List<Uint8List> bytesList, List<String> paths) {
-    final result = <String, String>{};
-    for (var i = 0; i < bytesList.length; i++) {
-      final hex = bytesList[i].map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      var name = paths[i];
-      if (name.toLowerCase().endsWith('.pub')) name = name.substring(0, name.length - 4);
-      result[hex] = name;
-    }
-    return result;
   }
 
   @override
@@ -186,3 +187,5 @@ class _AppStartScreenState extends State<AppStartScreen> {
     );
   }
 }
+
+

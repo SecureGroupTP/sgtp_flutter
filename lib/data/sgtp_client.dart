@@ -142,6 +142,18 @@ class SgtpChatMetadataReceived extends SgtpEvent {
   });
 }
 
+/// A peer sent a read receipt for a specific message.
+class SgtpMessageReadReceived extends SgtpEvent {
+  final String readMessageId;
+  final String readerUUID;
+  final String? readerPublicKeyHex;
+  SgtpMessageReadReceived({
+    required this.readMessageId,
+    required this.readerUUID,
+    this.readerPublicKeyHex,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Client state
 // ---------------------------------------------------------------------------
@@ -178,6 +190,12 @@ class SgtpClient {
 
   final Map<String, _PendingFile> _pendingFiles = {};
 
+  /// Maps sessionUUID → ed25519PubHex for all ever-seen peers (survives leave).
+  final Map<String, String> _peerPublicKeys = {};
+
+  /// User's own avatar bytes (shown next to own messages and shared in messages).
+  Uint8List? _myUserAvatar;
+
   bool   _isMaster         = false;
   Timer? _ckRotationTimer;
   bool   _infoTimerStarted  = false;
@@ -209,6 +227,12 @@ class SgtpClient {
   String get myUUIDHex   => uuidBytesToHex(_myUUID);
   String get roomUUIDHex => uuidBytesToHex(_roomUUID);
   List<String> get peerUUIDs => _peers.keys.toList();
+
+  /// Returns sessionUUID → ed25519PubHex for all ever-seen peers.
+  Map<String, String> get peerPublicKeys => Map.unmodifiable(_peerPublicKeys);
+
+  /// Set the user's own avatar to attach to outgoing messages.
+  void setUserAvatar(Uint8List? avatar) => _myUserAvatar = avatar;
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -248,8 +272,14 @@ class SgtpClient {
     if (_state != _ClientState.ready || _chatKey == null) return;
     final msgUUID   = generateUUIDv7();
     final nonce     = _myNonce++;
-    final plaintext = Uint8List.fromList(
-        utf8.encode(json.encode({'v': 1, 'type': 'text', 'text': text})));
+    final myPubHex  = _hex(_config.myPublicKey);
+    final payload   = <String, dynamic>{
+      'v': 1, 'type': 'text', 'text': text,
+      'pub': myPubHex,
+      if (_myUserAvatar != null && _myUserAvatar!.isNotEmpty)
+        'avatar': base64.encode(_myUserAvatar!),
+    };
+    final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
     try {
       final cipher = await encrypt(plaintext, _chatKey!, nonce);
       await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
@@ -259,11 +289,29 @@ class SgtpClient {
       ));
       _eventController.add(SgtpMessageReceived(message: ChatMessage(
         id: uuidBytesToHex(msgUUID), senderUUID: uuidBytesToHex(_myUUID),
+        senderPublicKeyHex: myPubHex,
         content: text, receivedAt: DateTime.now(), isFromHistory: false, isFromMe: true,
+        senderAvatarBytes: _myUserAvatar,
       )));
     } catch (e) {
       _eventController.add(SgtpError(error: 'Failed to send message: $e'));
     }
+  }
+
+  /// Send a read receipt for a given message ID.
+  Future<void> sendMessageRead(String messageId) async {
+    if (_state != _ClientState.ready || _chatKey == null) return;
+    try {
+      final payload = <String, dynamic>{
+        'v': 1, 'type': 'message_read', 'msg_id': messageId,
+        'pub': _hex(_config.myPublicKey),
+      };
+      final msgUUID = generateUUIDv7();
+      final nonce   = _myNonce++;
+      final plain   = Uint8List.fromList(utf8.encode(json.encode(payload)));
+      final cipher  = await encrypt(plain, _chatKey!, nonce);
+      await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+    } catch (_) {}
   }
 
   /// Broadcast updated chat name/avatar to all peers via encrypted message.
@@ -484,6 +532,7 @@ class SgtpClient {
     await _sendPong(f.senderUUID);
     _scheduleInfo();
     if (!_eventController.isClosed) {
+      _peerPublicKeys[h] = edH;
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
   }
@@ -507,6 +556,7 @@ class SgtpClient {
     _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
     _pendingHandshakes.remove(h);
     if (!_eventController.isClosed && prev?.handshakeComplete != true) {
+      _peerPublicKeys[h] = edH;
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
     if (_state == _ClientState.ready && _isMaster) {
@@ -682,15 +732,35 @@ class SgtpClient {
           receivedAt: recvAt, isFromHistory: history, isFromMe: false)));
         return;
       }
+      // Extract optional sender pub key and avatar embedded in message
+      final senderPub    = p['pub'] as String?;
+      final avatarB64    = p['avatar'] as String?;
+      final senderAvatar = avatarB64 != null ? base64.decode(avatarB64) : null;
+      if (senderPub != null && !history) _peerPublicKeys[sH] = senderPub;
+
       switch (p['type'] as String?) {
         case 'text':
           _eventController.add(SgtpMessageReceived(message: ChatMessage(
-            id: msgId, senderUUID: sH, content: (p['text'] as String?) ?? '',
-            receivedAt: recvAt, isFromHistory: history, isFromMe: false)));
-        case 'image': await _mediaPayload(msgId, sH, p, 'image', history, recvAt);
-        case 'gif':   await _mediaPayload(msgId, sH, p, 'gif',   history, recvAt);
-        case 'video': await _mediaPayload(msgId, sH, p, 'video', history, recvAt);
-        case 'voice': await _mediaPayload(msgId, sH, p, 'voice', history, recvAt);
+            id: msgId, senderUUID: sH,
+            senderPublicKeyHex: senderPub ?? _peerPublicKeys[sH],
+            content: (p['text'] as String?) ?? '',
+            receivedAt: recvAt, isFromHistory: history, isFromMe: false,
+            senderAvatarBytes: senderAvatar)));
+        case 'image': await _mediaPayload(msgId, sH, p, 'image', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'gif':   await _mediaPayload(msgId, sH, p, 'gif',   history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'video': await _mediaPayload(msgId, sH, p, 'video', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'voice': await _mediaPayload(msgId, sH, p, 'voice', history, recvAt, senderPub: senderPub, senderAvatar: senderAvatar);
+        case 'message_read':
+          if (!history) {
+            final readMsgId = p['msg_id'] as String?;
+            if (readMsgId != null) {
+              _eventController.add(SgtpMessageReadReceived(
+                readMessageId: readMsgId,
+                readerUUID: sH,
+                readerPublicKeyHex: senderPub ?? _peerPublicKeys[sH],
+              ));
+            }
+          }
         case 'chat_meta':
           // Another participant changed chat name/avatar
           if (!history) {
@@ -709,8 +779,9 @@ class SgtpClient {
 
   Future<void> _mediaPayload(
     String id, String sender, Map<String, dynamic> p,
-    String type, bool history, DateTime recvAt,
-  ) async {
+    String type, bool history, DateTime recvAt, {
+    String? senderPub, Uint8List? senderAvatar,
+  }) async {
     final fileId     = p['file_id'] as String? ?? id;
     final name       = p['name']    as String? ?? 'file';
     final mime       = p['mime']    as String? ?? 'application/octet-stream';
@@ -718,7 +789,8 @@ class SgtpClient {
     final chunk      = base64.decode(p['data'] as String? ?? '');
     if (!p.containsKey('chunk')) {
       _eventController.add(SgtpMessageReceived(
-          message: _media(id, sender, name, mime, type, chunk, history, recvAt)));
+          message: _media(id, sender, name, mime, type, chunk, history, recvAt,
+              senderPub: senderPub, senderAvatar: senderAvatar)));
       return;
     }
     final ci = (p['chunk'] as num).toInt();
@@ -731,25 +803,35 @@ class SgtpClient {
     if (pf.isComplete) {
       _pendingFiles.remove(fileId);
       _eventController.add(SgtpMessageReceived(
-          message: _media(fileId, sender, name, mime, type, pf.assemble(), history, recvAt)));
+          message: _media(fileId, sender, name, mime, type, pf.assemble(), history, recvAt,
+              senderPub: senderPub, senderAvatar: senderAvatar)));
     }
   }
 
   ChatMessage _media(String id, String sender, String name, String mime,
-      String type, Uint8List bytes, bool history, DateTime recvAt) =>
+      String type, Uint8List bytes, bool history, DateTime recvAt, {
+      String? senderPub, Uint8List? senderAvatar}) =>
     switch (type) {
-      'gif'   => ChatMessage(id: id, senderUUID: sender, content: name,
-          imageBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.gif, receivedAt: recvAt, isFromHistory: history, isFromMe: false),
-      'video' => ChatMessage(id: id, senderUUID: sender, content: name,
-          videoBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.video, receivedAt: recvAt, isFromHistory: history, isFromMe: false),
-      'voice' => ChatMessage(id: id, senderUUID: sender, content: name,
-          audioBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.voice, receivedAt: recvAt, isFromHistory: history, isFromMe: false),
-      _       => ChatMessage(id: id, senderUUID: sender, content: name,
-          imageBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.image, receivedAt: recvAt, isFromHistory: history, isFromMe: false),
+      'gif'   => ChatMessage(id: id, senderUUID: sender,
+          senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
+          content: name, imageBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.gif, receivedAt: recvAt, isFromHistory: history, isFromMe: false,
+          senderAvatarBytes: senderAvatar),
+      'video' => ChatMessage(id: id, senderUUID: sender,
+          senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
+          content: name, videoBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.video, receivedAt: recvAt, isFromHistory: history, isFromMe: false,
+          senderAvatarBytes: senderAvatar),
+      'voice' => ChatMessage(id: id, senderUUID: sender,
+          senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
+          content: name, audioBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.voice, receivedAt: recvAt, isFromHistory: history, isFromMe: false,
+          senderAvatarBytes: senderAvatar),
+      _       => ChatMessage(id: id, senderUUID: sender,
+          senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
+          content: name, imageBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.image, receivedAt: recvAt, isFromHistory: history, isFromMe: false,
+          senderAvatarBytes: senderAvatar),
     };
 
   // ---------------------------------------------------------------------------
@@ -939,6 +1021,7 @@ class SgtpClient {
     _readyEmitted = false; _historyRequested = false; _isMaster = false;
     _peers.clear(); _pendingHandshakes.clear();
     _pendingFiles.clear(); _hsiReplies.clear();
+    _peerPublicKeys.clear();
     _chatKey = null; _chatEpoch = 0; _myNonce = 0;
     _receiveBuffer.clear();
     try { await _socket?.close(); } catch (_) {}

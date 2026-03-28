@@ -26,8 +26,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatSendImage>(_onSendImage);
     on<ChatSendVideo>(_onSendVideo);
     on<ChatSendVoice>(_onSendVoice);
+    on<ChatSendMessageRead>(_onSendMessageRead);
     on<ChatDisconnect>(_onDisconnect);
     on<ChatUpdateMetadata>(_onUpdateMetadata);
+    on<ChatSetUserAvatar>(_onSetUserAvatar);
     on<ChatInternalSgtpEvent>(_onSgtpEvent);
   }
 
@@ -73,6 +75,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     );
 
     final client = SgtpClient(resolvedConfig);
+    // Pass user avatar to the client so it attaches it to outgoing messages
+    if (state.userAvatarBytes != null) {
+      client.setUserAvatar(state.userAvatarBytes);
+    }
     _client = client;
 
     final pubHex = event.config.myPublicKey
@@ -84,6 +90,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       messages:        [],
       peerUUIDs:       [],
       peerNicknames:   {},
+      peerPublicKeys:  {},
+      peerAvatars:     {},
+      readReceipts:    {},
       isMaster:        false,
       myPublicKeyHex:  pubHex,
       nicknames:       event.nicknames,
@@ -120,6 +129,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _client!.sendVoice(event.bytes, event.mime);
   }
 
+  Future<void> _onSendMessageRead(ChatSendMessageRead event, Emitter<ChatState> emit) async {
+    if (_client == null || state.status != ChatStatus.ready) return;
+    await _client!.sendMessageRead(event.messageId);
+  }
+
   Future<void> _onDisconnect(ChatDisconnect event, Emitter<ChatState> emit) async {
     await _client?.disconnect();
     await _eventSub?.cancel();
@@ -135,6 +149,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ? state.roomUUID
         : (_client?.roomUUIDHex ?? '');
     await _saveMetadata(roomUUID, event.name, event.avatarBytes);
+  }
+
+  Future<void> _onSetUserAvatar(ChatSetUserAvatar event, Emitter<ChatState> emit) async {
+    emit(state.copyWith(userAvatarBytes: event.avatarBytes));
+    _client?.setUserAvatar(event.avatarBytes);
   }
 
   Future<void> _saveMetadata(String roomUUID, String name, Uint8List? avatar) async {
@@ -185,14 +204,30 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           roomUUID: roomUUIDHex, myUUID: _client?.myUUIDHex ?? '',
           peerUUIDs: _client?.peerUUIDs ?? [],
         ));
-        // For newly generated rooms (UUID was 0 at connect time),
-        // save initial metadata now that we have the real UUID.
-        // For known rooms we already pre-loaded — just update timestamp.
         _saveMetadata(roomUUIDHex, state.chatName, state.chatAvatarBytes);
 
       case SgtpMessageReceived(:final message):
+        // Track peer avatar from incoming message
+        Map<String, Uint8List> updatedAvatars = Map.from(state.peerAvatars);
+        if (!message.isFromMe && message.senderAvatarBytes != null) {
+          updatedAvatars[message.senderUUID] = message.senderAvatarBytes!;
+        }
+        // Track peer public key from message
+        Map<String, String> updatedPubKeys = Map.from(state.peerPublicKeys);
+        if (!message.isFromMe && message.senderPublicKeyHex != null) {
+          updatedPubKeys[message.senderUUID] = message.senderPublicKeyHex!;
+        }
+        // Also pull from client's map (from handshakes)
+        final clientPubKeys = _client?.peerPublicKeys ?? {};
+        for (final e in clientPubKeys.entries) {
+          updatedPubKeys.putIfAbsent(e.key, () => e.value);
+        }
         final updated = List<ChatMessage>.from(state.messages)..add(message);
-        emit(state.copyWith(messages: updated));
+        emit(state.copyWith(
+          messages: updated,
+          peerAvatars: updatedAvatars,
+          peerPublicKeys: updatedPubKeys,
+        ));
 
       case SgtpPeerJoined(:final peerUUID, :final ed25519PubHex):
         final nick = state.nicknames[ed25519PubHex];
@@ -203,15 +238,19 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
         final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
         if (nick != null) updatedHistory[peerUUID] = nick;
+        final updatedPubKeys = Map<String, String>.from(state.peerPublicKeys);
+        updatedPubKeys[peerUUID] = ed25519PubHex;
         if (!state.peerUUIDs.contains(peerUUID)) {
           emit(state.copyWith(
             messages: updatedMessages, peerUUIDs: [...state.peerUUIDs, peerUUID],
             peerNicknames: updatedNick, peerNicknamesHistory: updatedHistory,
+            peerPublicKeys: updatedPubKeys,
           ));
         } else {
           emit(state.copyWith(
             messages: updatedMessages,
             peerNicknames: updatedNick, peerNicknamesHistory: updatedHistory,
+            peerPublicKeys: updatedPubKeys,
           ));
         }
 
@@ -242,6 +281,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             ? state.roomUUID
             : (_client?.roomUUIDHex ?? '');
         _saveMetadata(roomUUID, chatName, avatarBytes);
+
+      case SgtpMessageReadReceived(:final readMessageId, :final readerUUID):
+        final current = Map<String, Set<String>>.from(state.readReceipts);
+        final readers = Set<String>.from(current[readMessageId] ?? {});
+        readers.add(readerUUID);
+        current[readMessageId] = readers;
+        // Also update the message in the list so readBy set is current
+        final updatedMsgs = state.messages.map((m) {
+          if (m.id == readMessageId) {
+            return m.copyWith(readBy: Set<String>.from(m.readBy)..add(readerUUID));
+          }
+          return m;
+        }).toList();
+        emit(state.copyWith(readReceipts: current, messages: updatedMsgs));
     }
   }
 
