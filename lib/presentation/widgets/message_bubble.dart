@@ -26,12 +26,28 @@ class MessageBubble extends StatelessWidget {
     final theme   = Theme.of(context);
     final cs      = theme.colorScheme;
     final isMe    = message.isFromMe;
-    final bgColor = isMe ? cs.primaryContainer : cs.surfaceContainerHighest;
-    final textColor = isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant;
     final timeStr = _formatTime(message.receivedAt);
-
-    // Nickname: "nick | uuid[0:8]" or just "uuid[0:8]" if no nick found
     final senderLabel = _buildSenderLabel();
+
+    // Voice messages have no bubble frame
+    if (message.type == MessageType.voice) {
+      return Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          margin: EdgeInsets.only(
+            left: isMe ? 48 : 8,
+            right: isMe ? 8 : 48,
+            top: 4,
+            bottom: 4,
+          ),
+          child: _buildVoiceContent(
+              context, theme, cs.onSurfaceVariant, senderLabel, timeStr, isMe),
+        ),
+      );
+    }
+
+    final bgColor   = isMe ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final textColor = isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant;
 
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -232,23 +248,19 @@ class MessageBubble extends StatelessWidget {
 
   Widget _buildVoiceContent(BuildContext context, ThemeData theme,
       Color textColor, String senderLabel, String timeStr, bool isMe) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Column(
-        crossAxisAlignment:
-            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!isMe) _senderLabel(theme, senderLabel),
-          const SizedBox(height: 4),
-          _VoicePlayer(
-            audioBytes: message.audioBytes!,
-            mediaMime: message.mediaMime ?? 'audio/m4a',
-          ),
-          const SizedBox(height: 4),
-          _timeLabel(theme, textColor, timeStr),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
+        _VoicePlayer(
+          audioBytes: message.audioBytes!,
+          mediaMime: message.mediaMime ?? 'audio/m4a',
+        ),
+        const SizedBox(height: 2),
+        _timeLabel(theme, textColor, timeStr),
+      ],
     );
   }
 
@@ -504,19 +516,23 @@ class _VoicePlayer extends StatefulWidget {
 }
 
 class _VoicePlayerState extends State<_VoicePlayer> {
-  final _player    = AudioPlayer();
-  bool _playing    = false;
-  bool _loading    = false;
-  /// true once we've fetched metadata (duration) even without playing
-  bool _metaReady  = false;
+  final _player   = AudioPlayer();
+  bool _playing   = false;
+  bool _loading   = false;
+  bool _metaReady = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   String? _tmpPath;
+  late final List<double> _waveform;
+
+  static const _barCount   = 40;
+  static const _waveWidth  = 160.0;
+  static const _waveHeight = 36.0;
 
   @override
   void initState() {
     super.initState();
-
+    _waveform = _generateWaveform(widget.audioBytes, _barCount);
     _player.onPlayerStateChanged.listen((s) {
       if (mounted) setState(() => _playing = s.name == 'playing');
     });
@@ -529,8 +545,6 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     _player.onPlayerComplete.listen((_) {
       if (mounted) setState(() => _position = Duration.zero);
     });
-
-    // Prefetch duration so the timeline shows before first play
     _prefetchDuration();
   }
 
@@ -541,66 +555,74 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     super.dispose();
   }
 
-  /// Write bytes to a tmp file and load metadata without playing.
+  List<double> _generateWaveform(Uint8List bytes, int count) {
+    if (bytes.isEmpty) return List.filled(count, 0.3);
+    final step = bytes.length / count;
+    // Compute raw average deviation per bar
+    final raw = List.generate(count, (i) {
+      final start = (i * step).round();
+      final end   = ((i + 1) * step).round().clamp(0, bytes.length);
+      if (start >= bytes.length) return 0.0;
+      double sum = 0;
+      for (int j = start; j < end; j++) {
+        sum += (bytes[j] ^ 0x80).toDouble();
+      }
+      return sum / (end - start);
+    });
+    // Normalize to [0.08, 1.0] using actual min/max for full dynamic range
+    final minVal = raw.reduce((a, b) => a < b ? a : b);
+    final maxVal = raw.reduce((a, b) => a > b ? a : b);
+    final range  = maxVal - minVal;
+    if (range < 1.0) return List.filled(count, 0.4);
+    return raw.map((v) => (v - minVal) / range * 0.92 + 0.08).toList();
+  }
+
   Future<void> _prefetchDuration() async {
     try {
       await _prepareTmp();
-      // setSourceDeviceFile triggers onDurationChanged without starting playback
       await _player.setSourceDeviceFile(_tmpPath!);
-    } catch (_) {
-      // Non-fatal: user can still hit Play and it will work
-    }
+    } catch (_) {}
   }
 
   Future<void> _prepareTmp() async {
     if (_tmpPath != null) return;
     final tmpDir = await getTemporaryDirectory();
     final ext    = _mimeToExt(widget.mediaMime);
-    final file   = File(
-        '${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
-    if (!file.existsSync()) {
-      await file.writeAsBytes(widget.audioBytes);
-    }
+    final file   = File('${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
+    if (!file.existsSync()) await file.writeAsBytes(widget.audioBytes);
     _tmpPath = file.path;
   }
 
   String _mimeToExt(String mime) => switch (mime) {
-        'audio/m4a'  => 'm4a',
-        'audio/aac'  => 'aac',
-        'audio/opus' => 'opus',
-        'audio/mpeg' => 'mp3',
-        _            => 'audio',
-      };
+    'audio/m4a'  => 'm4a',
+    'audio/aac'  => 'aac',
+    'audio/opus' => 'opus',
+    'audio/mpeg' => 'mp3',
+    _            => 'audio',
+  };
 
   Future<void> _togglePlay() async {
     if (_loading) return;
-
-    if (_playing) {
-      await _player.pause();
-      return;
-    }
-
+    if (_playing) { await _player.pause(); return; }
     setState(() => _loading = true);
     try {
       await _prepareTmp();
       await _player.play(DeviceFileSource(_tmpPath!));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Playback error: $e'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-        ));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Playback error: $e'),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+      ));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _seek(double value) async {
-    final pos =
-        Duration(milliseconds: (value * _duration.inMilliseconds).round());
-    await _player.seek(pos);
+  void _seekFromTap(double tapX) {
+    if (_duration.inMilliseconds == 0) return;
+    final ratio = (tapX / _waveWidth).clamp(0.0, 1.0);
+    _player.seek(Duration(milliseconds: (ratio * _duration.inMilliseconds).round()));
   }
 
   @override
@@ -610,81 +632,65 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     final progress = _duration.inMilliseconds == 0
         ? 0.0
         : (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
+    final posLabel = _fmt(_position);
+    final durLabel = _metaReady ? _fmt(_duration) : '--:--';
 
-    // Show "--:--" until metadata is loaded (instead of "00:00")
-    final durationLabel = _metaReady ? _fmt(_duration) : '--:--';
-
-    return Container(
-      width: 240,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: _togglePlay,
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration:
-                  BoxDecoration(color: cs.primary, shape: BoxShape.circle),
-              child: _loading
-                  ? Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: cs.onPrimary),
-                    )
-                  : Icon(
-                      _playing ? Icons.pause : Icons.play_arrow,
-                      color: cs.onPrimary,
-                    ),
-            ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        GestureDetector(
+          onTap: _togglePlay,
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(color: cs.primary, shape: BoxShape.circle),
+            child: _loading
+                ? Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                  )
+                : Icon(_playing ? Icons.pause : Icons.play_arrow, color: cs.onPrimary),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 6),
-                    overlayShape:
-                        const RoundSliderOverlayShape(overlayRadius: 12),
-                  ),
-                  child: Slider(
-                    value: progress,
-                    onChanged:
-                        _duration.inMilliseconds > 0 ? _seek : null,
+        ),
+        const SizedBox(width: 10),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GestureDetector(
+              onTapDown: (d) => _seekFromTap(d.localPosition.dx),
+              child: SizedBox(
+                width: _waveWidth,
+                height: _waveHeight,
+                child: CustomPaint(
+                  painter: _WaveformPainter(
+                    bars: _waveform,
+                    progress: progress,
                     activeColor: cs.primary,
-                    inactiveColor: cs.outline.withAlpha(80),
+                    inactiveColor: cs.outlineVariant,
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(_fmt(_position),
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: cs.onSurfaceVariant)),
-                      Text(durationLabel,
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: cs.onSurfaceVariant)),
-                    ],
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(width: 4),
-          Icon(Icons.mic, size: 14, color: cs.primary),
-        ],
-      ),
+            const SizedBox(height: 2),
+            SizedBox(
+              width: _waveWidth,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(posLabel,
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: cs.onSurfaceVariant)),
+                  Text(durLabel,
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: cs.onSurfaceVariant)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -693,4 +699,52 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
+}
+
+// ─── Waveform painter ─────────────────────────────────────────────────────────
+
+class _WaveformPainter extends CustomPainter {
+  final List<double> bars;
+  final double progress;
+  final Color activeColor;
+  final Color inactiveColor;
+
+  const _WaveformPainter({
+    required this.bars,
+    required this.progress,
+    required this.activeColor,
+    required this.inactiveColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (bars.isEmpty) return;
+    final totalBarW  = size.width / bars.length;
+    final barW       = totalBarW * 0.55;
+    final progressX  = size.width * progress;
+
+    final activePaint = Paint()
+      ..color     = activeColor
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = barW;
+    final inactivePaint = Paint()
+      ..color     = inactiveColor
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = barW;
+
+    for (int i = 0; i < bars.length; i++) {
+      final x      = i * totalBarW + totalBarW / 2;
+      final barH   = (bars[i] * size.height).clamp(2.0, size.height);
+      final top    = (size.height - barH) / 2;
+      final bottom = top + barH;
+      canvas.drawLine(
+        Offset(x, top), Offset(x, bottom),
+        x < progressX ? activePaint : inactivePaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_WaveformPainter old) =>
+      old.progress != progress || old.bars != bars || old.activeColor != activeColor;
 }
