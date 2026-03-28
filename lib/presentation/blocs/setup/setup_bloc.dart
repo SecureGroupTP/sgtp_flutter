@@ -24,23 +24,68 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     on<SetupPickWhitelistFiles>(_onPickWhitelistFiles);
     on<SetupRoomUUIDChanged>(_onRoomUUIDChanged);
     on<SetupConnect>(_onConnect);
+    on<SetupClearConnection>(_onClearConnection);
   }
+
+  // ── Load saved state on startup ──────────────────────────────────────────
 
   Future<void> _onLoadData(SetupLoadData event, Emitter<SetupState> emit) async {
     final addresses = await _settings.getSavedAddresses();
-    final last = await _settings.getLastAddress();
+    final last      = await _settings.getLastAddress();
+
+    // Restore private key
+    final savedKey = await _settings.loadPrivateKey();
+    Uint8List? privKeyBytes;
+    String?    privKeyPath;
+    Uint8List? myPubKey;
+
+    if (savedKey != null) {
+      try {
+        final parsed = parseOpenSshPrivateKey(savedKey.bytes);
+        privKeyBytes = savedKey.bytes;
+        privKeyPath  = savedKey.path;
+        myPubKey     = parsed.publicKey;
+      } catch (_) {
+        await _settings.clearPrivateKey();
+      }
+    }
+
+    // Restore whitelist
+    final savedWl = await _settings.loadWhitelist();
+    List<Uint8List> wlBytes = [];
+    List<String>    wlPaths = [];
+    Map<String, String> nicknames = {};
+
+    if (savedWl != null) {
+      wlBytes    = savedWl.bytesList;
+      wlPaths    = savedWl.paths;
+      nicknames  = _buildNicknames(wlBytes, wlPaths);
+    }
+
     emit(state.copyWith(
       savedAddresses: addresses,
-      serverAddress: last ?? '',
+      serverAddress:  last ?? '',
+      privateKeyBytes: privKeyBytes,
+      privateKeyPath:  privKeyPath,
+      myPublicKey:     myPubKey,
+      whitelistBytes:  wlBytes,
+      whitelistPaths:  wlPaths,
+      nicknames:       nicknames,
       clearError: true,
     ));
   }
 
-  void _onServerAddressChanged(SetupServerAddressChanged event, Emitter<SetupState> emit) {
+  // ── Server address ────────────────────────────────────────────────────────
+
+  void _onServerAddressChanged(
+      SetupServerAddressChanged event, Emitter<SetupState> emit) {
     emit(state.copyWith(serverAddress: event.address, clearError: true));
   }
 
-  Future<void> _onPickPrivateKey(SetupPickPrivateKey event, Emitter<SetupState> emit) async {
+  // ── Private key ───────────────────────────────────────────────────────────
+
+  Future<void> _onPickPrivateKey(
+      SetupPickPrivateKey event, Emitter<SetupState> emit) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
@@ -56,10 +101,12 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       }
 
       final parsed = parseOpenSshPrivateKey(bytes);
+      await _settings.savePrivateKey(bytes, file.name);
+
       emit(state.copyWith(
-        privateKeyPath: file.name,
+        privateKeyPath:  file.name,
         privateKeyBytes: bytes,
-        myPublicKey: parsed.publicKey,
+        myPublicKey:     parsed.publicKey,
         clearError: true,
       ));
     } catch (e) {
@@ -67,23 +114,22 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     }
   }
 
-  /// Pick a FOLDER containing whitelist .pub files.
+  // ── Whitelist: folder ─────────────────────────────────────────────────────
+
   Future<void> _onPickWhitelistFolder(
-    SetupPickWhitelistFolder event,
-    Emitter<SetupState> emit,
-  ) async {
+      SetupPickWhitelistFolder event, Emitter<SetupState> emit) async {
     try {
       final dirPath = await FilePicker.platform.getDirectoryPath();
       if (dirPath == null) return;
 
-      final dir = Directory(dirPath);
-      final paths = <String>[];
+      final dir      = Directory(dirPath);
+      final paths    = <String>[];
       final bytesList = <Uint8List>[];
 
       await for (final entity in dir.list(recursive: false)) {
         if (entity is File) {
           try {
-            final bytes = await entity.readAsBytes();
+            final bytes  = await entity.readAsBytes();
             final pubKey = tryParsePublicKeyFile(bytes);
             if (pubKey != null) {
               paths.add(entity.path.split(Platform.pathSeparator).last);
@@ -95,14 +141,18 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
 
       if (bytesList.isEmpty) {
         emit(state.copyWith(
-          error: 'No valid ed25519 public keys found in folder "$dirPath"',
+          error: 'No valid ed25519 public keys found in "$dirPath"',
         ));
         return;
       }
 
+      await _settings.saveWhitelist(bytesList, paths);
+      final nicknames = _buildNicknames(bytesList, paths);
+
       emit(state.copyWith(
-        whitelistPaths: paths,
-        whitelistBytes: bytesList,
+        whitelistPaths:  paths,
+        whitelistBytes:  bytesList,
+        nicknames:       nicknames,
         clearError: true,
       ));
     } catch (e) {
@@ -110,11 +160,10 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     }
   }
 
-  /// Pick individual whitelist files.
+  // ── Whitelist: individual files ───────────────────────────────────────────
+
   Future<void> _onPickWhitelistFiles(
-    SetupPickWhitelistFiles event,
-    Emitter<SetupState> emit,
-  ) async {
+      SetupPickWhitelistFiles event, Emitter<SetupState> emit) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
@@ -123,7 +172,7 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       );
       if (result == null || result.files.isEmpty) return;
 
-      final paths = <String>[];
+      final paths    = <String>[];
       final bytesList = <Uint8List>[];
 
       for (final file in result.files) {
@@ -143,9 +192,13 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
         return;
       }
 
+      await _settings.saveWhitelist(bytesList, paths);
+      final nicknames = _buildNicknames(bytesList, paths);
+
       emit(state.copyWith(
-        whitelistPaths: paths,
-        whitelistBytes: bytesList,
+        whitelistPaths:  paths,
+        whitelistBytes:  bytesList,
+        nicknames:       nicknames,
         clearError: true,
       ));
     } catch (e) {
@@ -153,9 +206,14 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     }
   }
 
-  void _onRoomUUIDChanged(SetupRoomUUIDChanged event, Emitter<SetupState> emit) {
+  // ── Room UUID ─────────────────────────────────────────────────────────────
+
+  void _onRoomUUIDChanged(
+      SetupRoomUUIDChanged event, Emitter<SetupState> emit) {
     emit(state.copyWith(roomUUID: event.uuid, clearError: true));
   }
+
+  // ── Connect ───────────────────────────────────────────────────────────────
 
   Future<void> _onConnect(SetupConnect event, Emitter<SetupState> emit) async {
     if (!state.isReadyToConnect) {
@@ -179,40 +237,59 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       if (uuidStr.isEmpty) {
         roomUUID = Uint8List(16); // zeros = create new random room
       } else {
-        try {
-          if (uuidStr.length != 32) {
-            throw const FormatException('UUID must be 32 hex chars (without dashes)');
-          }
-          roomUUID = _hexToBytes(uuidStr);
-        } catch (e) {
-          emit(state.copyWith(
-            isLoading: false,
-            error: 'Invalid room UUID format: $e',
-          ));
-          return;
+        if (uuidStr.length != 32) {
+          throw const FormatException('UUID must be 32 hex chars (without dashes)');
         }
+        roomUUID = _hexToBytes(uuidStr);
       }
 
       final config = SgtpConfig(
-        serverAddr: state.serverAddress.trim(),
-        roomUUID: roomUUID,
+        serverAddr:      state.serverAddress.trim(),
+        roomUUID:        roomUUID,
         identityKeyPair: keyPair,
-        myPublicKey: parsed.publicKey,
-        whitelist: whitelist,
+        myPublicKey:     parsed.publicKey,
+        whitelist:       whitelist,
       );
 
       await _settings.saveAddress(state.serverAddress.trim());
       final updated = await _settings.getSavedAddresses();
 
       emit(state.copyWith(
-        isLoading: false,
-        savedAddresses: updated,
+        isLoading:       false,
+        savedAddresses:  updated,
         connectionConfig: config,
         clearError: true,
       ));
     } catch (e) {
       emit(state.copyWith(isLoading: false, error: 'Setup error: $e'));
     }
+  }
+
+  // ── Clear connection config after navigation ──────────────────────────────
+
+  void _onClearConnection(
+      SetupClearConnection event, Emitter<SetupState> emit) {
+    emit(state.copyWith(clearConnectionConfig: true));
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /// Derives nicknames from whitelist file names.
+  /// "friend.pub" → "friend", "alice" → "alice".
+  Map<String, String> _buildNicknames(
+      List<Uint8List> bytesList, List<String> paths) {
+    final result = <String, String>{};
+    for (var i = 0; i < bytesList.length; i++) {
+      final hex = bytesList[i]
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
+      var name = paths[i];
+      if (name.toLowerCase().endsWith('.pub')) {
+        name = name.substring(0, name.length - 4);
+      }
+      result[hex] = name;
+    }
+    return result;
   }
 
   Uint8List _hexToBytes(String hex) {

@@ -19,29 +19,47 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> {
-  final _messageCtrl = TextEditingController();
-  final _scrollCtrl = ScrollController();
-  final _recorder = AudioRecorder();
-  bool _infoShown = false;
-
-  bool _isRecording = false;
+class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
+  final _messageCtrl  = TextEditingController();
+  final _scrollCtrl   = ScrollController();
+  final _recorder     = AudioRecorder();
+  bool _infoShown     = false;
+  bool _isRecording   = false;
   String? _recordingPath;
   List<InputDevice> _inputDevices = [];
   InputDevice? _selectedDevice;
 
+  // Keep a local reference for the lifecycle observer
+  late ChatBloc _chatBloc;
+
+  // Allowed video extensions — guards against PDF/doc being sent as video
+  static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _chatBloc = context.read<ChatBloc>();
+    });
     _loadInputDevices();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
     _recorder.dispose();
     super.dispose();
+  }
+
+  /// Graceful shutdown when OS is about to kill the app.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState appState) {
+    if (appState == AppLifecycleState.detached) {
+      _chatBloc.add(const ChatDisconnect());
+    }
   }
 
   Future<void> _loadInputDevices() async {
@@ -86,12 +104,12 @@ class _ChatPageState extends State<ChatPage> {
     if (file.bytes == null) return;
 
     final name = file.name;
-    final ext = name.split('.').last.toLowerCase();
+    final ext  = name.split('.').last.toLowerCase();
     final mime = switch (ext) {
-      'png' => 'image/png',
-      'gif' => 'image/gif',
+      'png'  => 'image/png',
+      'gif'  => 'image/gif',
       'webp' => 'image/webp',
-      _ => 'image/jpeg',
+      _      => 'image/jpeg',
     };
 
     if (!context.mounted) return;
@@ -111,13 +129,23 @@ class _ChatPageState extends State<ChatPage> {
     if (file.bytes == null) return;
 
     final name = file.name;
-    final ext = name.split('.').last.toLowerCase();
+    final ext  = name.split('.').last.toLowerCase();
+
+    // Guard: reject non-video files (e.g. PDF that slipped through on Android)
+    if (!_videoExtensions.contains(ext)) {
+      if (context.mounted) {
+        _showFloatingSnackbar(context, 'Unsupported format: .$ext (expected video)');
+      }
+      return;
+    }
+
     final mime = switch (ext) {
-      'mp4' => 'video/mp4',
-      'mov' => 'video/quicktime',
-      'avi' => 'video/x-msvideo',
+      'mp4'  => 'video/mp4',
+      'mov'  => 'video/quicktime',
+      'avi'  => 'video/x-msvideo',
       'webm' => 'video/webm',
-      _ => 'video/mp4',
+      'mkv'  => 'video/x-matroska',
+      _      => 'video/mp4',
     };
 
     if (!context.mounted) return;
@@ -138,9 +166,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _startRecording(BuildContext context) async {
     final hasPermission = await _recorder.hasPermission();
     if (!hasPermission) {
-      if (context.mounted) {
-        _showFloatingSnackbar(context, 'Нет доступа к микрофону');
-      }
+      if (context.mounted) _showFloatingSnackbar(context, 'No microphone permission');
       return;
     }
 
@@ -161,9 +187,7 @@ class _ChatPageState extends State<ChatPage> {
 
       setState(() => _isRecording = true);
     } catch (e) {
-      if (context.mounted) {
-        _showFloatingSnackbar(context, 'Ошибка записи: $e');
-      }
+      if (context.mounted) _showFloatingSnackbar(context, 'Record error: $e');
     }
   }
 
@@ -182,14 +206,11 @@ class _ChatPageState extends State<ChatPage> {
         _scrollToBottom();
       }
 
-      // Удаляем временный файл
       await file.delete().catchError((_) {});
       _recordingPath = null;
     } catch (e) {
       setState(() => _isRecording = false);
-      if (context.mounted) {
-        _showFloatingSnackbar(context, 'Ошибка: $e');
-      }
+      if (context.mounted) _showFloatingSnackbar(context, 'Error: $e');
     }
   }
 
@@ -204,12 +225,10 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _showMicPicker(BuildContext context) async {
-    // Обновляем список перед показом
     await _loadInputDevices();
-
     if (!context.mounted) return;
     if (_inputDevices.isEmpty) {
-      _showFloatingSnackbar(context, 'Микрофоны не найдены');
+      _showFloatingSnackbar(context, 'No microphones found');
       return;
     }
 
@@ -226,7 +245,7 @@ class _ChatPageState extends State<ChatPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Выбор микрофона',
+                Text('Select microphone',
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 ..._inputDevices.map((device) => RadioListTile<InputDevice>(
@@ -248,6 +267,8 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<ChatBloc, ChatState>(
@@ -259,6 +280,7 @@ class _ChatPageState extends State<ChatPage> {
           _showRoomInfo(context, state);
         }
 
+        // When disconnected, pop back to SetupPage
         if (state.status == ChatStatus.disconnected) {
           Navigator.of(context).maybePop();
         }
@@ -268,7 +290,6 @@ class _ChatPageState extends State<ChatPage> {
           canPop: false,
           onPopInvokedWithResult: (didPop, _) {
             if (!didPop) {
-              // Остановить запись при выходе
               if (_isRecording) _recorder.stop();
               context.read<ChatBloc>().add(const ChatDisconnect());
             }
@@ -289,7 +310,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context, ChatState state) {
-    final theme = Theme.of(context);
+    final theme       = Theme.of(context);
     final roomDisplay = state.roomUUID.isNotEmpty ? state.roomUUID : '…';
 
     return AppBar(
@@ -301,7 +322,7 @@ class _ChatPageState extends State<ChatPage> {
             GestureDetector(
               onTap: () {
                 Clipboard.setData(ClipboardData(text: state.roomUUID));
-                _showFloatingSnackbar(context, 'Room UUID скопирован');
+                _showFloatingSnackbar(context, 'Room UUID copied');
               },
               child: Text(
                 roomDisplay,
@@ -329,10 +350,40 @@ class _ChatPageState extends State<ChatPage> {
           onPressed: () => _showRoomInfo(context, state),
           tooltip: 'Room info',
         ),
-        IconButton(
-          icon: const Icon(Icons.logout),
-          onPressed: () => context.read<ChatBloc>().add(const ChatDisconnect()),
-          tooltip: 'Disconnect',
+        // ── Chat menu ─────────────────────────────────────────────────────
+        PopupMenuButton<_ChatMenuAction>(
+          icon: const Icon(Icons.more_vert),
+          onSelected: (action) {
+            switch (action) {
+              case _ChatMenuAction.newChat:
+                // Disconnect → listener pops back → SetupPage pre-filled → new connect
+                if (_isRecording) _recorder.stop();
+                context.read<ChatBloc>().add(const ChatDisconnect());
+              case _ChatMenuAction.disconnect:
+                if (_isRecording) _recorder.stop();
+                context.read<ChatBloc>().add(const ChatDisconnect());
+            }
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: _ChatMenuAction.newChat,
+              child: ListTile(
+                leading: Icon(Icons.add_circle_outline),
+                title: Text('New chat'),
+                subtitle: Text('Return to setup & start fresh'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuDivider(),
+            PopupMenuItem(
+              value: _ChatMenuAction.disconnect,
+              child: ListTile(
+                leading: Icon(Icons.logout),
+                title: Text('Disconnect'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -393,8 +444,7 @@ class _ChatPageState extends State<ChatPage> {
                     ? 'No messages yet. Say hello!'
                     : 'Waiting for connection…',
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color:
-                          Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
               ),
             ],
@@ -407,14 +457,16 @@ class _ChatPageState extends State<ChatPage> {
       controller: _scrollCtrl,
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: state.messages.length,
-      itemBuilder: (context, index) =>
-          MessageBubble(message: state.messages[index]),
+      itemBuilder: (context, index) => MessageBubble(
+        message: state.messages[index],
+        peerNicknames: state.peerNicknames,
+      ),
     );
   }
 
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
-    final theme = Theme.of(context);
+    final theme   = Theme.of(context);
 
     return SafeArea(
       child: Container(
@@ -432,12 +484,10 @@ class _ChatPageState extends State<ChatPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Индикатор записи — над кнопками, не перекрывает ничего
             if (_isRecording)
               Container(
                 margin: const EdgeInsets.only(bottom: 6),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.errorContainer,
                   borderRadius: BorderRadius.circular(8),
@@ -449,7 +499,7 @@ class _ChatPageState extends State<ChatPage> {
                         size: 12, color: theme.colorScheme.error),
                     const SizedBox(width: 6),
                     Text(
-                      'Идёт запись… нажми снова чтобы отправить',
+                      'Recording… tap again to send',
                       style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onErrorContainer),
                     ),
@@ -458,36 +508,27 @@ class _ChatPageState extends State<ChatPage> {
               ),
             Row(
               children: [
-                // Изображения
                 IconButton(
                   onPressed: canSend ? () => _pickAndSendImage(context) : null,
                   icon: const Icon(Icons.image_outlined),
-                  tooltip: 'Отправить фото / GIF',
+                  tooltip: 'Send photo / GIF',
                 ),
-                // Видео
                 IconButton(
                   onPressed: canSend ? () => _pickAndSendVideo(context) : null,
                   icon: const Icon(Icons.videocam_outlined),
-                  tooltip: 'Отправить видео',
+                  tooltip: 'Send video',
                 ),
-                // Кнопка микрофона (долгое нажатие — выбор устройства)
                 GestureDetector(
-                  onLongPress: canSend
-                      ? () => _showMicPicker(context)
-                      : null,
+                  onLongPress: canSend ? () => _showMicPicker(context) : null,
                   child: IconButton(
-                    onPressed: canSend
-                        ? () => _toggleRecording(context)
-                        : null,
+                    onPressed: canSend ? () => _toggleRecording(context) : null,
                     icon: Icon(
-                      _isRecording
-                          ? Icons.stop_circle
-                          : Icons.mic_outlined,
+                      _isRecording ? Icons.stop_circle : Icons.mic_outlined,
                       color: _isRecording ? theme.colorScheme.error : null,
                     ),
                     tooltip: _isRecording
-                        ? 'Стоп и отправить'
-                        : 'Запись (долгое нажатие — выбор микрофона)',
+                        ? 'Stop & send'
+                        : 'Record (long-press to pick mic)',
                   ),
                 ),
                 Expanded(
@@ -496,7 +537,7 @@ class _ChatPageState extends State<ChatPage> {
                     enabled: canSend && !_isRecording,
                     decoration: InputDecoration(
                       hintText: _isRecording
-                          ? 'Идёт запись…'
+                          ? 'Recording…'
                           : canSend
                               ? 'Message…'
                               : 'Waiting for chat key…',
@@ -505,16 +546,14 @@ class _ChatPageState extends State<ChatPage> {
                         borderSide: BorderSide.none,
                       ),
                       filled: true,
-                      fillColor:
-                          theme.colorScheme.surfaceContainerHighest,
+                      fillColor: theme.colorScheme.surfaceContainerHighest,
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 10),
                     ),
                     minLines: 1,
                     maxLines: 5,
                     textInputAction: TextInputAction.send,
-                    onSubmitted:
-                        canSend ? (_) => _sendMessage(context) : null,
+                    onSubmitted: canSend ? (_) => _sendMessage(context) : null,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -523,7 +562,7 @@ class _ChatPageState extends State<ChatPage> {
                       ? () => _sendMessage(context)
                       : null,
                   icon: const Icon(Icons.send),
-                  tooltip: 'Отправить',
+                  tooltip: 'Send',
                 ),
               ],
             ),
@@ -532,6 +571,8 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
   }
+
+  // ── Sheets / dialogs ──────────────────────────────────────────────────────
 
   void _showPeersSheet(BuildContext context, ChatState state) {
     showModalBottomSheet<void>(
@@ -553,20 +594,26 @@ class _ChatPageState extends State<ChatPage> {
                 child: Center(child: Text('No peers connected')),
               )
             else
-              ...state.peerUUIDs.map((uuid) => ListTile(
-                    leading: const Icon(Icons.person_outline),
-                    title: Text(uuid,
-                        style: const TextStyle(
-                            fontFamily: 'monospace', fontSize: 12)),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.copy, size: 18),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: uuid));
-                        Navigator.pop(context);
-                        _showFloatingSnackbar(context, 'UUID скопирован');
-                      },
-                    ),
-                  )),
+              ...state.peerUUIDs.map((uuid) {
+                final nick = state.peerNicknames[uuid];
+                return ListTile(
+                  leading: const Icon(Icons.person_outline),
+                  title: Text(
+                    nick != null
+                        ? '$nick  ·  ${uuid.substring(0, 8)}…'
+                        : uuid,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.copy, size: 18),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: uuid));
+                      Navigator.pop(context);
+                      _showFloatingSnackbar(context, 'UUID copied');
+                    },
+                  ),
+                );
+              }),
             const SizedBox(height: 8),
           ],
         ),
@@ -592,8 +639,7 @@ class _ChatPageState extends State<ChatPage> {
               const SizedBox(height: 12),
               Row(children: [
                 Icon(Icons.star,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.primary),
+                    size: 16, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 4),
                 Text('You are the master',
                     style: TextStyle(
@@ -635,7 +681,7 @@ class _ChatPageState extends State<ChatPage> {
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: value));
                   Navigator.pop(context);
-                  _showFloatingSnackbar(context, '$label скопирован');
+                  _showFloatingSnackbar(context, '$label copied');
                 },
               ),
           ],
@@ -644,3 +690,7 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 }
+
+// ── Menu action enum ──────────────────────────────────────────────────────────
+
+enum _ChatMenuAction { newChat, disconnect }

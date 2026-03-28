@@ -18,8 +18,8 @@ class SetupPage extends StatefulWidget {
 
 class _SetupPageState extends State<SetupPage> {
   final _serverCtrl = TextEditingController();
-  final _roomCtrl = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
+  final _roomCtrl   = TextEditingController();
+  final _formKey    = GlobalKey<FormState>();
 
   @override
   void initState() {
@@ -54,9 +54,16 @@ class _SetupPageState extends State<SetupPage> {
         }
 
         if (state.connectionConfig != null) {
-          final config = state.connectionConfig!;
-          final chatBloc = ChatBloc()..add(ChatConnect(config));
-          Navigator.of(context).pushReplacement(
+          final config    = state.connectionConfig!;
+          final nicknames = state.nicknames;
+
+          // Clear config immediately so we don't re-navigate on rebuild
+          context.read<SetupBloc>().add(const SetupClearConnection());
+
+          final chatBloc = ChatBloc()
+            ..add(ChatConnect(config, nicknames: nicknames));
+
+          Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) => BlocProvider.value(
                 value: chatBloc,
@@ -92,6 +99,7 @@ class _SetupPageState extends State<SetupPage> {
                       const SizedBox(height: 24),
                       _buildMyKeyInfo(context, state),
                     ],
+                    const SizedBox(height: 32),
                   ],
                 ),
               ),
@@ -102,6 +110,8 @@ class _SetupPageState extends State<SetupPage> {
     );
   }
 
+  // ── Widgets ───────────────────────────────────────────────────────────────
+
   Widget _buildHeader(BuildContext context) {
     final theme = Theme.of(context);
     return Column(
@@ -110,7 +120,8 @@ class _SetupPageState extends State<SetupPage> {
         const SizedBox(height: 16),
         Text('SGTP Chat',
             style: theme.textTheme.headlineLarge?.copyWith(
-                fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary)),
         const SizedBox(height: 8),
         Text('Secure Group Transfer Protocol',
             style: theme.textTheme.bodyMedium
@@ -217,21 +228,31 @@ class _SetupPageState extends State<SetupPage> {
           children: [
             Text('Trusted peers (whitelist)', style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
-            Text('Select a folder with .pub key files, or pick individual files',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-            const SizedBox(height: 8),
-            if (state.whitelistPaths.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  '${state.whitelistPaths.length} key(s) loaded: '
-                  '${state.whitelistPaths.take(3).join(', ')}'
-                  '${state.whitelistPaths.length > 3 ? '…' : ''}',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.primary),
-                ),
+            Text(
+              'Folder or files with .pub keys. Nicknames taken from file names: '
+              '"friend.pub" → nick "friend"',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            if (state.whitelistPaths.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: state.whitelistPaths.map((path) {
+                  var nick = path;
+                  if (nick.toLowerCase().endsWith('.pub')) {
+                    nick = nick.substring(0, nick.length - 4);
+                  }
+                  return Chip(
+                    label: Text(nick, style: theme.textTheme.labelSmall),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                  );
+                }).toList(),
               ),
+            ],
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(

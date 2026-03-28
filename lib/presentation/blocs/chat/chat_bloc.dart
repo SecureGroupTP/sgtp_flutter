@@ -33,11 +33,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         .join();
 
     emit(state.copyWith(
-      status: ChatStatus.connecting,
-      messages: [],
-      peerUUIDs: [],
-      isMaster: false,
+      status:       ChatStatus.connecting,
+      messages:     [],
+      peerUUIDs:    [],
+      peerNicknames: {},
+      isMaster:     false,
       myPublicKeyHex: pubHex,
+      nicknames:    event.nicknames,
       clearError: true,
     ));
 
@@ -49,27 +51,32 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await client.connect();
   }
 
-  Future<void> _onSendMessage(ChatSendMessage event, Emitter<ChatState> emit) async {
+  Future<void> _onSendMessage(
+      ChatSendMessage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendMessage(event.text);
   }
 
-  Future<void> _onSendImage(ChatSendImage event, Emitter<ChatState> emit) async {
+  Future<void> _onSendImage(
+      ChatSendImage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendImage(event.bytes, event.name, event.mime);
   }
 
-  Future<void> _onSendVideo(ChatSendVideo event, Emitter<ChatState> emit) async {
+  Future<void> _onSendVideo(
+      ChatSendVideo event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVideo(event.bytes, event.name, event.mime);
   }
 
-  Future<void> _onSendVoice(ChatSendVoice event, Emitter<ChatState> emit) async {
+  Future<void> _onSendVoice(
+      ChatSendVoice event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVoice(event.bytes, event.mime);
   }
 
-  Future<void> _onDisconnect(ChatDisconnect event, Emitter<ChatState> emit) async {
+  Future<void> _onDisconnect(
+      ChatDisconnect event, Emitter<ChatState> emit) async {
     await _client?.disconnect();
     await _eventSub?.cancel();
     _eventSub = null;
@@ -81,23 +88,23 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     switch (sgtpEvent) {
       case SgtpConnecting():
         emit(state.copyWith(
-          status: ChatStatus.connecting,
+          status:   ChatStatus.connecting,
           roomUUID: _client?.roomUUIDHex ?? '',
         ));
 
       case SgtpHandshaking():
         emit(state.copyWith(
-          status: ChatStatus.handshaking,
-          myUUID: _client?.myUUIDHex ?? '',
-          roomUUID: _client?.roomUUIDHex ?? '',  // фикс: UUID комнаты сразу
+          status:   ChatStatus.handshaking,
+          myUUID:   _client?.myUUIDHex ?? '',
+          roomUUID: _client?.roomUUIDHex ?? '',
         ));
 
       case SgtpReady(:final isMaster, :final roomUUIDHex):
         emit(state.copyWith(
-          status: ChatStatus.ready,
-          isMaster: isMaster,
-          roomUUID: roomUUIDHex,
-          myUUID: _client?.myUUIDHex ?? '',
+          status:    ChatStatus.ready,
+          isMaster:  isMaster,
+          roomUUID:  roomUUIDHex,
+          myUUID:    _client?.myUUIDHex ?? '',
           peerUUIDs: _client?.peerUUIDs ?? [],
         ));
 
@@ -105,14 +112,27 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final updated = List<ChatMessage>.from(state.messages)..add(message);
         emit(state.copyWith(messages: updated));
 
-      case SgtpPeerJoined(:final peerUUID):
+      case SgtpPeerJoined(:final peerUUID, :final ed25519PubHex):
+        // Resolve nickname from whitelist (ed25519PubHex → nickname)
+        final nick = state.nicknames[ed25519PubHex];
+        final updatedPeerNicknames = Map<String, String>.from(state.peerNicknames);
+        if (nick != null) updatedPeerNicknames[peerUUID] = nick;
+
         if (!state.peerUUIDs.contains(peerUUID)) {
-          emit(state.copyWith(peerUUIDs: [...state.peerUUIDs, peerUUID]));
+          emit(state.copyWith(
+            peerUUIDs:     [...state.peerUUIDs, peerUUID],
+            peerNicknames: updatedPeerNicknames,
+          ));
+        } else {
+          emit(state.copyWith(peerNicknames: updatedPeerNicknames));
         }
 
       case SgtpPeerLeft(:final peerUUID):
+        final updatedNicknames = Map<String, String>.from(state.peerNicknames)
+          ..remove(peerUUID);
         emit(state.copyWith(
-          peerUUIDs: state.peerUUIDs.where((id) => id != peerUUID).toList(),
+          peerUUIDs:     state.peerUUIDs.where((id) => id != peerUUID).toList(),
+          peerNicknames: updatedNicknames,
         ));
 
       case SgtpError(:final error):

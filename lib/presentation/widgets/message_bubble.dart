@@ -12,19 +12,26 @@ import '../../domain/entities/message.dart';
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
 
-  const MessageBubble({super.key, required this.message});
+  /// sessionUUID → nickname (resolved from whitelist file names).
+  final Map<String, String> peerNicknames;
+
+  const MessageBubble({
+    super.key,
+    required this.message,
+    this.peerNicknames = const {},
+  });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final isMe = message.isFromMe;
-
+    final theme   = Theme.of(context);
+    final cs      = theme.colorScheme;
+    final isMe    = message.isFromMe;
     final bgColor = isMe ? cs.primaryContainer : cs.surfaceContainerHighest;
     final textColor = isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant;
-
     final timeStr = _formatTime(message.receivedAt);
-    final senderLabel = isMe ? 'Me' : message.senderUUID.substring(0, 8);
+
+    // Nickname: "nick | uuid[0:8]" or just "uuid[0:8]" if no nick found
+    final senderLabel = _buildSenderLabel();
 
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -52,6 +59,15 @@ class MessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _buildSenderLabel() {
+    if (message.isFromMe) return 'Me';
+    final short = message.senderUUID.length >= 8
+        ? message.senderUUID.substring(0, 8)
+        : message.senderUUID;
+    final nick = peerNicknames[message.senderUUID];
+    return nick != null ? '$nick | $short' : short;
   }
 
   Widget _buildContent(BuildContext context, ThemeData theme, Color textColor,
@@ -246,8 +262,8 @@ class MessageBubble extends StatelessWidget {
   Widget _timeLabel(ThemeData theme, Color textColor, String timeStr) =>
       Text(
         '${message.isFromHistory ? '~ ' : ''}$timeStr',
-        style: theme.textTheme.labelSmall
-            ?.copyWith(color: textColor.withAlpha(160)),
+        style:
+            theme.textTheme.labelSmall?.copyWith(color: textColor.withAlpha(160)),
       );
 
   String _formatTime(DateTime dt) {
@@ -257,7 +273,7 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
-// ─── Video thumbnail + inline player (media_kit, all platforms) ──────────────
+// ─── Video thumbnail + inline player (media_kit) ──────────────────────────────
 
 class _VideoThumbnail extends StatefulWidget {
   final Uint8List videoBytes;
@@ -272,7 +288,7 @@ class _VideoThumbnail extends StatefulWidget {
 class _VideoThumbnailState extends State<_VideoThumbnail> {
   Player? _player;
   VideoController? _controller;
-  bool _loading = false;
+  bool _loading     = false;
   bool _initialized = false;
   String? _tmpPath;
 
@@ -288,30 +304,30 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
     setState(() => _loading = true);
     try {
       final tmpDir = await getTemporaryDirectory();
-      final ext = widget.mediaName.split('.').last;
-      final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
+      final ext    = widget.mediaName.split('.').last;
+      final file   = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
       if (!file.existsSync()) {
         await file.writeAsBytes(widget.videoBytes);
       }
       _tmpPath = file.path;
 
-      final player = Player();
+      final player     = Player();
       final controller = VideoController(player);
       await player.open(Media('file://${file.path}'), play: false);
 
       if (mounted) {
         setState(() {
-          _player = player;
-          _controller = controller;
+          _player      = player;
+          _controller  = controller;
           _initialized = true;
-          _loading = false;
+          _loading     = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Ошибка загрузки видео: $e'),
+          content: Text('Video load error: $e'),
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
         ));
@@ -331,7 +347,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs    = theme.colorScheme;
 
     return SizedBox(
       width: 260,
@@ -370,8 +386,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                                 width: 28,
                                 height: 28,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: cs.onPrimaryContainer),
+                                    strokeWidth: 2, color: cs.onPrimaryContainer),
                               ),
                             )
                           : (!_initialized
@@ -382,8 +397,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                                   ),
                                   padding: const EdgeInsets.all(12),
                                   child: Icon(Icons.play_arrow_rounded,
-                                      size: 28,
-                                      color: cs.onPrimaryContainer),
+                                      size: 28, color: cs.onPrimaryContainer),
                                 )
                               : const SizedBox.shrink()),
                     ),
@@ -412,10 +426,10 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                         SliderTheme(
                           data: SliderTheme.of(context).copyWith(
                             trackHeight: 3,
-                            thumbShape: const RoundSliderThumbShape(
-                                enabledThumbRadius: 5),
-                            overlayShape: const RoundSliderOverlayShape(
-                                overlayRadius: 10),
+                            thumbShape:
+                                const RoundSliderThumbShape(enabledThumbRadius: 5),
+                            overlayShape:
+                                const RoundSliderOverlayShape(overlayRadius: 10),
                           ),
                           child: Slider(
                             value: progress,
@@ -423,8 +437,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                                 ? (v) {
                                     final seek = Duration(
                                         milliseconds:
-                                            (v * dur.inMilliseconds)
-                                                .round());
+                                            (v * dur.inMilliseconds).round());
                                     _player!.seek(seek);
                                   }
                                 : null,
@@ -438,11 +451,11 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(_fmt(pos),
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                      color: cs.onSurfaceVariant)),
+                                  style: theme.textTheme.labelSmall
+                                      ?.copyWith(color: cs.onSurfaceVariant)),
                               Text(_fmt(dur),
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                      color: cs.onSurfaceVariant)),
+                                  style: theme.textTheme.labelSmall
+                                      ?.copyWith(color: cs.onSurfaceVariant)),
                             ],
                           ),
                         ),
@@ -488,9 +501,11 @@ class _VoicePlayer extends StatefulWidget {
 }
 
 class _VoicePlayerState extends State<_VoicePlayer> {
-  final _player = AudioPlayer();
-  bool _playing = false;
-  bool _loading = false;
+  final _player    = AudioPlayer();
+  bool _playing    = false;
+  bool _loading    = false;
+  /// true once we've fetched metadata (duration) even without playing
+  bool _metaReady  = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   String? _tmpPath;
@@ -498,13 +513,12 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   @override
   void initState() {
     super.initState();
+
     _player.onPlayerStateChanged.listen((s) {
-      if (mounted) {
-        setState(() => _playing = s.name == 'playing');
-      }
+      if (mounted) setState(() => _playing = s.name == 'playing');
     });
     _player.onDurationChanged.listen((d) {
-      if (mounted) setState(() => _duration = d);
+      if (mounted) setState(() { _duration = d; _metaReady = true; });
     });
     _player.onPositionChanged.listen((p) {
       if (mounted) setState(() => _position = p);
@@ -512,23 +526,34 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     _player.onPlayerComplete.listen((_) {
       if (mounted) setState(() => _position = Duration.zero);
     });
+
+    // Prefetch duration so the timeline shows before first play
+    _prefetchDuration();
   }
 
   @override
   void dispose() {
     _player.dispose();
-    // Удаляем временный файл
-    if (_tmpPath != null) {
-      File(_tmpPath!).delete().catchError((_) {});
-    }
+    if (_tmpPath != null) File(_tmpPath!).delete().catchError((_) {});
     super.dispose();
+  }
+
+  /// Write bytes to a tmp file and load metadata without playing.
+  Future<void> _prefetchDuration() async {
+    try {
+      await _prepareTmp();
+      // setSourceDeviceFile triggers onDurationChanged without starting playback
+      await _player.setSourceDeviceFile(_tmpPath!);
+    } catch (_) {
+      // Non-fatal: user can still hit Play and it will work
+    }
   }
 
   Future<void> _prepareTmp() async {
     if (_tmpPath != null) return;
     final tmpDir = await getTemporaryDirectory();
-    final ext = _mimeToExt(widget.mediaMime);
-    final file = File(
+    final ext    = _mimeToExt(widget.mediaMime);
+    final file   = File(
         '${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
     if (!file.existsSync()) {
       await file.writeAsBytes(widget.audioBytes);
@@ -537,11 +562,11 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   }
 
   String _mimeToExt(String mime) => switch (mime) {
-        'audio/m4a' => 'm4a',
-        'audio/aac' => 'aac',
+        'audio/m4a'  => 'm4a',
+        'audio/aac'  => 'aac',
         'audio/opus' => 'opus',
         'audio/mpeg' => 'mp3',
-        _ => 'audio',
+        _            => 'audio',
       };
 
   Future<void> _togglePlay() async {
@@ -559,7 +584,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Ошибка воспроизведения: $e'),
+          content: Text('Playback error: $e'),
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
         ));
@@ -570,19 +595,21 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   }
 
   Future<void> _seek(double value) async {
-    final pos = Duration(
-        milliseconds: (value * _duration.inMilliseconds).round());
+    final pos =
+        Duration(milliseconds: (value * _duration.inMilliseconds).round());
     await _player.seek(pos);
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final theme    = Theme.of(context);
+    final cs       = theme.colorScheme;
     final progress = _duration.inMilliseconds == 0
         ? 0.0
-        : (_position.inMilliseconds / _duration.inMilliseconds)
-            .clamp(0.0, 1.0);
+        : (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
+
+    // Show "--:--" until metadata is loaded (instead of "00:00")
+    final durationLabel = _metaReady ? _fmt(_duration) : '--:--';
 
     return Container(
       width: 240,
@@ -593,7 +620,6 @@ class _VoicePlayerState extends State<_VoicePlayer> {
       ),
       child: Row(
         children: [
-          // Кнопка play/pause
           GestureDetector(
             onTap: _togglePlay,
             child: Container(
@@ -619,7 +645,6 @@ class _VoicePlayerState extends State<_VoicePlayer> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Ползунок
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 3,
@@ -630,21 +655,21 @@ class _VoicePlayerState extends State<_VoicePlayer> {
                   ),
                   child: Slider(
                     value: progress,
-                    onChanged: _duration.inMilliseconds > 0 ? _seek : null,
+                    onChanged:
+                        _duration.inMilliseconds > 0 ? _seek : null,
                     activeColor: cs.primary,
                     inactiveColor: cs.outline.withAlpha(80),
                   ),
                 ),
-                // Время
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(_formatDuration(_position),
+                      Text(_fmt(_position),
                           style: theme.textTheme.labelSmall
                               ?.copyWith(color: cs.onSurfaceVariant)),
-                      Text(_formatDuration(_duration),
+                      Text(durationLabel,
                           style: theme.textTheme.labelSmall
                               ?.copyWith(color: cs.onSurfaceVariant)),
                     ],
@@ -660,7 +685,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     );
   }
 
-  String _formatDuration(Duration d) {
+  String _fmt(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';

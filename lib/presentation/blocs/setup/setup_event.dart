@@ -21,7 +21,7 @@ class SetupPickPrivateKey extends SetupEvent {
   const SetupPickPrivateKey();
 }
 
-/// Pick a FOLDER of .pub files (all files in the directory are loaded).
+/// Pick a FOLDER of .pub files (all valid ed25519 public keys are loaded).
 class SetupPickWhitelistFolder extends SetupEvent {
   const SetupPickWhitelistFolder();
 }
@@ -40,4 +40,9 @@ class SetupRoomUUIDChanged extends SetupEvent {
 
 class SetupConnect extends SetupEvent {
   const SetupConnect();
+}
+
+/// Clear the connectionConfig after navigation so we don't re-navigate on rebuild.
+class SetupClearConnection extends SetupEvent {
+  const SetupClearConnection();
 }

@@ -12,9 +12,13 @@ abstract class ChatEvent extends Equatable {
 
 class ChatConnect extends ChatEvent {
   final SgtpConfig config;
-  const ChatConnect(this.config);
+  /// ed25519PubHex → nickname, built from whitelist file names.
+  final Map<String, String> nicknames;
+
+  const ChatConnect(this.config, {this.nicknames = const {}});
+
   @override
-  List<Object?> get props => [config];
+  List<Object?> get props => [config, nicknames];
 }
 
 class ChatSendMessage extends ChatEvent {
