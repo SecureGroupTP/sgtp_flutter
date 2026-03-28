@@ -1,52 +1,64 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+# ── Flutter / Dart ────────────────────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+# pubspec.lock намеренно НЕ игнорируется — нужен для воспроизводимых CI-билдов
 
-# IntelliJ related
+# ── Build outputs ─────────────────────────────────────────────────────────────
+build/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
 *.iml
 *.ipr
 *.iws
-.idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
+# ── Windows ───────────────────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Symbolication related
-app.*.symbols
+# ── Android ───────────────────────────────────────────────────────────────────
+**/android/.gradle/
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+**/android/key.properties
+**/android/app/google-services.json
+**/android/gradle/
 
-# Obfuscation related
-app.*.map.json
+# ── iOS / macOS ───────────────────────────────────────────────────────────────
+**/ios/Pods/
+**/ios/.symlinks/
+**/macos/Pods/
+**/macos/.symlinks/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+# ── Linux desktop ─────────────────────────────────────────────────────────────
+**/linux/flutter/ephemeral/
 
-# Protocol documentation (private)
-/docs/
-/docs_v2/
+# ── Windows desktop ───────────────────────────────────────────────────────────
+**/windows/flutter/ephemeral/
 
-# Claude AI
-.claude/
+# ── Ключи и секреты — НИКОГДА не коммитить ───────────────────────────────────
+*.pem
+*.key
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+whitelist/
+
+# ── Логи ──────────────────────────────────────────────────────────────────────
+*.log

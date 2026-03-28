@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
@@ -21,17 +22,38 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _recorder = AudioRecorder();
   bool _infoShown = false;
 
-  // Voice recording state
   bool _isRecording = false;
   String? _recordingPath;
+  List<InputDevice> _inputDevices = [];
+  InputDevice? _selectedDevice;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInputDevices();
+  }
 
   @override
   void dispose() {
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
+    _recorder.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadInputDevices() async {
+    try {
+      final devices = await _recorder.listInputDevices();
+      if (mounted) {
+        setState(() {
+          _inputDevices = devices;
+          if (devices.isNotEmpty) _selectedDevice = devices.first;
+        });
+      }
+    } catch (_) {}
   }
 
   void _scrollToBottom() {
@@ -105,60 +127,125 @@ class _ChatPageState extends State<ChatPage> {
     _scrollToBottom();
   }
 
-  Future<void> _startOrStopRecording(BuildContext context) async {
+  Future<void> _toggleRecording(BuildContext context) async {
     if (_isRecording) {
-      await _stopRecordingAndSend(context);
+      await _stopAndSend(context);
     } else {
       await _startRecording(context);
     }
   }
 
   Future<void> _startRecording(BuildContext context) async {
-    // NOTE: Add `record: ^5.2.4` to pubspec.yaml for real recording.
-    // This is a placeholder that shows the UI state correctly.
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) {
+      if (context.mounted) {
+        _showFloatingSnackbar(context, 'Нет доступа к микрофону');
+      }
+      return;
+    }
+
     try {
       final tmpDir = await getTemporaryDirectory();
-      _recordingPath = '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      _recordingPath =
+          '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      await _recorder.start(
+        RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+          device: _selectedDevice,
+        ),
+        path: _recordingPath!,
+      );
 
       setState(() => _isRecording = true);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('🎙 Recording... tap mic again to send'),
-            duration: Duration(seconds: 60),
-          ),
-        );
-      }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Recording error: $e')));
+        _showFloatingSnackbar(context, 'Ошибка записи: $e');
       }
     }
   }
 
-  Future<void> _stopRecordingAndSend(BuildContext context) async {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    setState(() => _isRecording = false);
-
-    if (_recordingPath == null) return;
-
-    // NOTE: With the `record` package: final path = await _recorder.stop();
-    // Then: final bytes = await File(path).readAsBytes();
-    // For now, send a dummy audio message to demonstrate the flow:
+  Future<void> _stopAndSend(BuildContext context) async {
     try {
-      final file = File(_recordingPath!);
-      if (file.existsSync() && file.lengthSync() > 0) {
-        final bytes = await file.readAsBytes();
-        if (context.mounted) {
-          context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
-          _scrollToBottom();
-        }
+      final path = await _recorder.stop();
+      setState(() => _isRecording = false);
+
+      if (path == null) return;
+      final file = File(path);
+      if (!file.existsSync() || file.lengthSync() == 0) return;
+
+      final bytes = await file.readAsBytes();
+      if (context.mounted) {
+        context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+        _scrollToBottom();
       }
+
+      // Удаляем временный файл
+      await file.delete().catchError((_) {});
+      _recordingPath = null;
     } catch (e) {
-      // file may not exist in placeholder mode
+      setState(() => _isRecording = false);
+      if (context.mounted) {
+        _showFloatingSnackbar(context, 'Ошибка: $e');
+      }
     }
-    _recordingPath = null;
+  }
+
+  void _showFloatingSnackbar(BuildContext context, String text) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+      ),
+    );
+  }
+
+  void _showMicPicker(BuildContext context) async {
+    // Обновляем список перед показом
+    await _loadInputDevices();
+
+    if (!context.mounted) return;
+    if (_inputDevices.isEmpty) {
+      _showFloatingSnackbar(context, 'Микрофоны не найдены');
+      return;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) => Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Выбор микрофона',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                ..._inputDevices.map((device) => RadioListTile<InputDevice>(
+                      title: Text(device.label),
+                      value: device,
+                      groupValue: _selectedDevice,
+                      onChanged: (d) {
+                        setSheetState(() => _selectedDevice = d);
+                        setState(() => _selectedDevice = d);
+                        Navigator.pop(ctx);
+                      },
+                    )),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -181,6 +268,8 @@ class _ChatPageState extends State<ChatPage> {
           canPop: false,
           onPopInvokedWithResult: (didPop, _) {
             if (!didPop) {
+              // Остановить запись при выходе
+              if (_isRecording) _recorder.stop();
               context.read<ChatBloc>().add(const ChatDisconnect());
             }
           },
@@ -201,7 +290,6 @@ class _ChatPageState extends State<ChatPage> {
 
   PreferredSizeWidget _buildAppBar(BuildContext context, ChatState state) {
     final theme = Theme.of(context);
-    // BUG FIX: show full room UUID per user requirement
     final roomDisplay = state.roomUUID.isNotEmpty ? state.roomUUID : '…';
 
     return AppBar(
@@ -213,9 +301,7 @@ class _ChatPageState extends State<ChatPage> {
             GestureDetector(
               onTap: () {
                 Clipboard.setData(ClipboardData(text: state.roomUUID));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Room UUID copied')),
-                );
+                _showFloatingSnackbar(context, 'Room UUID скопирован');
               },
               child: Text(
                 roomDisplay,
@@ -256,21 +342,21 @@ class _ChatPageState extends State<ChatPage> {
     final theme = Theme.of(context);
     switch (state.status) {
       case ChatStatus.connecting:
-        return _banner(context, Icons.wifi_find, 'Connecting to server…',
+        return _banner(context, 'Connecting to server…',
             theme.colorScheme.primaryContainer);
       case ChatStatus.handshaking:
-        return _banner(context, Icons.handshake_outlined, 'Performing handshake…',
+        return _banner(context, 'Performing handshake…',
             theme.colorScheme.secondaryContainer);
       case ChatStatus.error:
-        return _banner(context, Icons.error_outline,
-            state.errorMessage ?? 'Error', theme.colorScheme.errorContainer);
+        return _banner(context, state.errorMessage ?? 'Error',
+            theme.colorScheme.errorContainer);
       case ChatStatus.ready:
       case ChatStatus.disconnected:
         return const SizedBox.shrink();
     }
   }
 
-  Widget _banner(BuildContext context, IconData icon, String text, Color color) {
+  Widget _banner(BuildContext context, String text, Color color) {
     final theme = Theme.of(context);
     return Container(
       color: color,
@@ -278,13 +364,13 @@ class _ChatPageState extends State<ChatPage> {
       child: Row(
         children: [
           SizedBox(
-            width: 18, height: 18,
+            width: 18,
+            height: 18,
             child: CircularProgressIndicator(
                 strokeWidth: 2, color: theme.colorScheme.primary),
           ),
           const SizedBox(width: 12),
-          Expanded(
-              child: Text(text, style: theme.textTheme.bodySmall)),
+          Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
         ],
       ),
     );
@@ -307,7 +393,8 @@ class _ChatPageState extends State<ChatPage> {
                     ? 'No messages yet. Say hello!'
                     : 'Waiting for connection…',
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color:
+                          Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
               ),
             ],
@@ -327,70 +414,118 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
+    final theme = Theme.of(context);
+
     return SafeArea(
       child: Container(
-        padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
+        padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
+          color: theme.colorScheme.surface,
           boxShadow: [
             BoxShadow(
-              color: Theme.of(context).colorScheme.shadow.withAlpha(30),
+              color: theme.colorScheme.shadow.withAlpha(30),
               blurRadius: 8,
               offset: const Offset(0, -2),
             ),
           ],
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // Image picker
-            IconButton(
-              onPressed: canSend ? () => _pickAndSendImage(context) : null,
-              icon: const Icon(Icons.image_outlined),
-              tooltip: 'Send image / GIF',
-            ),
-            // Video picker
-            IconButton(
-              onPressed: canSend ? () => _pickAndSendVideo(context) : null,
-              icon: const Icon(Icons.videocam_outlined),
-              tooltip: 'Send video',
-            ),
-            // Voice recorder
-            IconButton(
-              onPressed: canSend ? () => _startOrStopRecording(context) : null,
-              icon: Icon(_isRecording ? Icons.stop_circle_outlined : Icons.mic_outlined,
-                  color: _isRecording
-                      ? Theme.of(context).colorScheme.error
-                      : null),
-              tooltip: _isRecording ? 'Stop & send recording' : 'Record voice message',
-            ),
-            Expanded(
-              child: TextField(
-                controller: _messageCtrl,
-                enabled: canSend,
-                decoration: InputDecoration(
-                  hintText: canSend ? 'Message…' : 'Waiting for chat key…',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  filled: true,
-                  fillColor: Theme.of(context)
-                      .colorScheme
-                      .surfaceContainerHighest,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            // Индикатор записи — над кнопками, не перекрывает ничего
+            if (_isRecording)
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                minLines: 1,
-                maxLines: 5,
-                textInputAction: TextInputAction.send,
-                onSubmitted: canSend ? (_) => _sendMessage(context) : null,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.fiber_manual_record,
+                        size: 12, color: theme.colorScheme.error),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Идёт запись… нажми снова чтобы отправить',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onErrorContainer),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              onPressed: canSend ? () => _sendMessage(context) : null,
-              icon: const Icon(Icons.send),
-              tooltip: 'Send',
+            Row(
+              children: [
+                // Изображения
+                IconButton(
+                  onPressed: canSend ? () => _pickAndSendImage(context) : null,
+                  icon: const Icon(Icons.image_outlined),
+                  tooltip: 'Отправить фото / GIF',
+                ),
+                // Видео
+                IconButton(
+                  onPressed: canSend ? () => _pickAndSendVideo(context) : null,
+                  icon: const Icon(Icons.videocam_outlined),
+                  tooltip: 'Отправить видео',
+                ),
+                // Кнопка микрофона (долгое нажатие — выбор устройства)
+                GestureDetector(
+                  onLongPress: canSend
+                      ? () => _showMicPicker(context)
+                      : null,
+                  child: IconButton(
+                    onPressed: canSend
+                        ? () => _toggleRecording(context)
+                        : null,
+                    icon: Icon(
+                      _isRecording
+                          ? Icons.stop_circle
+                          : Icons.mic_outlined,
+                      color: _isRecording ? theme.colorScheme.error : null,
+                    ),
+                    tooltip: _isRecording
+                        ? 'Стоп и отправить'
+                        : 'Запись (долгое нажатие — выбор микрофона)',
+                  ),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _messageCtrl,
+                    enabled: canSend && !_isRecording,
+                    decoration: InputDecoration(
+                      hintText: _isRecording
+                          ? 'Идёт запись…'
+                          : canSend
+                              ? 'Message…'
+                              : 'Waiting for chat key…',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor:
+                          theme.colorScheme.surfaceContainerHighest,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                    ),
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted:
+                        canSend ? (_) => _sendMessage(context) : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: canSend && !_isRecording
+                      ? () => _sendMessage(context)
+                      : null,
+                  icon: const Icon(Icons.send),
+                  tooltip: 'Отправить',
+                ),
+              ],
             ),
           ],
         ),
@@ -427,8 +562,8 @@ class _ChatPageState extends State<ChatPage> {
                       icon: const Icon(Icons.copy, size: 18),
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: uuid));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('UUID copied')));
+                        Navigator.pop(context);
+                        _showFloatingSnackbar(context, 'UUID скопирован');
                       },
                     ),
                   )),
@@ -448,7 +583,6 @@ class _ChatPageState extends State<ChatPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // BUG FIX: show full room UUID
             _infoRow(context, 'Room UUID', state.roomUUID),
             const SizedBox(height: 12),
             _infoRow(context, 'My UUID', state.myUUID),
@@ -500,8 +634,8 @@ class _ChatPageState extends State<ChatPage> {
                 icon: const Icon(Icons.copy, size: 16),
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: value));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('$label copied')));
+                  Navigator.pop(context);
+                  _showFloatingSnackbar(context, '$label скопирован');
                 },
               ),
           ],

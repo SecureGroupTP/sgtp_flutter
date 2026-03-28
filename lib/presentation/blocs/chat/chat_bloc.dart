@@ -80,12 +80,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final sgtpEvent = event.sgtpEvent;
     switch (sgtpEvent) {
       case SgtpConnecting():
-        emit(state.copyWith(status: ChatStatus.connecting));
+        emit(state.copyWith(
+          status: ChatStatus.connecting,
+          roomUUID: _client?.roomUUIDHex ?? '',
+        ));
 
       case SgtpHandshaking():
         emit(state.copyWith(
           status: ChatStatus.handshaking,
           myUUID: _client?.myUUIDHex ?? '',
+          roomUUID: _client?.roomUUIDHex ?? '',  // фикс: UUID комнаты сразу
         ));
 
       case SgtpReady(:final isMaster, :final roomUUIDHex):

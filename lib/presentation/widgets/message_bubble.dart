@@ -1,7 +1,10 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:audioplayers/audioplayers.dart' hide PlayerState;
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entities/message.dart';
@@ -26,7 +29,8 @@ class MessageBubble extends StatelessWidget {
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         child: Container(
           margin: EdgeInsets.only(
             left: isMe ? 48 : 8,
@@ -43,47 +47,45 @@ class MessageBubble extends StatelessWidget {
               bottomRight: Radius.circular(isMe ? 4 : 16),
             ),
           ),
-          child: _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
+          child: _buildContent(
+              context, theme, textColor, senderLabel, timeStr, isMe),
         ),
       ),
     );
   }
 
-  Widget _buildContent(
-    BuildContext context,
-    ThemeData theme,
-    Color textColor,
-    String senderLabel,
-    String timeStr,
-    bool isMe,
-  ) {
+  Widget _buildContent(BuildContext context, ThemeData theme, Color textColor,
+      String senderLabel, String timeStr, bool isMe) {
     switch (message.type) {
       case MessageType.image:
-        return _buildImageContent(context, theme, textColor, senderLabel, timeStr, isMe, animated: false);
+        return _buildImageContent(context, theme, textColor, senderLabel,
+            timeStr, isMe,
+            animated: false);
       case MessageType.gif:
-        return _buildImageContent(context, theme, textColor, senderLabel, timeStr, isMe, animated: true);
+        return _buildImageContent(context, theme, textColor, senderLabel,
+            timeStr, isMe,
+            animated: true);
       case MessageType.video:
-        return _buildVideoContent(context, theme, textColor, senderLabel, timeStr, isMe);
+        return _buildVideoContent(
+            context, theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.voice:
-        return _buildVoiceContent(context, theme, textColor, senderLabel, timeStr, isMe);
+        return _buildVoiceContent(
+            context, theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.text:
-        return _buildTextContent(theme, textColor, senderLabel, timeStr, isMe);
+        return _buildTextContent(
+            theme, textColor, senderLabel, timeStr, isMe);
     }
   }
 
   // ── Text ──────────────────────────────────────────────────────────────────
 
-  Widget _buildTextContent(
-    ThemeData theme,
-    Color textColor,
-    String senderLabel,
-    String timeStr,
-    bool isMe,
-  ) {
+  Widget _buildTextContent(ThemeData theme, Color textColor, String senderLabel,
+      String timeStr, bool isMe) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe) _senderLabel(theme, senderLabel),
@@ -116,7 +118,8 @@ class MessageBubble extends StatelessWidget {
         bottomRight: Radius.circular(isMe ? 4 : 16),
       ),
       child: Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe)
@@ -129,7 +132,6 @@ class MessageBubble extends StatelessWidget {
             child: Image.memory(
               message.imageBytes!,
               fit: BoxFit.cover,
-              // gaplessPlayback: animated allows GIF animation to loop
               gaplessPlayback: animated,
               errorBuilder: (_, __, ___) => const Padding(
                 padding: EdgeInsets.all(12),
@@ -139,11 +141,12 @@ class MessageBubble extends StatelessWidget {
           ),
           if (animated)
             Padding(
-              padding: const EdgeInsets.only(right: 4, top: 2),
+              padding: const EdgeInsets.only(right: 8, top: 2),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Icon(Icons.gif_box_outlined, size: 16, color: theme.colorScheme.primary),
+                  Icon(Icons.gif_box_outlined,
+                      size: 16, color: theme.colorScheme.primary),
                   const SizedBox(width: 4),
                 ],
               ),
@@ -184,18 +187,13 @@ class MessageBubble extends StatelessWidget {
 
   // ── Video ─────────────────────────────────────────────────────────────────
 
-  Widget _buildVideoContent(
-    BuildContext context,
-    ThemeData theme,
-    Color textColor,
-    String senderLabel,
-    String timeStr,
-    bool isMe,
-  ) {
+  Widget _buildVideoContent(BuildContext context, ThemeData theme,
+      Color textColor, String senderLabel, String timeStr, bool isMe) {
     return Padding(
       padding: const EdgeInsets.all(8),
       child: Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe) _senderLabel(theme, senderLabel),
@@ -213,18 +211,13 @@ class MessageBubble extends StatelessWidget {
 
   // ── Voice ─────────────────────────────────────────────────────────────────
 
-  Widget _buildVoiceContent(
-    BuildContext context,
-    ThemeData theme,
-    Color textColor,
-    String senderLabel,
-    String timeStr,
-    bool isMe,
-  ) {
+  Widget _buildVoiceContent(BuildContext context, ThemeData theme,
+      Color textColor, String senderLabel, String timeStr, bool isMe) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe) _senderLabel(theme, senderLabel),
@@ -250,9 +243,11 @@ class MessageBubble extends StatelessWidget {
         ),
       );
 
-  Widget _timeLabel(ThemeData theme, Color textColor, String timeStr) => Text(
+  Widget _timeLabel(ThemeData theme, Color textColor, String timeStr) =>
+      Text(
         '${message.isFromHistory ? '~ ' : ''}$timeStr',
-        style: theme.textTheme.labelSmall?.copyWith(color: textColor.withAlpha(160)),
+        style: theme.textTheme.labelSmall
+            ?.copyWith(color: textColor.withAlpha(160)),
       );
 
   String _formatTime(DateTime dt) {
@@ -262,7 +257,7 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
-// ─── Video thumbnail / player widget ─────────────────────────────────────────
+// ─── Video thumbnail + inline player (media_kit, all platforms) ──────────────
 
 class _VideoThumbnail extends StatefulWidget {
   final Uint8List videoBytes;
@@ -275,144 +270,212 @@ class _VideoThumbnail extends StatefulWidget {
 }
 
 class _VideoThumbnailState extends State<_VideoThumbnail> {
+  Player? _player;
+  VideoController? _controller;
   bool _loading = false;
+  bool _initialized = false;
+  String? _tmpPath;
 
-  Future<void> _openVideo(BuildContext context) async {
-    if (_loading) return;
+  @override
+  void dispose() {
+    _player?.dispose();
+    if (_tmpPath != null) File(_tmpPath!).delete().catchError((_) {});
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    if (_initialized || _loading) return;
     setState(() => _loading = true);
-
     try {
       final tmpDir = await getTemporaryDirectory();
       final ext = widget.mediaName.split('.').last;
       final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-      await file.writeAsBytes(widget.videoBytes);
-
-      if (!context.mounted) return;
-      await _showVideoDialog(context, file.path);
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Cannot open video: $e')));
+      if (!file.existsSync()) {
+        await file.writeAsBytes(widget.videoBytes);
       }
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      _tmpPath = file.path;
+
+      final player = Player();
+      final controller = VideoController(player);
+      await player.open(Media('file://${file.path}'), play: false);
+
+      if (mounted) {
+        setState(() {
+          _player = player;
+          _controller = controller;
+          _initialized = true;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Ошибка загрузки видео: $e'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+        ));
+      }
     }
   }
 
-  Future<void> _showVideoDialog(BuildContext context, String filePath) async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _VideoPlayerDialog(filePath: filePath),
-    );
+  Future<void> _togglePlay() async {
+    if (!_initialized) {
+      await _init();
+      await _player?.play();
+      return;
+    }
+    await _player?.playOrPause();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: () => _openVideo(context),
-      child: Container(
-        width: 220,
-        height: 140,
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: theme.colorScheme.outline.withAlpha(80)),
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Icon(Icons.videocam_outlined, size: 48,
-                color: theme.colorScheme.onSurfaceVariant.withAlpha(120)),
-            if (_loading)
-              const CircularProgressIndicator()
-            else
-              Container(
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  shape: BoxShape.circle,
-                ),
-                padding: const EdgeInsets.all(12),
-                child: Icon(Icons.play_arrow_rounded, size: 32,
-                    color: theme.colorScheme.onPrimaryContainer),
-              ),
-            Positioned(
-              bottom: 8,
-              left: 8,
-              child: Text(
-                widget.mediaName,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+    final cs = theme.colorScheme;
 
-class _VideoPlayerDialog extends StatefulWidget {
-  final String filePath;
-  const _VideoPlayerDialog({required this.filePath});
-
-  @override
-  State<_VideoPlayerDialog> createState() => _VideoPlayerDialogState();
-}
-
-class _VideoPlayerDialogState extends State<_VideoPlayerDialog> {
-  // NOTE: video_player package is used here. Add to pubspec.yaml:
-  //   video_player: ^2.9.2
-  // For now we show a placeholder if the package is not available.
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Colors.black,
-      insetPadding: EdgeInsets.zero,
-      child: Stack(
+    return SizedBox(
+      width: 260,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Stack(
+                alignment: Alignment.center,
                 children: [
-                  const Icon(Icons.video_file_outlined, size: 64, color: Colors.white54),
-                  const SizedBox(height: 16),
-                  Text(
-                    widget.filePath.split('/').last,
-                    style: const TextStyle(color: Colors.white70),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Video saved to device storage.\nAdd video_player package for inline playback.',
-                    style: TextStyle(color: Colors.white38, fontSize: 12),
-                    textAlign: TextAlign.center,
+                  if (_initialized && _controller != null)
+                    Video(controller: _controller!)
+                  else
+                    Container(
+                      color: cs.surfaceContainerHighest,
+                      child: Icon(Icons.videocam_outlined,
+                          size: 48,
+                          color: cs.onSurfaceVariant.withAlpha(120)),
+                    ),
+                  GestureDetector(
+                    onTap: _togglePlay,
+                    child: Container(
+                      color: Colors.transparent,
+                      child: _loading
+                          ? Container(
+                              decoration: BoxDecoration(
+                                color: cs.primaryContainer.withAlpha(200),
+                                shape: BoxShape.circle,
+                              ),
+                              padding: const EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: cs.onPrimaryContainer),
+                              ),
+                            )
+                          : (!_initialized
+                              ? Container(
+                                  decoration: BoxDecoration(
+                                    color: cs.primaryContainer.withAlpha(200),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                  child: Icon(Icons.play_arrow_rounded,
+                                      size: 28,
+                                      color: cs.onPrimaryContainer),
+                                )
+                              : const SizedBox.shrink()),
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
-              onPressed: () => Navigator.pop(context),
+          if (_initialized && _player != null) ...[
+            const SizedBox(height: 4),
+            StreamBuilder<Duration>(
+              stream: _player!.stream.position,
+              builder: (context, posSnap) {
+                final pos = posSnap.data ?? Duration.zero;
+                return StreamBuilder<Duration>(
+                  stream: _player!.stream.duration,
+                  builder: (context, durSnap) {
+                    final dur = durSnap.data ?? Duration.zero;
+                    final progress = dur.inMilliseconds == 0
+                        ? 0.0
+                        : (pos.inMilliseconds / dur.inMilliseconds)
+                            .clamp(0.0, 1.0);
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 3,
+                            thumbShape: const RoundSliderThumbShape(
+                                enabledThumbRadius: 5),
+                            overlayShape: const RoundSliderOverlayShape(
+                                overlayRadius: 10),
+                          ),
+                          child: Slider(
+                            value: progress,
+                            onChanged: dur.inMilliseconds > 0
+                                ? (v) {
+                                    final seek = Duration(
+                                        milliseconds:
+                                            (v * dur.inMilliseconds)
+                                                .round());
+                                    _player!.seek(seek);
+                                  }
+                                : null,
+                            activeColor: cs.primary,
+                            inactiveColor: cs.outline.withAlpha(80),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(_fmt(pos),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                      color: cs.onSurfaceVariant)),
+                              Text(_fmt(dur),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                      color: cs.onSurfaceVariant)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
             ),
-          ),
+          ] else
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 4),
+              child: Text(
+                widget.mediaName,
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: cs.onSurfaceVariant),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
         ],
       ),
     );
   }
+
+  String _fmt(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
 }
 
-// ─── Voice player widget ──────────────────────────────────────────────────────
+// ─── Voice player ─────────────────────────────────────────────────────────────
 
 class _VoicePlayer extends StatefulWidget {
   final Uint8List audioBytes;
@@ -425,93 +488,124 @@ class _VoicePlayer extends StatefulWidget {
 }
 
 class _VoicePlayerState extends State<_VoicePlayer> {
+  final _player = AudioPlayer();
   bool _playing = false;
-  bool _preparing = false;
+  bool _loading = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   String? _tmpPath;
 
   @override
+  void initState() {
+    super.initState();
+    _player.onPlayerStateChanged.listen((s) {
+      if (mounted) {
+        setState(() => _playing = s.name == 'playing');
+      }
+    });
+    _player.onDurationChanged.listen((d) {
+      if (mounted) setState(() => _duration = d);
+    });
+    _player.onPositionChanged.listen((p) {
+      if (mounted) setState(() => _position = p);
+    });
+    _player.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _position = Duration.zero);
+    });
+  }
+
+  @override
   void dispose() {
-    _stopPlayback();
+    _player.dispose();
+    // Удаляем временный файл
+    if (_tmpPath != null) {
+      File(_tmpPath!).delete().catchError((_) {});
+    }
     super.dispose();
   }
 
-  Future<void> _prepareTmpFile() async {
+  Future<void> _prepareTmp() async {
     if (_tmpPath != null) return;
     final tmpDir = await getTemporaryDirectory();
     final ext = _mimeToExt(widget.mediaMime);
-    final file = File('${tmpDir.path}/voice_${widget.audioBytes.hashCode}.$ext');
+    final file = File(
+        '${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
     if (!file.existsSync()) {
       await file.writeAsBytes(widget.audioBytes);
     }
     _tmpPath = file.path;
   }
 
-  String _mimeToExt(String mime) {
-    return switch (mime) {
-      'audio/m4a' => 'm4a',
-      'audio/aac' => 'aac',
-      'audio/opus' => 'opus',
-      'audio/mpeg' => 'mp3',
-      _ => 'audio',
-    };
-  }
+  String _mimeToExt(String mime) => switch (mime) {
+        'audio/m4a' => 'm4a',
+        'audio/aac' => 'aac',
+        'audio/opus' => 'opus',
+        'audio/mpeg' => 'mp3',
+        _ => 'audio',
+      };
 
   Future<void> _togglePlay() async {
-    if (_preparing) return;
-    setState(() => _preparing = true);
+    if (_loading) return;
 
+    if (_playing) {
+      await _player.pause();
+      return;
+    }
+
+    setState(() => _loading = true);
     try {
-      await _prepareTmpFile();
-      // NOTE: Use audioplayers or just_audio package for actual playback.
-      // Add to pubspec.yaml: audioplayers: ^6.1.0
-      // For now, just toggle the visual state as placeholder.
-      setState(() {
-        _playing = !_playing;
-        _preparing = false;
-      });
+      await _prepareTmp();
+      await _player.play(DeviceFileSource(_tmpPath!));
     } catch (e) {
-      setState(() => _preparing = false);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Cannot play audio: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Ошибка воспроизведения: $e'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+        ));
       }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  void _stopPlayback() {
-    _playing = false;
+  Future<void> _seek(double value) async {
+    final pos = Duration(
+        milliseconds: (value * _duration.inMilliseconds).round());
+    await _player.seek(pos);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final progress = _duration.inMilliseconds == 0
+        ? 0.0
+        : (_position.inMilliseconds / _duration.inMilliseconds)
+            .clamp(0.0, 1.0);
 
     return Container(
-      width: 220,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      width: 240,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(24),
       ),
       child: Row(
         children: [
+          // Кнопка play/pause
           GestureDetector(
             onTap: _togglePlay,
             child: Container(
               width: 40,
               height: 40,
-              decoration: BoxDecoration(
-                color: cs.primary,
-                shape: BoxShape.circle,
-              ),
-              child: _preparing
-                  ? const Padding(
-                      padding: EdgeInsets.all(10),
+              decoration:
+                  BoxDecoration(color: cs.primary, shape: BoxShape.circle),
+              child: _loading
+                  ? Padding(
+                      padding: const EdgeInsets.all(10),
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                          strokeWidth: 2, color: cs.onPrimary),
                     )
                   : Icon(
                       _playing ? Icons.pause : Icons.play_arrow,
@@ -523,30 +617,44 @@ class _VoicePlayerState extends State<_VoicePlayer> {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // Waveform placeholder
-                CustomPaint(
-                  size: const Size(double.infinity, 24),
-                  painter: _WaveformPainter(
-                    progress: _position.inMilliseconds /
-                        (_duration.inMilliseconds == 0
-                            ? 1
-                            : _duration.inMilliseconds),
-                    color: cs.primary,
-                    backgroundColor: cs.outline.withAlpha(60),
+                // Ползунок
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 6),
+                    overlayShape:
+                        const RoundSliderOverlayShape(overlayRadius: 12),
+                  ),
+                  child: Slider(
+                    value: progress,
+                    onChanged: _duration.inMilliseconds > 0 ? _seek : null,
+                    activeColor: cs.primary,
+                    inactiveColor: cs.outline.withAlpha(80),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  _formatDuration(_playing ? _position : _duration),
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: cs.onSurfaceVariant),
+                // Время
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(_formatDuration(_position),
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: cs.onSurfaceVariant)),
+                      Text(_formatDuration(_duration),
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: cs.onSurfaceVariant)),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 4),
-          Icon(Icons.mic, size: 16, color: cs.primary),
+          Icon(Icons.mic, size: 14, color: cs.primary),
         ],
       ),
     );
@@ -557,39 +665,4 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
-}
-
-class _WaveformPainter extends CustomPainter {
-  final double progress;
-  final Color color;
-  final Color backgroundColor;
-
-  const _WaveformPainter({
-    required this.progress,
-    required this.color,
-    required this.backgroundColor,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..strokeCap = StrokeCap.round..strokeWidth = 2.5;
-    const barCount = 28;
-    final barWidth = size.width / (barCount * 2);
-    final rng = [0.4, 0.8, 0.5, 1.0, 0.6, 0.9, 0.3, 0.7, 0.5, 0.85,
-                  0.4, 0.65, 0.9, 0.5, 0.75, 0.3, 0.8, 0.6, 0.95, 0.4,
-                  0.7, 0.55, 0.85, 0.45, 0.75, 0.35, 0.6, 0.5];
-
-    for (int i = 0; i < barCount; i++) {
-      final x = barWidth + i * barWidth * 2;
-      final fraction = i / barCount;
-      paint.color = fraction <= progress ? color : backgroundColor;
-      final h = (rng[i % rng.length] * size.height).clamp(4.0, size.height);
-      final top = (size.height - h) / 2;
-      canvas.drawLine(Offset(x, top), Offset(x, top + h), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_WaveformPainter old) =>
-      old.progress != progress || old.color != color;
 }
