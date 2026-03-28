@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+          - os: ubuntu-latest
+            platform: linux
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: ubuntu-latest
+            platform: android
+            arch: universal
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        if: matrix.platform == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ninja-build libgtk-3-dev libblkid-dev liblzma-dev
+
+      - name: Enable desktop
+        if: matrix.platform != 'android'
+        run: flutter config --enable-${{ matrix.platform }}-desktop
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Extract version from tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build (Windows)
+        if: matrix.platform == 'windows'
+        run: flutter build windows --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+
+      - name: Build (Linux)
+        if: matrix.platform == 'linux'
+        run: flutter build linux --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+
+      - name: Build (Android)
+        if: matrix.platform == 'android'
+        run: flutter build apk --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $releaseDir = Get-Item "build\windows\*\runner\Release" | Select-Object -First 1 -ExpandProperty FullName
+          Compress-Archive -Path "$releaseDir\*" -DestinationPath "sgtp-client-$env:GITHUB_REF_NAME-windows-${{ matrix.arch }}.zip"
+
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          cd build/linux/*/release/bundle
+          zip -r "$GITHUB_WORKSPACE/sgtp-client-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}.zip" .
+
+      - name: Package (Android)
+        if: matrix.platform == 'android'
+        shell: bash
+        run: cp build/app/outputs/flutter-apk/app-release.apk "sgtp-client-${GITHUB_REF_NAME}-android.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sgtp-client-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            sgtp-client-*.zip
+            sgtp-client-*.apk
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sgtp-client-*.zip
+            sgtp-client-*.apk
+          generate_release_notes: true
