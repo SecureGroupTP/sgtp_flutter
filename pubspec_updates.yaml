@@ -1,0 +1,56 @@
+# Добавить в section dependencies в pubspec.yaml:
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Existing dependencies...
+  flutter_bloc: ^8.1.0
+  equatable: ^2.0.5
+  cryptography: ^2.7.0
+
+  # NEW: Path provider for cross-platform storage
+  path_provider: ^2.1.0
+
+  # NEW: Image picker for avatar selection
+  image_picker: ^1.0.0
+
+  # NEW: Image processing (optional, for resize/compress)
+  image: ^4.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^4.0.0
+  bloc_test: ^9.1.0
+
+# ====== Android Specific ======
+# In android/app/build.gradle, ensure minSdkVersion is at least 21:
+
+android {
+  compileSdk 34
+
+  defaultConfig {
+    applicationId "com.example.sgtp_chat"
+    minSdkVersion 21  // Changed from older version
+    targetSdkVersion 34
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+# ====== iOS Specific ======
+# In ios/Podfile, ensure platform version is set:
+
+platform :ios, '12.0'
+
+# In ios/Runner/Info.plist, add permissions:
+<key>NSPhotoLibraryUsageDescription</key>
+<string>We need access to your photo library to select chat avatars.</string>
+<key>NSCameraUsageDescription</key>
+<string>We need camera access to take avatar photos.</string>
+
+# ====== Windows/macOS/Linux ======
+# No special setup required for path_provider and image_picker on desktop
+# They work natively with native file dialogs
