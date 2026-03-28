@@ -145,13 +145,16 @@ class MessageBubble extends StatelessWidget {
             ),
           GestureDetector(
             onTap: () => _showFullImage(context),
-            child: Image.memory(
-              message.imageBytes!,
-              fit: BoxFit.cover,
-              gaplessPlayback: animated,
-              errorBuilder: (_, __, ___) => const Padding(
-                padding: EdgeInsets.all(12),
-                child: Icon(Icons.broken_image_outlined, size: 48),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 300),
+              child: Image.memory(
+                message.imageBytes!,
+                fit: BoxFit.contain,
+                gaplessPlayback: animated,
+                errorBuilder: (_, __, ___) => const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Icon(Icons.broken_image_outlined, size: 48),
+                ),
               ),
             ),
           ),
