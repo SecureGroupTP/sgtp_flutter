@@ -1,5 +1,5 @@
+import 'dart:typed_data';
 import 'package:equatable/equatable.dart';
-
 import '../../../domain/entities/message.dart';
 
 enum ChatStatus { connecting, handshaking, ready, error, disconnected }
@@ -14,14 +14,20 @@ class ChatState extends Equatable {
   final String myPublicKeyHex;
   final String? errorMessage;
 
-  /// Whitelist: ed25519PubHex → nickname (from file names like "friend.pub" → "friend").
+  /// Whitelist: ed25519PubHex → nickname (from whitelist file names).
   final Map<String, String> nicknames;
 
-  /// Runtime: sessionUUID → nickname (populated as peers join, using [nicknames]).
+  /// Runtime: sessionUUID → nickname (populated as peers join).
   final Map<String, String> peerNicknames;
 
-  /// History: sessionUUID → nickname (keeps nicknames even after peer leaves)
+  /// History: sessionUUID → nickname (preserved after peer leaves).
   final Map<String, String> peerNicknamesHistory;
+
+  /// Current chat display name (can be updated by any participant).
+  final String chatName;
+
+  /// Current chat avatar bytes (PNG/JPEG, max 4 KB).
+  final Uint8List? chatAvatarBytes;
 
   const ChatState({
     this.status = ChatStatus.connecting,
@@ -35,6 +41,8 @@ class ChatState extends Equatable {
     this.nicknames = const {},
     this.peerNicknames = const {},
     this.peerNicknamesHistory = const {},
+    this.chatName = 'Chat',
+    this.chatAvatarBytes,
   });
 
   ChatState copyWith({
@@ -49,7 +57,10 @@ class ChatState extends Equatable {
     Map<String, String>? nicknames,
     Map<String, String>? peerNicknames,
     Map<String, String>? peerNicknamesHistory,
+    String? chatName,
+    Uint8List? chatAvatarBytes,
     bool clearError = false,
+    bool clearAvatar = false,
   }) {
     return ChatState(
       status:         status ?? this.status,
@@ -63,6 +74,8 @@ class ChatState extends Equatable {
       nicknames:      nicknames ?? this.nicknames,
       peerNicknames:  peerNicknames ?? this.peerNicknames,
       peerNicknamesHistory: peerNicknamesHistory ?? this.peerNicknamesHistory,
+      chatName:       chatName ?? this.chatName,
+      chatAvatarBytes: clearAvatar ? null : (chatAvatarBytes ?? this.chatAvatarBytes),
     );
   }
 
@@ -71,5 +84,6 @@ class ChatState extends Equatable {
         status, messages, peerUUIDs, isMaster,
         roomUUID, myUUID, myPublicKeyHex, errorMessage,
         nicknames, peerNicknames, peerNicknamesHistory,
+        chatName, chatAvatarBytes,
       ];
 }

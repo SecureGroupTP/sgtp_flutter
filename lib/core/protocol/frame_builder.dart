@@ -3,9 +3,6 @@ import 'dart:typed_data';
 import '../constants.dart';
 import 'packet_types.dart';
 
-/// Builds SGTP frames. The last 64 bytes are zeroed (signature placeholder).
-/// After calling these functions, sign the frame with signFrame() from ed25519_utils.dart.
-
 void _writeHeader(
   ByteData bd,
   Uint8List roomUUID,
@@ -26,7 +23,6 @@ void _writeHeader(
 Uint8List _allocFrame(int payloadLength) =>
     Uint8List(SgtpConstants.headerSize + payloadLength + SgtpConstants.signatureSize);
 
-/// Intent frame — header only, no payload.
 Uint8List buildIntentFrame(Uint8List roomUUID, Uint8List senderUUID) {
   const payloadLength = 0;
   final frame = _allocFrame(payloadLength);
@@ -36,13 +32,9 @@ Uint8List buildIntentFrame(Uint8List roomUUID, Uint8List senderUUID) {
   return frame;
 }
 
-/// PING frame: 32B x25519 + 32B ed25519 + 12B CLIENT_HELLO = 76B payload.
 Uint8List buildPingFrame(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  Uint8List x25519PubKey,
-  Uint8List ed25519PubKey,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
+  Uint8List x25519PubKey, Uint8List ed25519PubKey,
 ) {
   const payloadLength = SgtpConstants.pingPayloadLength;
   final frame = _allocFrame(payloadLength);
@@ -55,13 +47,9 @@ Uint8List buildPingFrame(
   return frame;
 }
 
-/// PONG frame — same structure as PING.
 Uint8List buildPongFrame(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  Uint8List x25519PubKey,
-  Uint8List ed25519PubKey,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
+  Uint8List x25519PubKey, Uint8List ed25519PubKey,
 ) {
   const payloadLength = SgtpConstants.pingPayloadLength;
   final frame = _allocFrame(payloadLength);
@@ -74,7 +62,6 @@ Uint8List buildPongFrame(
   return frame;
 }
 
-/// INFO request — no payload.
 Uint8List buildInfoRequest(Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID) {
   final frame = _allocFrame(0);
   final bd = ByteData.view(frame.buffer);
@@ -82,11 +69,8 @@ Uint8List buildInfoRequest(Uint8List roomUUID, Uint8List receiverUUID, Uint8List
   return frame;
 }
 
-/// INFO response — count(8B) + uuids.
 Uint8List buildInfoResponse(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
   List<Uint8List> peerUUIDs,
 ) {
   final payloadLength = 8 + peerUUIDs.length * 16;
@@ -101,32 +85,42 @@ Uint8List buildInfoResponse(
   return frame;
 }
 
-/// CHAT_REQUEST — count(8B) + uuids.
+/// CHAT_REQUEST — peer_count(8B) + peer_uuids(16B each)
+///              + chat_name_length(4B) + chat_name(UTF-8)
+///              + avatar_length(4B) + avatar_bytes (max 4KB)
 Uint8List buildChatRequest(
-  Uint8List roomUUID,
-  Uint8List masterUUID,
-  Uint8List senderUUID,
-  List<Uint8List> peerUUIDs,
-) {
-  final payloadLength = 8 + peerUUIDs.length * 16;
+  Uint8List roomUUID, Uint8List masterUUID, Uint8List senderUUID,
+  List<Uint8List> peerUUIDs, {
+  String chatName = 'Chat',
+  Uint8List? chatAvatarBytes,
+}) {
+  final avatar = chatAvatarBytes;
+
+  final nameUtf8 = utf8.encode(chatName);
+  if (nameUtf8.length > 255) throw ArgumentError('Chat name must be ≤ 255 UTF-8 bytes');
+
+  final payloadLength = 8 + peerUUIDs.length * 16 + 4 + nameUtf8.length + 4 + (avatar?.length ?? 0);
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, masterUUID, senderUUID, PacketType.chatRequest, payloadLength);
+
   int off = SgtpConstants.headerSize;
   bd.setUint64(off, peerUUIDs.length, Endian.big); off += 8;
   for (final uuid in peerUUIDs) {
     frame.setRange(off, off + 16, uuid); off += 16;
   }
+  bd.setUint32(off, nameUtf8.length, Endian.big); off += 4;
+  frame.setRange(off, off + nameUtf8.length, nameUtf8); off += nameUtf8.length;
+  bd.setUint32(off, avatar?.length ?? 0, Endian.big); off += 4;
+  if (avatar != null && avatar.isNotEmpty) {
+    frame.setRange(off, off + avatar.length, avatar);
+  }
   return frame;
 }
 
-/// CHAT_KEY — epoch(8B) + ciphertext(48B).
 Uint8List buildChatKey(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  int epoch,
-  Uint8List encryptedKey48,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
+  int epoch, Uint8List encryptedKey48,
 ) {
   const payloadLength = SgtpConstants.chatKeyPayloadLength;
   final frame = _allocFrame(payloadLength);
@@ -138,7 +132,6 @@ Uint8List buildChatKey(
   return frame;
 }
 
-/// CHAT_KEY_ACK — no payload.
 Uint8List buildChatKeyAck(Uint8List roomUUID, Uint8List masterUUID, Uint8List senderUUID) {
   final frame = _allocFrame(0);
   final bd = ByteData.view(frame.buffer);
@@ -146,13 +139,9 @@ Uint8List buildChatKeyAck(Uint8List roomUUID, Uint8List masterUUID, Uint8List se
   return frame;
 }
 
-/// MESSAGE — messageUUID(16B) + nonce(8B) + ciphertext.
 Uint8List buildMessage(
-  Uint8List roomUUID,
-  Uint8List senderUUID,
-  Uint8List messageUUID,
-  int nonce,
-  Uint8List ciphertext,
+  Uint8List roomUUID, Uint8List senderUUID, Uint8List messageUUID,
+  int nonce, Uint8List ciphertext,
 ) {
   final payloadLength = 16 + 8 + ciphertext.length;
   final frame = _allocFrame(payloadLength);
@@ -166,11 +155,8 @@ Uint8List buildMessage(
   return frame;
 }
 
-/// MESSAGE_FAILED_ACK — no payload.
 Uint8List buildMessageFailedAck(
-  Uint8List roomUUID,
-  Uint8List masterUUID,
-  Uint8List senderUUID,
+  Uint8List roomUUID, Uint8List masterUUID, Uint8List senderUUID,
 ) {
   final frame = _allocFrame(0);
   final bd = ByteData.view(frame.buffer);
@@ -178,13 +164,7 @@ Uint8List buildMessageFailedAck(
   return frame;
 }
 
-/// FIN — nonce(8B) + poly1305-tag(16B).
-Uint8List buildFin(
-  Uint8List roomUUID,
-  Uint8List senderUUID,
-  int nonce,
-  Uint8List tag16,
-) {
+Uint8List buildFin(Uint8List roomUUID, Uint8List senderUUID, int nonce, Uint8List tag16) {
   const payloadLength = SgtpConstants.finPayloadLength;
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
@@ -196,7 +176,6 @@ Uint8List buildFin(
   return frame;
 }
 
-/// HSIR — History Info Request (broadcast, no payload).
 Uint8List buildHsir(Uint8List roomUUID, Uint8List senderUUID) {
   final frame = _allocFrame(0);
   final bd = ByteData.view(frame.buffer);
@@ -204,12 +183,8 @@ Uint8List buildHsir(Uint8List roomUUID, Uint8List senderUUID) {
   return frame;
 }
 
-/// HSI — History Info reply: message_count(8B).
 Uint8List buildHsi(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  int messageCount,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID, int messageCount,
 ) {
   const payloadLength = 8;
   final frame = _allocFrame(payloadLength);
@@ -219,13 +194,8 @@ Uint8List buildHsi(
   return frame;
 }
 
-/// HSR — History Request: offset(8B) + limit(8B).
 Uint8List buildHsr(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  int offset,
-  int limit,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID, int offset, int limit,
 ) {
   const payloadLength = 16;
   final frame = _allocFrame(payloadLength);
@@ -236,53 +206,33 @@ Uint8List buildHsr(
   return frame;
 }
 
-/// HSRA — History Request Answer with a batch of MESSAGE frame blobs.
-/// [messages] is a list of raw MESSAGE frame bytes (each fully signed by the server).
 Uint8List buildHsra(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  int batchNumber,
-  List<Uint8List> messages,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
+  int batchNumber, List<Uint8List> messages,
 ) {
   final count = messages.length;
   final blobSize = messages.fold<int>(0, (s, m) => s + m.length);
-  // payload: batch_number(8) + message_count(8) + offsets(N×8) + blob(M)
   final payloadLength = 8 + 8 + count * 8 + blobSize;
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.hsra, payloadLength);
-
   int off = SgtpConstants.headerSize;
   bd.setUint64(off, batchNumber, Endian.big); off += 8;
   bd.setUint64(off, count,       Endian.big); off += 8;
-
-  // Write offset table
   var blobCursor = 0;
-  for (final m in messages) {
-    bd.setUint64(off, blobCursor, Endian.big); off += 8;
-    blobCursor += m.length;
-  }
-
-  // Write message blobs
-  for (final m in messages) {
-    frame.setRange(off, off + m.length, m); off += m.length;
-  }
+  for (final m in messages) { bd.setUint64(off, blobCursor, Endian.big); off += 8; blobCursor += m.length; }
+  for (final m in messages) { frame.setRange(off, off + m.length, m); off += m.length; }
   return frame;
 }
 
-/// HSRA end-of-stream sentinel: message_count = 0, batch_number = total sent.
 Uint8List buildHsraEos(
-  Uint8List roomUUID,
-  Uint8List receiverUUID,
-  Uint8List senderUUID,
-  int totalSent,
+  Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID, int totalSent,
 ) {
   const payloadLength = 16;
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.hsra, payloadLength);
-  bd.setUint64(SgtpConstants.headerSize,     totalSent, Endian.big); // batch_number
-  bd.setUint64(SgtpConstants.headerSize + 8, 0,         Endian.big); // message_count = 0
+  bd.setUint64(SgtpConstants.headerSize,     totalSent, Endian.big);
+  bd.setUint64(SgtpConstants.headerSize + 8, 0,         Endian.big);
   return frame;
 }

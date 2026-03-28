@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import '../constants.dart';
 
@@ -224,4 +225,37 @@ ParsedFrame? tryParseFrame(Uint8List raw) {
   if (frame == null) return null;
 
   return (frame: frame, bytesConsumed: totalExpected);
+}
+
+// Extension added: CHAT_REQUEST metadata accessors (new extended format)
+extension ParsedFrameChatRequestMeta on ParsedFrame {
+  /// Parse chat name from extended CHAT_REQUEST payload.
+  /// Returns null if the payload is old-format (no metadata section).
+  String? get chatRequestName {
+    try {
+      final count = chatRequestCount;
+      int off = 8 + count * 16; // skip count + UUIDs
+      if (off + 4 > payload.length) return null;
+      final bd = ByteData.view(payload.buffer, payload.offsetInBytes);
+      final nameLen = bd.getUint32(off, Endian.big); off += 4;
+      if (nameLen == 0 || off + nameLen > payload.length) return null;
+      return utf8.decode(payload.sublist(off, off + nameLen));
+    } catch (_) { return null; }
+  }
+
+  /// Parse avatar bytes from extended CHAT_REQUEST payload.
+  Uint8List? get chatRequestAvatar {
+    try {
+      final count = chatRequestCount;
+      int off = 8 + count * 16;
+      if (off + 4 > payload.length) return null;
+      final bd = ByteData.view(payload.buffer, payload.offsetInBytes);
+      final nameLen = bd.getUint32(off, Endian.big); off += 4;
+      off += nameLen; // skip name bytes
+      if (off + 4 > payload.length) return null;
+      final avatarLen = bd.getUint32(off, Endian.big); off += 4;
+      if (avatarLen == 0 || off + avatarLen > payload.length) return null;
+      return Uint8List.fromList(payload.sublist(off, off + avatarLen));
+    } catch (_) { return null; }
+  }
 }
