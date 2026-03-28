@@ -3,7 +3,6 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/qr_data.dart';
 
-/// Dialog for scanning QR code
 class QrScannerDialog extends StatefulWidget {
   final Function(QrShareData) onQrScanned;
 
@@ -18,7 +17,8 @@ class QrScannerDialog extends StatefulWidget {
 
 class _QrScannerDialogState extends State<QrScannerDialog> {
   late MobileScannerController _controller;
-  bool _hasPermission = true;
+  // Guard against onDetect firing multiple times for the same QR frame
+  bool _handled = false;
 
   @override
   void initState() {
@@ -32,81 +32,51 @@ class _QrScannerDialogState extends State<QrScannerDialog> {
     super.dispose();
   }
 
+  void _onDetect(BarcodeCapture capture) {
+    if (_handled) return; // already processed — ignore repeated fires
+    final value = capture.barcodes.firstOrNull?.rawValue;
+    if (value == null) return;
+
+    final data = QrShareData.fromBase64(value);
+    if (data != null) {
+      _handled = true;
+      _controller.stop(); // stop camera immediately so onDetect stops firing
+      widget.onQrScanned(data);
+      Navigator.pop(context);
+    } else {
+      // Show error but don't set _handled — let user try again
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Invalid QR code format'),
+        backgroundColor: Theme.of(context).colorScheme.error,
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Scaffold(
       body: Stack(
         children: [
           MobileScanner(
             controller: _controller,
-            onDetect: (capture) {
-              final List<Barcode> barcodes = capture.barcodes;
-              if (barcodes.isNotEmpty) {
-                final barcode = barcodes.first;
-                final value = barcode.rawValue;
-                
-                if (value != null) {
-                  print('📱 [QR] Scanned: $value');
-                  final data = QrShareData.fromBase64(value);
-                  
-                  if (data != null) {
-                    print('✅ [QR] Decoded successfully');
-                    widget.onQrScanned(data);
-                    Navigator.pop(context);
-                  } else {
-                    print('❌ [QR] Failed to decode');
-                    _showError('Invalid QR code format');
-                  }
-                }
-              }
-            },
-            errorBuilder: (context, error, child) {
-              if (!_hasPermission) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.camera_alt_outlined,
-                          size: 64, color: theme.colorScheme.error),
-                      const SizedBox(height: 16),
-                      Text('Camera permission required',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: theme.colorScheme.error,
-                          )),
-                      const SizedBox(height: 24),
-                      FilledButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                        },
-                        child: const Text('Close'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.error_outline,
-                        size: 64, color: theme.colorScheme.error),
-                    const SizedBox(height: 16),
-                    Text('Scanner error',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: theme.colorScheme.error,
-                        )),
-                    const SizedBox(height: 8),
-                    Text(error.errorCode.toString(),
-                        style: theme.textTheme.bodySmall),
-                  ],
-                ),
-              );
-            },
+            onDetect: _onDetect,
+            errorBuilder: (context, error, child) => Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
+                  const SizedBox(height: 16),
+                  Text('Scanner error',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                          color: theme.colorScheme.error)),
+                  const SizedBox(height: 8),
+                  Text(error.errorCode.toString(),
+                      style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ),
           ),
-          // Close button
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
             right: 8,
@@ -115,11 +85,8 @@ class _QrScannerDialogState extends State<QrScannerDialog> {
               onPressed: () => Navigator.pop(context),
             ),
           ),
-          // Info text
           Positioned(
-            bottom: 32,
-            left: 24,
-            right: 24,
+            bottom: 32, left: 24, right: 24,
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -128,29 +95,15 @@ class _QrScannerDialogState extends State<QrScannerDialog> {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline,
-                      color: theme.colorScheme.onSurface, size: 20),
+                  Icon(Icons.info_outline, color: theme.colorScheme.onSurface, size: 20),
                   const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Point camera at QR code',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ),
+                  Expanded(child: Text('Point camera at QR code',
+                      style: theme.textTheme.bodySmall)),
                 ],
               ),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Theme.of(context).colorScheme.error,
       ),
     );
   }

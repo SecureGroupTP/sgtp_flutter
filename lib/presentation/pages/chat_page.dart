@@ -9,7 +9,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';

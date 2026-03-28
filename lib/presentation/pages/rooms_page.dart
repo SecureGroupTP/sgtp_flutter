@@ -366,9 +366,10 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   }
 
   void _handleQrScanned(QrShareData data) {
+    // QrScannerDialog already popped itself — just join and close the sheet.
     if (data.type == 'room' && data.roomUUID != null) {
       widget.roomsBloc.add(RoomsJoinRoom(data.roomUUID!));
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(); // close the add-room bottom sheet
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid room QR code')),

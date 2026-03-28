@@ -17,6 +17,9 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: amd64
+          - os: macos-latest
+            platform: macos
+            arch: universal
           - os: ubuntu-latest
             platform: android
             arch: universal
@@ -64,6 +67,10 @@ jobs:
         if: matrix.platform == 'linux'
         run: flutter build linux --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
 
+      - name: Build (macOS)
+        if: matrix.platform == 'macos'
+        run: flutter build macos --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+
       - name: Build (Android)
         if: matrix.platform == 'android'
         run: flutter build apk --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
@@ -81,6 +88,13 @@ jobs:
         run: |
           cd build/linux/*/release/bundle
           zip -r "$GITHUB_WORKSPACE/sgtp-client-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}.zip" .
+
+      - name: Package (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -r "$GITHUB_WORKSPACE/sgtp-client-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.zip" *.app
 
       - name: Package (Android)
         if: matrix.platform == 'android'
