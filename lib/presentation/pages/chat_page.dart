@@ -30,7 +30,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   InputDevice? _selectedDevice;
 
   // Keep a local reference for the lifecycle observer
-  late ChatBloc _chatBloc;
+  ChatBloc? _chatBloc;
 
   // Allowed video extensions — guards against PDF/doc being sent as video
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
@@ -39,9 +39,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _chatBloc = context.read<ChatBloc>();
-    });
     _loadInputDevices();
   }
 
@@ -58,7 +55,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState appState) {
     if (appState == AppLifecycleState.detached) {
-      _chatBloc.add(const ChatDisconnect());
+      _chatBloc?.add(const ChatDisconnect());
     }
   }
 
@@ -273,6 +270,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return BlocConsumer<ChatBloc, ChatState>(
       listener: (context, state) {
+        // Capture the bloc reference for lifecycle observer
+        _chatBloc ??= context.read<ChatBloc>();
+
         if (state.messages.isNotEmpty) _scrollToBottom();
 
         if (state.status == ChatStatus.ready && !_infoShown) {
@@ -280,9 +280,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           _showRoomInfo(context, state);
         }
 
-        // When disconnected, pop back to SetupPage
+        // Use pop() not maybePop() — maybePop() respects PopScope.canPop:false
+        // and won't pop, causing the page to get stuck after disconnect.
         if (state.status == ChatStatus.disconnected) {
-          Navigator.of(context).maybePop();
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
         }
       },
       builder: (context, state) {

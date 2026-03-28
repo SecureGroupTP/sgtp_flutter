@@ -19,8 +19,23 @@ import '../domain/entities/message.dart';
 import '../domain/entities/peer.dart';
 
 // ---------------------------------------------------------------------------
-// Internal: pending chunked file reassembly
+// Internal types
 // ---------------------------------------------------------------------------
+
+class _HistoryRecord {
+  final Uint8List senderUUID;
+  final Uint8List messageUUID;
+  final int timestamp;
+  final int nonce;
+  final Uint8List plaintext;
+  const _HistoryRecord({
+    required this.senderUUID,
+    required this.messageUUID,
+    required this.timestamp,
+    required this.nonce,
+    required this.plaintext,
+  });
+}
 
 class _PendingFile {
   final String fileId;
@@ -29,26 +44,19 @@ class _PendingFile {
   final int totalSize;
   final int totalChunks;
   final String senderUUID;
-  final String mediaType; // 'image', 'gif', 'video', 'voice'
+  final String mediaType;
   final List<Uint8List?> chunks;
 
   _PendingFile({
-    required this.fileId,
-    required this.name,
-    required this.mime,
-    required this.totalSize,
-    required this.totalChunks,
-    required this.senderUUID,
-    required this.mediaType,
+    required this.fileId, required this.name, required this.mime,
+    required this.totalSize, required this.totalChunks,
+    required this.senderUUID, required this.mediaType,
   }) : chunks = List.filled(totalChunks, null);
 
   bool get isComplete => chunks.every((c) => c != null);
-
   Uint8List assemble() {
     final buf = BytesBuilder();
-    for (final c in chunks) {
-      buf.add(c!);
-    }
+    for (final c in chunks) buf.add(c!);
     return buf.takeBytes();
   }
 }
@@ -58,17 +66,14 @@ class _PendingFile {
 // ---------------------------------------------------------------------------
 
 class SgtpConfig {
-  final String serverAddr; // "host:port"
-  final Uint8List roomUUID; // 16 bytes, all zeros = create new
-  final SimpleKeyPairData identityKeyPair; // Ed25519
-  final Uint8List myPublicKey; // 32 bytes Ed25519 pub
-  final Set<String> whitelist; // hex strings of trusted ed25519 pub keys
-
+  final String serverAddr;
+  final Uint8List roomUUID;
+  final SimpleKeyPairData identityKeyPair;
+  final Uint8List myPublicKey;
+  final Set<String> whitelist;
   const SgtpConfig({
-    required this.serverAddr,
-    required this.roomUUID,
-    required this.identityKeyPair,
-    required this.myPublicKey,
+    required this.serverAddr, required this.roomUUID,
+    required this.identityKeyPair, required this.myPublicKey,
     required this.whitelist,
   });
 }
@@ -78,51 +83,37 @@ class SgtpConfig {
 // ---------------------------------------------------------------------------
 
 sealed class SgtpEvent {}
-
-class SgtpConnecting extends SgtpEvent {}
-
+class SgtpConnecting  extends SgtpEvent {}
 class SgtpHandshaking extends SgtpEvent {}
-
 class SgtpReady extends SgtpEvent {
   final bool isMaster;
   final String roomUUIDHex;
   SgtpReady({required this.isMaster, required this.roomUUIDHex});
 }
-
 class SgtpMessageReceived extends SgtpEvent {
   final ChatMessage message;
   SgtpMessageReceived({required this.message});
 }
-
 class SgtpPeerJoined extends SgtpEvent {
   final String peerUUID;
-  /// Ed25519 long-term public key hex — used for nickname lookup in the whitelist.
   final String ed25519PubHex;
   SgtpPeerJoined({required this.peerUUID, required this.ed25519PubHex});
 }
-
 class SgtpPeerLeft extends SgtpEvent {
   final String peerUUID;
   SgtpPeerLeft({required this.peerUUID});
 }
-
 class SgtpError extends SgtpEvent {
   final String error;
   SgtpError({required this.error});
 }
-
 class SgtpDisconnected extends SgtpEvent {}
 
 // ---------------------------------------------------------------------------
-// Client state machine states
+// Client state
 // ---------------------------------------------------------------------------
 
-enum _ClientState {
-  disconnected,
-  connecting,
-  waitingHandshake,
-  ready,
-}
+enum _ClientState { disconnected, connecting, waitingHandshake, ready }
 
 // ---------------------------------------------------------------------------
 // SgtpClient
@@ -130,62 +121,52 @@ enum _ClientState {
 
 class SgtpClient {
   final SgtpConfig _config;
-
-  // My identity
   final Uint8List _myUUID;
   late final Uint8List _roomUUID;
 
-  // Events stream
   final _eventController = StreamController<SgtpEvent>.broadcast();
   Stream<SgtpEvent> get events => _eventController.stream;
 
-  // TCP socket
   Socket? _socket;
   final List<int> _receiveBuffer = [];
-
-  // State
   _ClientState _state = _ClientState.disconnected;
 
-  // Peers: keyed by hex UUID
   final Map<String, PeerInfo> _peers = {};
-
-  // Ephemeral X25519 key pair (generated fresh for each session)
   SimpleKeyPair? _ephemeralX25519;
-  Uint8List? _ephemeralX25519Pub;
+  Uint8List?     _ephemeralX25519Pub;
 
-  // Chat key
   Uint8List? _chatKey;
   int _chatEpoch = 0;
-  int _myNonce = 0;
+  int _myNonce   = 0;
 
-  // Pending media chunks: file_id → _PendingFile
   final Map<String, _PendingFile> _pendingFiles = {};
 
-  // Master state
-  bool _isMaster = false;
+  bool   _isMaster         = false;
   Timer? _ckRotationTimer;
-
-  // INFO delay timer — only started once per session
-  bool _infoTimerStarted = false;
-
-  // Set of UUIDs we know about but haven't handshaked yet
+  bool   _infoTimerStarted  = false;
   final Set<String> _pendingHandshakes = {};
+  bool   _chatRequestSent   = false;
+  bool   _readyEmitted       = false;
 
-  // Whether we have sent CHAT_REQUEST
-  bool _chatRequestSent = false;
+  // History
+  final List<_HistoryRecord> _historyStore = [];
+  bool _historyRequested = false;
+  final Map<String, int> _hsiReplies = {};
+  Timer? _hsiTimer;
 
-  // Whether we have received CHAT_KEY (ready)
-  bool _readyEmitted = false;
+  // High bit to distinguish history re-encrypted nonces from live ones
+  static const int _histNonceBit = 1 << 62;
 
   SgtpClient(SgtpConfig config)
       : _config = config,
         _myUUID = generateUUIDv7() {
-    final isZero = config.roomUUID.every((b) => b == 0);
-    _roomUUID = isZero ? generateUUIDv7() : Uint8List.fromList(config.roomUUID);
+    _roomUUID = config.roomUUID.every((b) => b == 0)
+        ? generateUUIDv7()
+        : Uint8List.fromList(config.roomUUID);
   }
 
-  bool get isMaster => _isMaster;
-  String get myUUIDHex => uuidBytesToHex(_myUUID);
+  bool get isMaster    => _isMaster;
+  String get myUUIDHex   => uuidBytesToHex(_myUUID);
   String get roomUUIDHex => uuidBytesToHex(_roomUUID);
   List<String> get peerUUIDs => _peers.keys.toList();
 
@@ -197,109 +178,68 @@ class SgtpClient {
     if (_state != _ClientState.disconnected) return;
     _state = _ClientState.connecting;
     _eventController.add(SgtpConnecting());
-    debugPrint('[SGTP] connect() myUUID=$myUUIDHex room=$roomUUIDHex');
-
     try {
-      _ephemeralX25519 = await generateEphemeralKeyPair();
+      _ephemeralX25519    = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
-
       final parts = _config.serverAddr.split(':');
-      final host = parts[0];
-      final port = int.parse(parts.last);
-
-      debugPrint('[SGTP] connecting to $host:$port');
-      _socket = await Socket.connect(host, port);
-      _state = _ClientState.waitingHandshake;
+      _socket = await Socket.connect(parts[0], int.parse(parts.last));
+      _state  = _ClientState.waitingHandshake;
       _eventController.add(SgtpHandshaking());
-
-      _socket!.listen(
-        _onData,
-        onError: _onSocketError,
-        onDone: _onSocketDone,
-        cancelOnError: false,
-      );
-
+      _socket!.listen(_onData,
+          onError: _onSocketError, onDone: _onSocketDone, cancelOnError: false);
       await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
-      debugPrint('[SGTP] INTENT sent');
     } catch (e) {
       _state = _ClientState.disconnected;
-      debugPrint('[SGTP] connect failed: $e');
       _eventController.add(SgtpError(error: 'Connection failed: $e'));
     }
   }
 
   Future<void> sendMessage(String text) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
-
-    final payload = json.encode({'v': 1, 'type': 'text', 'text': text});
+    final msgUUID   = generateUUIDv7();
+    final nonce     = _myNonce++;
+    final plaintext = Uint8List.fromList(
+        utf8.encode(json.encode({'v': 1, 'type': 'text', 'text': text})));
     try {
-      final msgUUID = generateUUIDv7();
-      final nonce = _myNonce++;
-      final plaintext = Uint8List.fromList(utf8.encode(payload));
-      final ciphertext = await encrypt(plaintext, _chatKey!, nonce);
-
-      final frame = buildMessage(_roomUUID, _myUUID, msgUUID, nonce, ciphertext);
-      await _sendFrame(frame);
-
-      _eventController.add(SgtpMessageReceived(
-        message: ChatMessage(
-          id: uuidBytesToHex(msgUUID),
-          senderUUID: uuidBytesToHex(_myUUID),
-          content: text,
-          receivedAt: DateTime.now(),
-          isFromHistory: false,
-          isFromMe: true,
-        ),
+      final cipher = await encrypt(plaintext, _chatKey!, nonce);
+      await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+      _historyStore.add(_HistoryRecord(
+        senderUUID: _myUUID, messageUUID: msgUUID,
+        timestamp: DateTime.now().millisecondsSinceEpoch, nonce: nonce,
+        plaintext: plaintext,
       ));
+      _eventController.add(SgtpMessageReceived(message: ChatMessage(
+        id: uuidBytesToHex(msgUUID), senderUUID: uuidBytesToHex(_myUUID),
+        content: text, receivedAt: DateTime.now(), isFromHistory: false, isFromMe: true,
+      )));
     } catch (e) {
       _eventController.add(SgtpError(error: 'Failed to send message: $e'));
     }
   }
 
-  /// Send a media file (image, gif, video, voice) as one or more MESSAGE frames.
   Future<void> _sendMedia(
-    Uint8List bytes,
-    String name,
-    String mime,
-    String mediaType, {
-    ChatMessage? echoMessage,
-  }) async {
+    Uint8List bytes, String name, String mime, String mediaType,
+    {ChatMessage? echoMessage}) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
-
-    const chunkSize = SgtpConstants.mediaChunkSize;
-    final fileId = uuidBytesToHex(generateUUIDv7());
-    final totalSize = bytes.length;
-    final totalChunks = (totalSize / chunkSize).ceil().clamp(1, 9999);
-
+    const chunkSize   = SgtpConstants.mediaChunkSize;
+    final fileId      = uuidBytesToHex(generateUUIDv7());
+    final totalChunks = (bytes.length / chunkSize).ceil().clamp(1, 9999);
     try {
       for (int i = 0; i < totalChunks; i++) {
         final start = i * chunkSize;
-        final end = (start + chunkSize).clamp(0, totalSize);
-        final chunkData = bytes.sublist(start, end);
-        final b64 = base64.encode(chunkData);
-
+        final end   = (start + chunkSize).clamp(0, bytes.length);
         final Map<String, dynamic> payload = {
-          'v': 1,
-          'type': mediaType,
-          'file_id': fileId,
-          'name': name,
-          'mime': mime,
-          'size': totalSize,
-          'data': b64,
+          'v': 1, 'type': mediaType, 'file_id': fileId,
+          'name': name, 'mime': mime, 'size': bytes.length,
+          'data': base64.encode(bytes.sublist(start, end)),
         };
-        if (totalChunks > 1) {
-          payload['chunk'] = i;
-          payload['chunks'] = totalChunks;
-        }
-
+        if (totalChunks > 1) { payload['chunk'] = i; payload['chunks'] = totalChunks; }
         final msgUUID = generateUUIDv7();
-        final nonce = _myNonce++;
-        final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
-        final ciphertext = await encrypt(plaintext, _chatKey!, nonce);
-        final frame = buildMessage(_roomUUID, _myUUID, msgUUID, nonce, ciphertext);
-        await _sendFrame(frame);
+        final nonce   = _myNonce++;
+        final plain   = Uint8List.fromList(utf8.encode(json.encode(payload)));
+        final cipher  = await encrypt(plain, _chatKey!, nonce);
+        await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
       }
-
       if (echoMessage != null) {
         _eventController.add(SgtpMessageReceived(message: echoMessage));
       }
@@ -308,85 +248,51 @@ class SgtpClient {
     }
   }
 
-  Future<void> sendImage(Uint8List bytes, String name, String mime) async {
-    final isGif = mime == 'image/gif';
-    final type = isGif ? 'gif' : 'image';
-    final msgType = isGif ? MessageType.gif : MessageType.image;
-    await _sendMedia(bytes, name, mime, type,
+  Future<void> sendImage(Uint8List bytes, String name, String mime) =>
+      _sendMedia(bytes, name, mime, mime == 'image/gif' ? 'gif' : 'image',
+          echoMessage: ChatMessage(
+            id: uuidBytesToHex(generateUUIDv7()), senderUUID: uuidBytesToHex(_myUUID),
+            content: name, imageBytes: bytes, mediaMime: mime, mediaName: name,
+            type: mime == 'image/gif' ? MessageType.gif : MessageType.image,
+            receivedAt: DateTime.now(), isFromHistory: false, isFromMe: true));
+
+  Future<void> sendVideo(Uint8List bytes, String name, String mime) =>
+      _sendMedia(bytes, name, mime, 'video',
+          echoMessage: ChatMessage(
+            id: uuidBytesToHex(generateUUIDv7()), senderUUID: uuidBytesToHex(_myUUID),
+            content: name, videoBytes: bytes, mediaMime: mime, mediaName: name,
+            type: MessageType.video, receivedAt: DateTime.now(),
+            isFromHistory: false, isFromMe: true));
+
+  Future<void> sendVoice(Uint8List bytes, String mime) {
+    final name = 'voice_${DateTime.now().millisecondsSinceEpoch}.${_ext(mime)}';
+    return _sendMedia(bytes, name, mime, 'voice',
         echoMessage: ChatMessage(
-          id: uuidBytesToHex(generateUUIDv7()),
-          senderUUID: uuidBytesToHex(_myUUID),
-          content: name,
-          imageBytes: bytes,
-          mediaMime: mime,
-          mediaName: name,
-          type: msgType,
-          receivedAt: DateTime.now(),
-          isFromHistory: false,
-          isFromMe: true,
-        ));
+          id: uuidBytesToHex(generateUUIDv7()), senderUUID: uuidBytesToHex(_myUUID),
+          content: name, audioBytes: bytes, mediaMime: mime, mediaName: name,
+          type: MessageType.voice, receivedAt: DateTime.now(),
+          isFromHistory: false, isFromMe: true));
   }
 
-  Future<void> sendVideo(Uint8List bytes, String name, String mime) async {
-    await _sendMedia(bytes, name, mime, 'video',
-        echoMessage: ChatMessage(
-          id: uuidBytesToHex(generateUUIDv7()),
-          senderUUID: uuidBytesToHex(_myUUID),
-          content: name,
-          videoBytes: bytes,
-          mediaMime: mime,
-          mediaName: name,
-          type: MessageType.video,
-          receivedAt: DateTime.now(),
-          isFromHistory: false,
-          isFromMe: true,
-        ));
-  }
-
-  Future<void> sendVoice(Uint8List bytes, String mime) async {
-    final name = 'voice_${DateTime.now().millisecondsSinceEpoch}.${_mimeToExt(mime)}';
-    await _sendMedia(bytes, name, mime, 'voice',
-        echoMessage: ChatMessage(
-          id: uuidBytesToHex(generateUUIDv7()),
-          senderUUID: uuidBytesToHex(_myUUID),
-          content: name,
-          audioBytes: bytes,
-          mediaMime: mime,
-          mediaName: name,
-          type: MessageType.voice,
-          receivedAt: DateTime.now(),
-          isFromHistory: false,
-          isFromMe: true,
-        ));
-  }
-
-  String _mimeToExt(String mime) {
-    return switch (mime) {
-      'audio/m4a'  => 'm4a',
-      'audio/aac'  => 'aac',
-      'audio/opus' => 'opus',
-      'audio/mpeg' => 'mp3',
-      _            => 'audio',
-    };
-  }
+  String _ext(String mime) => switch (mime) {
+    'audio/m4a' => 'm4a', 'audio/aac' => 'aac',
+    'audio/opus' => 'opus', 'audio/mpeg' => 'mp3', _ => 'audio',
+  };
 
   Future<void> disconnect() async {
     if (_state == _ClientState.disconnected) return;
-
     try {
       if (_chatKey != null) {
         final nonce = _myNonce++;
-        final tag = await encrypt(Uint8List(0), _chatKey!, nonce);
-        final frame = buildFin(_roomUUID, _myUUID, nonce, tag.sublist(0, 16));
-        await _sendFrame(frame);
+        final tag   = await encrypt(Uint8List(0), _chatKey!, nonce);
+        await _sendFrame(buildFin(_roomUUID, _myUUID, nonce, tag.sublist(0, 16)));
       }
     } catch (_) {}
-
     await _cleanup();
   }
 
   // ---------------------------------------------------------------------------
-  // Internal: socket callbacks
+  // Socket
   // ---------------------------------------------------------------------------
 
   void _onData(List<int> data) {
@@ -394,14 +300,12 @@ class SgtpClient {
     _processBuffer();
   }
 
-  void _onSocketError(Object error) {
-    debugPrint('[SGTP] socket error: $error');
-    _eventController.add(SgtpError(error: 'Socket error: $error'));
+  void _onSocketError(Object e) {
+    _eventController.add(SgtpError(error: 'Socket error: $e'));
     _cleanup();
   }
 
   void _onSocketDone() {
-    debugPrint('[SGTP] socket closed');
     if (_state != _ClientState.disconnected) {
       _cleanup();
       _eventController.add(SgtpDisconnected());
@@ -410,678 +314,500 @@ class SgtpClient {
 
   void _processBuffer() {
     while (true) {
-      final result = tryExtractFrame(_receiveBuffer);
-      if (result == null) break;
-      _receiveBuffer.removeRange(0, result.bytesConsumed);
-      _handleFrame(result.frame);
+      final r = tryExtractFrame(_receiveBuffer);
+      if (r == null) break;
+      _receiveBuffer.removeRange(0, r.bytesConsumed);
+      _handleFrame(r.frame);
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Internal: frame dispatch
+  // Dispatch
   // ---------------------------------------------------------------------------
 
   void _handleFrame(ParsedFrame frame) async {
-    try {
-      await _dispatchFrame(frame);
-    } catch (e) {
-      debugPrint('[SGTP] frame handling error: $e');
+    try { await _dispatch(frame); } catch (e) {
+      debugPrint('[SGTP] frame error: $e');
     }
   }
 
-  bool _validateTimestamp(int timestamp) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final diff = (now - timestamp).abs();
-    if (diff > SgtpConstants.timestampWindow) {
-      debugPrint('[SGTP] timestamp rejected: diff=${diff}ms');
-      return false;
-    }
-    return true;
-  }
+  bool _tsOk(int ts) =>
+      (DateTime.now().millisecondsSinceEpoch - ts).abs() <= SgtpConstants.timestampWindow;
 
-  Future<void> _dispatchFrame(ParsedFrame frame) async {
-    if (!_validateTimestamp(frame.timestamp)) return;
-
-    final pktHex = frame.packetType.toRadixString(16).padLeft(4, '0');
-    debugPrint('[SGTP] RX pkt=0x$pktHex from=${uuidBytesToHex(frame.senderUUID)}');
-
+  Future<void> _dispatch(ParsedFrame frame) async {
+    if (!_tsOk(frame.timestamp)) return;
     switch (frame.packetType) {
-      case PacketType.intent:
-        await _handleIntent(frame);
-      case PacketType.ping:
-        await _handlePing(frame);
-      case PacketType.pong:
-        await _handlePong(frame);
+      case PacketType.intent:      await _onIntent(frame);
+      case PacketType.ping:        await _onPing(frame);
+      case PacketType.pong:        await _onPong(frame);
       case PacketType.info:
-        if (frame.payloadLength == 0) {
-          await _handleInfoRequest(frame);
-        } else {
-          await _handleInfoResponse(frame);
-        }
-      case PacketType.chatRequest:
-        if (_isMaster) await _handleChatRequest(frame);
-      case PacketType.chatKey:
-        await _handleChatKey(frame);
-      case PacketType.chatKeyAck:
-        debugPrint('[SGTP] CHAT_KEY_ACK from ${uuidBytesToHex(frame.senderUUID)}');
-      case PacketType.message:
-        await _handleMessage(frame);
-      case PacketType.messageFailed:
-        await _handleMessageFailed(frame);
-      case PacketType.status:
-        await _handleStatus(frame);
-      case PacketType.fin:
-        await _handleFin(frame);
-      case PacketType.kicked:
-        _handleKicked(frame);
-      case PacketType.hsir:
-      case PacketType.hsi:
-      case PacketType.hsr:
-      case PacketType.hsra:
-        debugPrint('[SGTP] history packet 0x$pktHex — not handled yet');
-      default:
-        debugPrint('[SGTP] unknown packet type 0x$pktHex');
+        if (frame.payloadLength == 0) await _onInfoReq(frame);
+        else                          await _onInfoResp(frame);
+      case PacketType.chatRequest: if (_isMaster) await _onChatRequest(frame);
+      case PacketType.chatKey:     await _onChatKey(frame);
+      case PacketType.chatKeyAck:  break;
+      case PacketType.message:     await _onMessage(frame);
+      case PacketType.messageFailed: await _onMsgFailed(frame);
+      case PacketType.status:      await _onStatus(frame);
+      case PacketType.fin:         await _onFin(frame);
+      case PacketType.kicked:      _onKicked(frame);
+      case PacketType.hsir:        await _onHsir(frame);
+      case PacketType.hsi:         _onHsi(frame);
+      case PacketType.hsr:         await _onHsr(frame);
+      case PacketType.hsra:        await _onHsra(frame);
+      default: break;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Internal: protocol handlers
+  // Handshake
   // ---------------------------------------------------------------------------
 
-  Future<void> _handleIntent(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    if (senderHex == myUUIDHex) return;
-    debugPrint('[SGTP] INTENT from $senderHex → sending PING');
-    await _sendPing(frame.senderUUID);
+  Future<void> _onIntent(ParsedFrame f) async {
+    final h = uuidBytesToHex(f.senderUUID);
+    if (h == myUUIDHex) return;
+    await _sendPing(f.senderUUID);
   }
 
-  Future<void> _handlePing(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    if (senderHex == myUUIDHex) return;
-
-    if (frame.payloadLength < SgtpConstants.pingPayloadMinLength) {
-      debugPrint('[SGTP] PING payload too short, dropping');
-      return;
-    }
-
-    final ed25519Pub = frame.ed25519PubKey;
-    final ed25519Hex = _bytesToHex(ed25519Pub);
-    if (!_config.whitelist.contains(ed25519Hex)) {
-      debugPrint('[SGTP] PING from unlisted peer → dropping');
-      return;
-    }
-
-    if (!await verifyFrame(frame.raw, ed25519Pub)) {
-      debugPrint('[SGTP] PING signature invalid → dropping');
-      return;
-    }
-
-    if (frame.payloadLength >= SgtpConstants.pingPayloadLength) {
-      final body = ascii.decode(frame.payload.sublist(64, 76), allowInvalid: true);
-      if (body != SgtpConstants.clientHello) {
-        debugPrint('[SGTP] PING body mismatch: "$body", dropping');
-        return;
-      }
-    }
-
-    final sharedSecret = await computeSharedSecret(_ephemeralX25519!, frame.x25519PubKey);
-
-    final existingPeer = _peers[senderHex];
-    _peers[senderHex] = PeerInfo(
-      uuid: senderHex,
-      uuidBytes: Uint8List.fromList(frame.senderUUID),
-      ed25519PubKey: ed25519Pub,
-      sharedKey: sharedSecret,
-      handshakeComplete: existingPeer?.handshakeComplete ?? false,
-    );
-
-    await _sendPong(frame.senderUUID);
-    _scheduleInfoIfNeeded();
-
+  Future<void> _onPing(ParsedFrame f) async {
+    final h = uuidBytesToHex(f.senderUUID);
+    if (h == myUUIDHex) return;
+    if (f.payloadLength < SgtpConstants.pingPayloadMinLength) return;
+    final ed  = f.ed25519PubKey;
+    final edH = _hex(ed);
+    if (!_config.whitelist.contains(edH)) return;
+    if (!await verifyFrame(f.raw, ed)) return;
+    if (f.payloadLength >= SgtpConstants.pingPayloadLength &&
+        ascii.decode(f.payload.sublist(64, 76), allowInvalid: true) != SgtpConstants.clientHello) return;
+    final ss   = await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
+    final prev = _peers[h];
+    _peers[h]  = PeerInfo(uuid: h, uuidBytes: Uint8List.fromList(f.senderUUID),
+        ed25519PubKey: ed, sharedKey: ss, handshakeComplete: prev?.handshakeComplete ?? false);
+    await _sendPong(f.senderUUID);
+    _scheduleInfo();
     if (!_eventController.isClosed) {
-      _eventController.add(SgtpPeerJoined(
-        peerUUID: senderHex,
-        ed25519PubHex: ed25519Hex,
-      ));
+      _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
   }
 
-  Future<void> _handlePong(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    if (senderHex == myUUIDHex) return;
-
-    if (frame.payloadLength < SgtpConstants.pingPayloadMinLength) {
-      debugPrint('[SGTP] PONG payload too short, dropping');
-      return;
+  Future<void> _onPong(ParsedFrame f) async {
+    final h = uuidBytesToHex(f.senderUUID);
+    if (h == myUUIDHex) return;
+    if (f.payloadLength < SgtpConstants.pingPayloadMinLength) return;
+    final ed  = f.ed25519PubKey;
+    final edH = _hex(ed);
+    if (!_config.whitelist.contains(edH)) return;
+    if (!await verifyFrame(f.raw, ed)) return;
+    if (f.payloadLength >= SgtpConstants.pingPayloadLength &&
+        ascii.decode(f.payload.sublist(64, 76), allowInvalid: true) != SgtpConstants.clientHello) return;
+    final ss   = await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
+    final prev = _peers[h];
+    _peers[h]  = PeerInfo(uuid: h, uuidBytes: Uint8List.fromList(f.senderUUID),
+        ed25519PubKey: ed, sharedKey: ss, handshakeComplete: true);
+    _pendingHandshakes.remove(h);
+    if (!_eventController.isClosed && prev?.handshakeComplete != true) {
+      _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
-
-    final ed25519Pub = frame.ed25519PubKey;
-    final ed25519Hex = _bytesToHex(ed25519Pub);
-    if (!_config.whitelist.contains(ed25519Hex)) {
-      debugPrint('[SGTP] PONG from unlisted peer → dropping');
-      return;
-    }
-
-    if (!await verifyFrame(frame.raw, ed25519Pub)) {
-      debugPrint('[SGTP] PONG signature invalid → dropping');
-      return;
-    }
-
-    if (frame.payloadLength >= SgtpConstants.pingPayloadLength) {
-      final body = ascii.decode(frame.payload.sublist(64, 76), allowInvalid: true);
-      if (body != SgtpConstants.clientHello) {
-        debugPrint('[SGTP] PONG body mismatch: "$body", dropping');
-        return;
-      }
-    }
-
-    final sharedSecret = await computeSharedSecret(_ephemeralX25519!, frame.x25519PubKey);
-
-    final existingPeer = _peers[senderHex];
-    _peers[senderHex] = PeerInfo(
-      uuid: senderHex,
-      uuidBytes: Uint8List.fromList(frame.senderUUID),
-      ed25519PubKey: ed25519Pub,
-      sharedKey: sharedSecret,
-      handshakeComplete: true,
-    );
-
-    _pendingHandshakes.remove(senderHex);
-    debugPrint('[SGTP] PONG: peer $senderHex handshakeComplete=true');
-
-    if (!_eventController.isClosed && existingPeer?.handshakeComplete != true) {
-      _eventController.add(SgtpPeerJoined(
-        peerUUID: senderHex,
-        ed25519PubHex: ed25519Hex,
-      ));
-    }
-
-    _scheduleInfoIfNeeded();
-    await _checkAndSendChatRequest();
+    _scheduleInfo();
+    await _checkChatReq();
   }
 
-  void _scheduleInfoIfNeeded() {
+  void _scheduleInfo() {
     if (_infoTimerStarted) return;
     _infoTimerStarted = true;
-    debugPrint('[SGTP] scheduling INFO request in ${SgtpConstants.infoDelayMs}ms');
-
     Future.delayed(Duration(milliseconds: SgtpConstants.infoDelayMs), () async {
       if (_state == _ClientState.disconnected) return;
-      _updateMasterStatus();
-      if (_isMaster) {
-        debugPrint('[SGTP] INFO timer: we are master, no INFO needed');
-        await _checkAndSendChatRequest();
-        return;
-      }
-      debugPrint('[SGTP] INFO timer fired → sending INFO request');
-      await _sendInfoRequest();
+      _updateMaster();
+      if (_isMaster) { await _checkChatReq(); return; }
+      final m = _masterPeer();
+      if (m == null) return;
+      await _sendFrame(buildInfoRequest(_roomUUID, m, _myUUID));
     });
   }
 
-  Future<void> _sendInfoRequest() async {
-    final master = _getMasterPeerUUID();
-    if (master == null) return;
-    debugPrint('[SGTP] sending INFO request to ${uuidBytesToHex(master)}');
-    final frame = buildInfoRequest(_roomUUID, master, _myUUID);
-    await _sendFrame(frame);
+  Future<void> _onInfoReq(ParsedFrame f) async {
+    final peers = _peers.values.map((p) => p.uuidBytes).toList()..add(_myUUID);
+    await _sendFrame(buildInfoResponse(_roomUUID, f.senderUUID, _myUUID, peers));
   }
 
-  Future<void> _handleInfoRequest(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    final peerUUIDs = _peers.values.map((p) => p.uuidBytes).toList();
-    peerUUIDs.add(_myUUID);
-    debugPrint('[SGTP] INFO request from $senderHex → responding with ${peerUUIDs.length} UUIDs');
-    final responseFrame = buildInfoResponse(_roomUUID, frame.senderUUID, _myUUID, peerUUIDs);
-    await _sendFrame(responseFrame);
-  }
-
-  Future<void> _handleInfoResponse(ParsedFrame frame) async {
-    final uuids = frame.infoUUIDs;
-    final myHex = myUUIDHex;
-    debugPrint('[SGTP] INFO response: ${uuids.length} UUIDs received');
-
-    bool pingedAny = false;
-    for (final uuid in uuids) {
-      final uuidHex = uuidBytesToHex(uuid);
-      if (uuidHex == myHex) continue;
-      if (_peers.containsKey(uuidHex)) continue;
-
-      debugPrint('[SGTP] INFO response: unknown peer $uuidHex → PING');
-      _pendingHandshakes.add(uuidHex);
-      await _sendPing(uuid);
-      pingedAny = true;
+  Future<void> _onInfoResp(ParsedFrame f) async {
+    bool any = false;
+    for (final u in f.infoUUIDs) {
+      final h = uuidBytesToHex(u);
+      if (h == myUUIDHex || _peers.containsKey(h)) continue;
+      _pendingHandshakes.add(h);
+      await _sendPing(u);
+      any = true;
     }
-
-    if (!pingedAny) {
-      await _checkAndSendChatRequest();
-    }
+    if (!any) await _checkChatReq();
   }
 
-  Future<void> _checkAndSendChatRequest() async {
-    if (_chatRequestSent) return;
-    if (_pendingHandshakes.isNotEmpty) return;
-    if (_peers.isEmpty) return;
-
-    final allReady = _peers.values.every((p) => p.sharedKey.isNotEmpty);
-    if (!allReady) return;
-
-    _updateMasterStatus();
-    debugPrint('[SGTP] _checkAndSendChatRequest: isMaster=$_isMaster peers=${_peers.length}');
-
+  Future<void> _checkChatReq() async {
+    if (_chatRequestSent || _pendingHandshakes.isNotEmpty || _peers.isEmpty) return;
+    if (!_peers.values.every((p) => p.sharedKey.isNotEmpty)) return;
+    _updateMaster();
     if (!_isMaster) {
-      final masterUUID = _getMasterPeerUUID();
-      if (masterUUID == null) return;
-      final knownUUIDs = _peers.values.map((p) => p.uuidBytes).toList();
-      debugPrint('[SGTP] sending CHAT_REQUEST to master ${uuidBytesToHex(masterUUID)}');
-      final frame = buildChatRequest(_roomUUID, masterUUID, _myUUID, knownUUIDs);
-      await _sendFrame(frame);
+      final m = _masterPeer();
+      if (m == null) return;
+      await _sendFrame(buildChatRequest(
+          _roomUUID, m, _myUUID, _peers.values.map((p) => p.uuidBytes).toList()));
       _chatRequestSent = true;
     } else {
       _chatRequestSent = true;
-      debugPrint('[SGTP] master: issuing CHAT_KEY to all peers');
-      await _issueChatKeyToAll();
+      await _issueCK();
     }
   }
 
-  Future<void> _handleChatRequest(ParsedFrame frame) async {
-    if (!_isMaster) return;
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    debugPrint('[SGTP] CHAT_REQUEST from $senderHex → issuing new CK');
-    await _issueChatKeyToAll();
-  }
+  Future<void> _onChatRequest(ParsedFrame f) async => _issueCK();
 
-  Future<void> _issueChatKeyToAll() async {
+  Future<void> _issueCK() async {
     if (_peers.isEmpty) return;
-
-    final rng = Random.secure();
-    final newKey = Uint8List.fromList(List.generate(32, (_) => rng.nextInt(256)));
-
-    _chatKey = newKey;
-    final tsEpoch = DateTime.now().millisecondsSinceEpoch;
-    _chatEpoch = tsEpoch > _chatEpoch ? tsEpoch : _chatEpoch + 1;
-    _myNonce = 0;
-    debugPrint('[SGTP] issuing new CHAT_KEY epoch=$_chatEpoch to ${_peers.length} peers');
-
+    final key = Uint8List.fromList(
+        List.generate(32, (_) => Random.secure().nextInt(256)));
+    _chatKey   = key;
+    final ts   = DateTime.now().millisecondsSinceEpoch;
+    _chatEpoch = ts > _chatEpoch ? ts : _chatEpoch + 1;
+    _myNonce   = 0;
     for (final peer in _peers.values) {
       if (peer.sharedKey.isEmpty) continue;
       try {
-        final encryptedKey = await encrypt(newKey, peer.sharedKey, _chatEpoch);
-        final frame = buildChatKey(_roomUUID, peer.uuidBytes, _myUUID, _chatEpoch, encryptedKey);
-        await _sendFrame(frame);
-        debugPrint('[SGTP] CHAT_KEY sent to ${peer.uuid}');
-      } catch (e) {
-        debugPrint('[SGTP] failed to send CHAT_KEY to ${peer.uuid}: $e');
-      }
+        final enc = await encrypt(key, peer.sharedKey, _chatEpoch);
+        await _sendFrame(buildChatKey(_roomUUID, peer.uuidBytes, _myUUID, _chatEpoch, enc));
+      } catch (_) {}
     }
-
     if (!_readyEmitted) {
       _readyEmitted = true;
-      _state = _ClientState.ready;
+      _state        = _ClientState.ready;
       _eventController.add(SgtpReady(isMaster: true, roomUUIDHex: roomUUIDHex));
     }
-
     _ckRotationTimer?.cancel();
     _ckRotationTimer = Timer(
-        const Duration(seconds: SgtpConstants.ckRotationInterval), _rotateChatKey);
+        const Duration(seconds: SgtpConstants.ckRotationInterval), _issueCK);
   }
 
-  Future<void> _rotateChatKey() async {
-    if (_state == _ClientState.ready && _isMaster) {
-      debugPrint('[SGTP] rotating CK (periodic)');
-      await _issueChatKeyToAll();
-    }
-  }
-
-  Future<void> _handleChatKey(ParsedFrame frame) async {
-    if (frame.payloadLength < SgtpConstants.chatKeyPayloadLength) {
-      debugPrint('[SGTP] CHAT_KEY payload too short, dropping');
-      return;
-    }
-
-    final epoch = frame.epoch;
-    final encryptedKey = frame.encryptedChatKey;
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    final peer = _peers[senderHex];
-
-    if (peer == null || peer.sharedKey.isEmpty) {
-      debugPrint('[SGTP] CHAT_KEY from unknown peer $senderHex, dropping');
-      return;
-    }
-
+  Future<void> _onChatKey(ParsedFrame f) async {
+    if (f.payloadLength < SgtpConstants.chatKeyPayloadLength) return;
+    final peer = _peers[uuidBytesToHex(f.senderUUID)];
+    if (peer == null || peer.sharedKey.isEmpty) return;
     try {
-      final decryptedKey = await decrypt(encryptedKey, peer.sharedKey, epoch);
-      if (decryptedKey.length != 32) {
-        debugPrint('[SGTP] CHAT_KEY bad decrypted length ${decryptedKey.length}');
-        return;
-      }
-
-      _chatKey = Uint8List.fromList(decryptedKey);
-      _chatEpoch = epoch;
-      _myNonce = 0;
-      debugPrint('[SGTP] CHAT_KEY applied epoch=$epoch');
-
-      final ackFrame = buildChatKeyAck(_roomUUID, frame.senderUUID, _myUUID);
-      await _sendFrame(ackFrame);
-
+      final dec = await decrypt(f.encryptedChatKey, peer.sharedKey, f.epoch);
+      if (dec.length != 32) return;
+      _chatKey   = Uint8List.fromList(dec);
+      _chatEpoch = f.epoch;
+      _myNonce   = 0;
+      await _sendFrame(buildChatKeyAck(_roomUUID, f.senderUUID, _myUUID));
       if (!_readyEmitted) {
         _readyEmitted = true;
-        _state = _ClientState.ready;
+        _state        = _ClientState.ready;
         _eventController.add(SgtpReady(isMaster: false, roomUUIDHex: roomUUIDHex));
+        _requestHistory();
       }
     } catch (e) {
-      debugPrint('[SGTP] CHAT_KEY decryption failed: $e');
       _eventController.add(SgtpError(error: 'Failed to decrypt CHAT_KEY: $e'));
     }
   }
 
-  Future<void> _handleMessage(ParsedFrame frame) async {
-    if (_chatKey == null) return;
-    if (frame.payloadLength < 24 + 16) return;
+  // ---------------------------------------------------------------------------
+  // Messages
+  // ---------------------------------------------------------------------------
 
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    if (senderHex == myUUIDHex) return;
-
+  Future<void> _onMessage(ParsedFrame f, {bool history = false}) async {
+    if (_chatKey == null || f.payloadLength < 40) return;
+    final sH = uuidBytesToHex(f.senderUUID);
+    if (!history && sH == myUUIDHex) return;
     try {
-      final nonce = frame.messageNonce;
-      final ciphertext = frame.messageCiphertext;
-      final plaintext = await decrypt(ciphertext, _chatKey!, nonce);
-      final raw = utf8.decode(plaintext);
-      final msgUUID = uuidBytesToHex(frame.messageUUID);
+      final plain  = await decrypt(f.messageCiphertext, _chatKey!, f.messageNonce);
+      final msgId  = uuidBytesToHex(f.messageUUID);
+      final recvAt = history
+          ? DateTime.fromMillisecondsSinceEpoch(f.timestamp)
+          : DateTime.now();
 
-      Map<String, dynamic>? payload;
-      try {
-        payload = json.decode(raw) as Map<String, dynamic>;
-      } catch (_) {}
-
-      if (payload == null || payload['v'] != 1) {
-        _eventController.add(SgtpMessageReceived(
-          message: ChatMessage(
-            id: msgUUID,
-            senderUUID: senderHex,
-            content: raw,
-            receivedAt: DateTime.now(),
-            isFromHistory: false,
-            isFromMe: false,
-          ),
+      if (!history) {
+        _historyStore.add(_HistoryRecord(
+          senderUUID: Uint8List.fromList(f.senderUUID),
+          messageUUID: Uint8List.fromList(f.messageUUID),
+          timestamp: f.timestamp, nonce: f.messageNonce, plaintext: plain,
         ));
+      }
+
+      Map<String, dynamic>? p;
+      try { p = json.decode(utf8.decode(plain)) as Map<String, dynamic>; } catch (_) {}
+      if (p == null || p['v'] != 1) {
+        _eventController.add(SgtpMessageReceived(message: ChatMessage(
+          id: msgId, senderUUID: sH, content: utf8.decode(plain),
+          receivedAt: recvAt, isFromHistory: history, isFromMe: false)));
         return;
       }
-
-      final type = payload['type'] as String?;
-
-      switch (type) {
+      switch (p['type'] as String?) {
         case 'text':
-          _eventController.add(SgtpMessageReceived(
-            message: ChatMessage(
-              id: msgUUID,
-              senderUUID: senderHex,
-              content: (payload['text'] as String?) ?? '',
-              receivedAt: DateTime.now(),
-              isFromHistory: false,
-              isFromMe: false,
-            ),
-          ));
-        case 'image':
-          await _handleMediaPayload(msgUUID, senderHex, payload, 'image');
-        case 'gif':
-          await _handleMediaPayload(msgUUID, senderHex, payload, 'gif');
-        case 'video':
-          await _handleMediaPayload(msgUUID, senderHex, payload, 'video');
-        case 'voice':
-          await _handleMediaPayload(msgUUID, senderHex, payload, 'voice');
-        default:
-          debugPrint('[SGTP] unknown message type: $type');
+          _eventController.add(SgtpMessageReceived(message: ChatMessage(
+            id: msgId, senderUUID: sH, content: (p['text'] as String?) ?? '',
+            receivedAt: recvAt, isFromHistory: history, isFromMe: false)));
+        case 'image': await _mediaPayload(msgId, sH, p, 'image', history, recvAt);
+        case 'gif':   await _mediaPayload(msgId, sH, p, 'gif',   history, recvAt);
+        case 'video': await _mediaPayload(msgId, sH, p, 'video', history, recvAt);
+        case 'voice': await _mediaPayload(msgId, sH, p, 'voice', history, recvAt);
       }
-    } catch (e) {
-      debugPrint('[SGTP] MESSAGE decrypt failed: $e');
-    }
+    } catch (_) {}
   }
 
-  Future<void> _handleMediaPayload(
-    String msgUUID,
-    String senderHex,
-    Map<String, dynamic> payload,
-    String mediaType,
+  Future<void> _mediaPayload(
+    String id, String sender, Map<String, dynamic> p,
+    String type, bool history, DateTime recvAt,
   ) async {
-    final fileId     = payload['file_id'] as String? ?? msgUUID;
-    final name       = payload['name'] as String? ?? 'file';
-    final mime       = payload['mime'] as String? ?? 'application/octet-stream';
-    final totalSize  = (payload['size'] as num?)?.toInt() ?? 0;
-    final dataB64    = payload['data'] as String? ?? '';
-    final chunkBytes = base64.decode(dataB64);
-
-    if (!payload.containsKey('chunk')) {
+    final fileId     = p['file_id'] as String? ?? id;
+    final name       = p['name']    as String? ?? 'file';
+    final mime       = p['mime']    as String? ?? 'application/octet-stream';
+    final totalSize  = (p['size']   as num?)?.toInt() ?? 0;
+    final chunk      = base64.decode(p['data'] as String? ?? '');
+    if (!p.containsKey('chunk')) {
       _eventController.add(SgtpMessageReceived(
-        message: _buildMediaMessage(msgUUID, senderHex, name, mime, mediaType, chunkBytes),
-      ));
+          message: _media(id, sender, name, mime, type, chunk, history, recvAt)));
       return;
     }
-
-    final chunkIndex  = (payload['chunk'] as num).toInt();
-    final totalChunks = (payload['chunks'] as num).toInt();
-
-    _pendingFiles.putIfAbsent(
-      fileId,
-      () => _PendingFile(
-        fileId: fileId,
-        name: name,
-        mime: mime,
-        totalSize: totalSize,
-        totalChunks: totalChunks,
-        senderUUID: senderHex,
-        mediaType: mediaType,
-      ),
-    );
-
+    final ci = (p['chunk'] as num).toInt();
+    final ct = (p['chunks'] as num).toInt();
+    _pendingFiles.putIfAbsent(fileId, () => _PendingFile(
+      fileId: fileId, name: name, mime: mime, totalSize: totalSize,
+      totalChunks: ct, senderUUID: sender, mediaType: type));
     final pf = _pendingFiles[fileId]!;
-    if (chunkIndex < pf.chunks.length) {
-      pf.chunks[chunkIndex] = chunkBytes;
-    }
-
+    if (ci < pf.chunks.length) pf.chunks[ci] = chunk;
     if (pf.isComplete) {
       _pendingFiles.remove(fileId);
-      final assembled = pf.assemble();
       _eventController.add(SgtpMessageReceived(
-        message: _buildMediaMessage(fileId, senderHex, name, mime, mediaType, assembled),
-      ));
+          message: _media(fileId, sender, name, mime, type, pf.assemble(), history, recvAt)));
     }
   }
 
-  ChatMessage _buildMediaMessage(
-    String id,
-    String senderHex,
-    String name,
-    String mime,
-    String mediaType,
-    Uint8List bytes,
-  ) {
-    switch (mediaType) {
-      case 'gif':
-        return ChatMessage(
-          id: id, senderUUID: senderHex, content: name,
+  ChatMessage _media(String id, String sender, String name, String mime,
+      String type, Uint8List bytes, bool history, DateTime recvAt) =>
+    switch (type) {
+      'gif'   => ChatMessage(id: id, senderUUID: sender, content: name,
           imageBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.gif,
-          receivedAt: DateTime.now(), isFromHistory: false, isFromMe: false,
-        );
-      case 'video':
-        return ChatMessage(
-          id: id, senderUUID: senderHex, content: name,
+          type: MessageType.gif, receivedAt: recvAt,
+          isFromHistory: history, isFromMe: false),
+      'video' => ChatMessage(id: id, senderUUID: sender, content: name,
           videoBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.video,
-          receivedAt: DateTime.now(), isFromHistory: false, isFromMe: false,
-        );
-      case 'voice':
-        return ChatMessage(
-          id: id, senderUUID: senderHex, content: name,
+          type: MessageType.video, receivedAt: recvAt,
+          isFromHistory: history, isFromMe: false),
+      'voice' => ChatMessage(id: id, senderUUID: sender, content: name,
           audioBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.voice,
-          receivedAt: DateTime.now(), isFromHistory: false, isFromMe: false,
-        );
-      default: // 'image'
-        return ChatMessage(
-          id: id, senderUUID: senderHex, content: name,
+          type: MessageType.voice, receivedAt: recvAt,
+          isFromHistory: history, isFromMe: false),
+      _       => ChatMessage(id: id, senderUUID: sender, content: name,
           imageBytes: bytes, mediaMime: mime, mediaName: name,
-          type: MessageType.image,
-          receivedAt: DateTime.now(), isFromHistory: false, isFromMe: false,
-        );
-    }
+          type: MessageType.image, receivedAt: recvAt,
+          isFromHistory: history, isFromMe: false),
+    };
+
+  // ---------------------------------------------------------------------------
+  // History: serve
+  // ---------------------------------------------------------------------------
+
+  Future<void> _onHsir(ParsedFrame f) async {
+    final h = uuidBytesToHex(f.senderUUID);
+    if (h == myUUIDHex) return;
+    debugPrint('[SGTP] HSIR from $h → HSI count=${_historyStore.length}');
+    await _sendFrame(buildHsi(
+        _roomUUID, Uint8List.fromList(f.senderUUID), _myUUID, _historyStore.length));
   }
 
-  Future<void> _handleMessageFailed(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    final peer = _peers[senderHex];
-    if (peer == null || peer.sharedKey.isEmpty) return;
+  Future<void> _onHsr(ParsedFrame f) async {
+    final recv = Uint8List.fromList(f.senderUUID);
+    if (_chatKey == null || _historyStore.isEmpty) {
+      await _sendFrame(buildHsraEos(_roomUUID, recv, _myUUID, 0));
+      return;
+    }
+    int offset = 0, limit = 0;
+    if (f.payloadLength >= 16) {
+      final bd = ByteData.view(f.payload.buffer, f.payload.offsetInBytes);
+      offset = bd.getUint64(0, Endian.big);
+      limit  = bd.getUint64(8, Endian.big);
+    }
+    final all     = _historyStore.skip(offset).toList();
+    final toServe = limit > 0 ? all.take(limit).toList() : all;
 
-    try {
-      final nonce = frame.timestamp;
-      final plaintext = await decrypt(frame.payload, peer.sharedKey, nonce);
-      if (plaintext.length >= 16) {
-        final failedMsgUUID = _bytesToHex(plaintext.sublist(0, 16));
-        debugPrint('[SGTP] MESSAGE_FAILED: msgUUID=$failedMsgUUID');
-        _eventController.add(SgtpError(error: 'Message rejected (CK rotation): $failedMsgUUID'));
+    const batch = 32;
+    int batchNum = 0;
+    for (var i = 0; i < toServe.length; i += batch) {
+      final slice  = toServe.skip(i).take(batch).toList();
+      final frames = <Uint8List>[];
+      for (final r in slice) {
+        try {
+          final nonce  = _histNonceBit | r.nonce;
+          final cipher = await encrypt(r.plaintext, _chatKey!, nonce);
+          final raw    = buildMessage(_roomUUID,
+              Uint8List.fromList(r.senderUUID), Uint8List.fromList(r.messageUUID),
+              nonce, cipher);
+          // Set receiver field to requester
+          raw.setRange(16, 32, f.senderUUID);
+          frames.add(await signFrame(raw, _config.identityKeyPair));
+        } catch (_) {}
       }
-      final ackFrame = buildMessageFailedAck(_roomUUID, frame.senderUUID, _myUUID);
-      await _sendFrame(ackFrame);
-    } catch (e) {
-      debugPrint('[SGTP] MESSAGE_FAILED handling error: $e');
-    }
-  }
-
-  Future<void> _handleStatus(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    final peer = _peers[senderHex];
-    if (peer == null || peer.sharedKey.isEmpty) return;
-
-    try {
-      final nonce = frame.timestamp;
-      final plaintext = await decrypt(frame.payload, peer.sharedKey, nonce);
-      if (plaintext.length >= 2) {
-        final bd = ByteData.view(plaintext.buffer, plaintext.offsetInBytes, 2);
-        final code = bd.getUint16(0, Endian.big);
-        final msg = plaintext.length > 2 ? utf8.decode(plaintext.sublist(2)) : '';
-        debugPrint('[SGTP] STATUS code=$code msg="$msg"');
-        _eventController.add(SgtpError(error: 'Server status $code: $msg'));
-      }
-    } catch (e) {
-      debugPrint('[SGTP] STATUS handling error: $e');
-    }
-  }
-
-  Future<void> _handleFin(ParsedFrame frame) async {
-    final senderHex = uuidBytesToHex(frame.senderUUID);
-    if (senderHex == myUUIDHex) return;
-
-    if (_chatKey != null && frame.payloadLength >= SgtpConstants.finPayloadLength) {
-      try {
-        final tag = frame.finTag;
-        await decrypt(tag, _chatKey!, frame.finNonce);
-      } catch (e) {
-        debugPrint('[SGTP] FIN authentication failed from $senderHex: $e');
-        return;
+      if (frames.isNotEmpty) {
+        await _sendFrame(buildHsra(_roomUUID, recv, _myUUID, batchNum, frames));
+        batchNum++;
       }
     }
-
-    _peers.remove(senderHex);
-    _pendingHandshakes.remove(senderHex);
-    _eventController.add(SgtpPeerLeft(peerUUID: senderHex));
-    debugPrint('[SGTP] FIN from $senderHex — peer removed');
-
-    if (_isMaster && _state == _ClientState.ready && _peers.isNotEmpty) {
-      debugPrint('[SGTP] FIN: rotating CK for remaining peers');
-      await _issueChatKeyToAll();
-    }
-  }
-
-  void _handleKicked(ParsedFrame frame) {
-    if (frame.payloadLength < 16) return;
-    final targetUUID = uuidBytesToHex(frame.payload.sublist(0, 16));
-    _peers.remove(targetUUID);
-    _pendingHandshakes.remove(targetUUID);
-    _eventController.add(SgtpPeerLeft(peerUUID: targetUUID));
-    debugPrint('[SGTP] KICKED: $targetUUID removed');
+    await _sendFrame(buildHsraEos(_roomUUID, recv, _myUUID, toServe.length));
   }
 
   // ---------------------------------------------------------------------------
-  // Internal: helpers
+  // History: request
   // ---------------------------------------------------------------------------
 
-  Future<void> _sendPing(Uint8List receiverUUID) async {
-    if (_ephemeralX25519Pub == null) return;
-    final frame = buildPingFrame(
-      _roomUUID, receiverUUID, _myUUID,
-      _ephemeralX25519Pub!, _config.myPublicKey,
-    );
-    await _sendFrame(frame);
+  void _requestHistory() {
+    if (_historyRequested || _peers.isEmpty) return;
+    _historyRequested = true;
+    _hsiReplies.clear();
+    debugPrint('[SGTP] broadcasting HSIR');
+    signFrame(buildHsir(_roomUUID, _myUUID), _config.identityKeyPair)
+        .then((f) => _socket?.add(f));
+    _hsiTimer?.cancel();
+    _hsiTimer = Timer(const Duration(seconds: 2), _sendHsr);
   }
 
-  Future<void> _sendPong(Uint8List receiverUUID) async {
-    if (_ephemeralX25519Pub == null) return;
-    final frame = buildPongFrame(
-      _roomUUID, receiverUUID, _myUUID,
-      _ephemeralX25519Pub!, _config.myPublicKey,
-    );
-    await _sendFrame(frame);
+  void _onHsi(ParsedFrame f) {
+    final h = uuidBytesToHex(f.senderUUID);
+    if (h == myUUIDHex) return;
+    _hsiReplies[h] = f.hsiMessageCount;
+    debugPrint('[SGTP] HSI from $h count=${f.hsiMessageCount}');
   }
 
-  Future<void> _sendFrame(Uint8List unsignedFrame) async {
+  Future<void> _sendHsr() async {
+    if (_hsiReplies.isEmpty) return;
+    final best = _hsiReplies.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    if (best.value == 0) return;
+    final peer = _peers[best.key];
+    if (peer == null) return;
+    debugPrint('[SGTP] HSR to ${best.key} (${best.value} msgs)');
+    await _sendFrame(buildHsr(_roomUUID, peer.uuidBytes, _myUUID, 0, 0));
+  }
+
+  Future<void> _onHsra(ParsedFrame f) async {
+    if (f.hsraIsEndOfStream) {
+      debugPrint('[SGTP] HSRA EOS total=${f.hsraBatchNumber}');
+      return;
+    }
+    debugPrint('[SGTP] HSRA batch=${f.hsraBatchNumber} msgs=${f.hsraMessageCount}');
+    for (final raw in f.hsraExtractMessages) {
+      final parsed = tryParseFrame(raw);
+      if (parsed == null || parsed.packetType != PacketType.message) continue;
+      await _onMessage(parsed, history: true);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Other handlers
+  // ---------------------------------------------------------------------------
+
+  Future<void> _onMsgFailed(ParsedFrame f) async {
+    final peer = _peers[uuidBytesToHex(f.senderUUID)];
+    if (peer == null || peer.sharedKey.isEmpty) return;
     try {
-      final signed = await signFrame(unsignedFrame, _config.identityKeyPair);
-      _socket?.add(signed);
+      final plain = await decrypt(f.payload, peer.sharedKey, f.timestamp);
+      if (plain.length >= 16) {
+        _eventController.add(SgtpError(error: 'Message rejected (CK rotation)'));
+      }
+      await _sendFrame(buildMessageFailedAck(_roomUUID, f.senderUUID, _myUUID));
+    } catch (_) {}
+  }
+
+  Future<void> _onStatus(ParsedFrame f) async {
+    final peer = _peers[uuidBytesToHex(f.senderUUID)];
+    if (peer == null || peer.sharedKey.isEmpty) return;
+    try {
+      final plain = await decrypt(f.payload, peer.sharedKey, f.timestamp);
+      if (plain.length >= 2) {
+        final code = ByteData.view(plain.buffer, plain.offsetInBytes, 2)
+            .getUint16(0, Endian.big);
+        _eventController.add(SgtpError(error: 'Server status $code'));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _onFin(ParsedFrame f) async {
+    final h = uuidBytesToHex(f.senderUUID);
+    if (h == myUUIDHex) return;
+    if (_chatKey != null && f.payloadLength >= SgtpConstants.finPayloadLength) {
+      try { await decrypt(f.finTag, _chatKey!, f.finNonce); }
+      catch (_) { return; }
+    }
+    _peers.remove(h);
+    _pendingHandshakes.remove(h);
+    _eventController.add(SgtpPeerLeft(peerUUID: h));
+    if (_isMaster && _state == _ClientState.ready && _peers.isNotEmpty) await _issueCK();
+  }
+
+  void _onKicked(ParsedFrame f) {
+    if (f.payloadLength < 16) return;
+    final h = uuidBytesToHex(f.payload.sublist(0, 16));
+    _peers.remove(h);
+    _pendingHandshakes.remove(h);
+    _eventController.add(SgtpPeerLeft(peerUUID: h));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  Future<void> _sendPing(Uint8List r) async {
+    if (_ephemeralX25519Pub == null) return;
+    await _sendFrame(buildPingFrame(_roomUUID, r, _myUUID,
+        _ephemeralX25519Pub!, _config.myPublicKey));
+  }
+
+  Future<void> _sendPong(Uint8List r) async {
+    if (_ephemeralX25519Pub == null) return;
+    await _sendFrame(buildPongFrame(_roomUUID, r, _myUUID,
+        _ephemeralX25519Pub!, _config.myPublicKey));
+  }
+
+  Future<void> _sendFrame(Uint8List unsigned) async {
+    try {
+      _socket?.add(await signFrame(unsigned, _config.identityKeyPair));
     } catch (e) {
-      debugPrint('[SGTP] failed to send frame: $e');
       _eventController.add(SgtpError(error: 'Failed to send frame: $e'));
     }
   }
 
-  void _updateMasterStatus() {
-    _isMaster = true;
-    for (final peer in _peers.values) {
-      if (compareBytes(peer.uuidBytes, _myUUID) < 0) {
-        _isMaster = false;
-        break;
-      }
-    }
+  void _updateMaster() {
+    _isMaster = _peers.values.every((p) => compareBytes(p.uuidBytes, _myUUID) > 0);
   }
 
-  Uint8List? _getMasterPeerUUID() {
+  Uint8List? _masterPeer() {
     if (_peers.isEmpty) return null;
-
-    Uint8List? smallest;
-    for (final peer in _peers.values) {
-      if (smallest == null || compareBytes(peer.uuidBytes, smallest) < 0) {
-        smallest = peer.uuidBytes;
-      }
+    Uint8List? s;
+    for (final p in _peers.values) {
+      if (s == null || compareBytes(p.uuidBytes, s) < 0) s = p.uuidBytes;
     }
-
-    if (smallest != null && compareBytes(_myUUID, smallest) < 0) {
-      return null;
-    }
-
-    return smallest;
+    if (s != null && compareBytes(_myUUID, s) < 0) return null;
+    return s;
   }
 
-  String _bytesToHex(Uint8List b) =>
+  String _hex(Uint8List b) =>
       b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 
   Future<void> _cleanup() async {
     _state = _ClientState.disconnected;
     _ckRotationTimer?.cancel();
-    _ckRotationTimer = null;
-    _infoTimerStarted = false;
-    _chatRequestSent = false;
-    _readyEmitted = false;
-    _isMaster = false;
+    _hsiTimer?.cancel();
+    _ckRotationTimer  = null;
+    _hsiTimer         = null;
+    _infoTimerStarted  = false;
+    _chatRequestSent   = false;
+    _readyEmitted       = false;
+    _historyRequested  = false;
+    _isMaster          = false;
     _peers.clear();
     _pendingHandshakes.clear();
     _pendingFiles.clear();
-    _chatKey = null;
+    _hsiReplies.clear();
+    _chatKey   = null;
     _chatEpoch = 0;
-    _myNonce = 0;
+    _myNonce   = 0;
     _receiveBuffer.clear();
-
-    try {
-      await _socket?.close();
-    } catch (_) {}
+    try { await _socket?.close(); } catch (_) {}
     _socket = null;
   }
 

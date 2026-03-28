@@ -27,27 +27,18 @@ class ParsedFrame {
     required this.raw,
   });
 
-  // ---- PING/PONG accessors (payload_length = 76) ----
+  // ---- PING/PONG accessors ----
 
-  /// For PING/PONG: bytes [0:32] of payload = X25519 ephemeral public key
-  Uint8List get x25519PubKey {
-    return payload.sublist(0, 32);
-  }
-
-  /// For PING/PONG: bytes [32:64] of payload = Ed25519 long-term public key
-  Uint8List get ed25519PubKey {
-    return payload.sublist(32, 64);
-  }
+  Uint8List get x25519PubKey => payload.sublist(0, 32);
+  Uint8List get ed25519PubKey => payload.sublist(32, 64);
 
   // ---- INFO response accessors ----
 
-  /// For INFO response: bytes [0:8] of payload as uint64 = peer count
   int get infoCount {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
     return bd.getUint64(0, Endian.big);
   }
 
-  /// For INFO response: parse peer UUIDs from payload[8:]
   List<Uint8List> get infoUUIDs {
     final count = infoCount;
     final result = <Uint8List>[];
@@ -62,13 +53,11 @@ class ParsedFrame {
 
   // ---- CHAT_REQUEST accessors ----
 
-  /// For CHAT_REQUEST: count of known peers
   int get chatRequestCount {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
     return bd.getUint64(0, Endian.big);
   }
 
-  /// For CHAT_REQUEST: list of known peer UUIDs
   List<Uint8List> get chatRequestUUIDs {
     final count = chatRequestCount;
     final result = <Uint8List>[];
@@ -83,119 +72,152 @@ class ParsedFrame {
 
   // ---- CHAT_KEY accessors ----
 
-  /// For CHAT_KEY: bytes [0:8] of payload = epoch (uint64)
   int get epoch {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
     return bd.getUint64(0, Endian.big);
   }
 
-  /// For CHAT_KEY: bytes [8:56] of payload = encrypted chat key (48 bytes)
-  Uint8List get encryptedChatKey {
-    return Uint8List.fromList(payload.sublist(8, 56));
-  }
+  Uint8List get encryptedChatKey =>
+      Uint8List.fromList(payload.sublist(8, 56));
 
   // ---- MESSAGE accessors ----
 
-  /// For MESSAGE: bytes [0:16] of payload = message UUID
-  Uint8List get messageUUID {
-    return Uint8List.fromList(payload.sublist(0, 16));
-  }
+  Uint8List get messageUUID =>
+      Uint8List.fromList(payload.sublist(0, 16));
 
-  /// For MESSAGE: bytes [16:24] of payload = nonce (uint64)
   int get messageNonce {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes + 16, 8);
     return bd.getUint64(0, Endian.big);
   }
 
-  /// For MESSAGE: bytes [24:] of payload = ciphertext (including 16B tag)
-  Uint8List get messageCiphertext {
-    return Uint8List.fromList(payload.sublist(24));
-  }
+  Uint8List get messageCiphertext =>
+      Uint8List.fromList(payload.sublist(24));
 
   // ---- FIN accessors ----
 
-  /// For FIN: bytes [0:8] of payload = nonce (uint64)
   int get finNonce {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
     return bd.getUint64(0, Endian.big);
   }
 
-  /// For FIN: bytes [8:24] of payload = Poly1305 tag (16 bytes)
-  Uint8List get finTag {
-    return Uint8List.fromList(payload.sublist(8, 24));
+  Uint8List get finTag =>
+      Uint8List.fromList(payload.sublist(8, 24));
+
+  // ---- HSI accessors ----
+
+  /// For HSI: payload[0:8] = number of stored messages (uint64).
+  int get hsiMessageCount {
+    if (payload.length < 8) return 0;
+    final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
+    return bd.getUint64(0, Endian.big);
+  }
+
+  // ---- HSRA accessors ----
+
+  /// For HSRA: payload[0:8] = batch_number (also = total sent when EOS).
+  int get hsraBatchNumber {
+    if (payload.length < 8) return 0;
+    final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
+    return bd.getUint64(0, Endian.big);
+  }
+
+  /// For HSRA: payload[8:16] = message_count; 0 means end-of-stream.
+  int get hsraMessageCount {
+    if (payload.length < 16) return 0;
+    final bd = ByteData.view(payload.buffer, payload.offsetInBytes + 8, 8);
+    return bd.getUint64(0, Endian.big);
+  }
+
+  bool get hsraIsEndOfStream => hsraMessageCount == 0;
+
+  /// Splits the HSRA payload into raw MESSAGE frame blobs using the offsets table.
+  /// Each blob is a complete, re-signed MESSAGE frame encrypted with the current CK.
+  List<Uint8List> get hsraExtractMessages {
+    final count = hsraMessageCount;
+    if (count == 0 || payload.length < 16 + count * 8) return [];
+
+    final offsets = <int>[];
+    for (var i = 0; i < count; i++) {
+      final bd = ByteData.view(
+          payload.buffer, payload.offsetInBytes + 16 + i * 8, 8);
+      offsets.add(bd.getUint64(0, Endian.big));
+    }
+
+    final blobStart = 16 + count * 8;
+    final blob = payload.sublist(blobStart);
+    final result = <Uint8List>[];
+
+    for (var i = 0; i < offsets.length; i++) {
+      final start = offsets[i];
+      final end = (i + 1 < offsets.length) ? offsets[i + 1] : blob.length;
+      if (start >= blob.length || end > blob.length || start > end) continue;
+      result.add(Uint8List.fromList(blob.sublist(start, end)));
+    }
+    return result;
   }
 }
 
 /// Parse a complete frame from [raw] bytes.
 /// Returns null if the bytes are too short or malformed.
 ParsedFrame? tryParseFrame(Uint8List raw) {
-  // Minimum frame: header (64) + signature (64) = 128 bytes
   if (raw.length < SgtpConstants.headerSize + SgtpConstants.signatureSize) {
     return null;
   }
 
   final bd = ByteData.view(raw.buffer, raw.offsetInBytes);
 
-  final roomUUID = Uint8List.fromList(raw.sublist(0, 16));
+  final roomUUID     = Uint8List.fromList(raw.sublist(0, 16));
   final receiverUUID = Uint8List.fromList(raw.sublist(16, 32));
-  final senderUUID = Uint8List.fromList(raw.sublist(32, 48));
-  final version = bd.getUint16(48, Endian.big);
-  final packetType = bd.getUint16(50, Endian.big);
+  final senderUUID   = Uint8List.fromList(raw.sublist(32, 48));
+  final version      = bd.getUint16(48, Endian.big);
+  final packetType   = bd.getUint16(50, Endian.big);
   final payloadLength = bd.getUint32(52, Endian.big);
-  final timestamp = bd.getUint64(56, Endian.big);
+  final timestamp    = bd.getUint64(56, Endian.big);
 
   final totalExpected =
       SgtpConstants.headerSize + payloadLength + SgtpConstants.signatureSize;
 
-  if (raw.length < totalExpected) {
-    return null;
-  }
-
-  if (payloadLength > SgtpConstants.maxPayloadSize) {
-    return null;
-  }
+  if (raw.length < totalExpected) return null;
+  if (payloadLength > SgtpConstants.maxPayloadSize) return null;
 
   final payload = Uint8List.fromList(
-      raw.sublist(SgtpConstants.headerSize, SgtpConstants.headerSize + payloadLength));
-  final signature = Uint8List.fromList(raw.sublist(totalExpected - 64, totalExpected));
-  final frameRaw = Uint8List.fromList(raw.sublist(0, totalExpected));
+      raw.sublist(SgtpConstants.headerSize,
+          SgtpConstants.headerSize + payloadLength));
+  final signature =
+      Uint8List.fromList(raw.sublist(totalExpected - 64, totalExpected));
+  final frameRaw =
+      Uint8List.fromList(raw.sublist(0, totalExpected));
 
   return ParsedFrame(
-    roomUUID: roomUUID,
-    receiverUUID: receiverUUID,
-    senderUUID: senderUUID,
-    version: version,
-    packetType: packetType,
+    roomUUID:      roomUUID,
+    receiverUUID:  receiverUUID,
+    senderUUID:    senderUUID,
+    version:       version,
+    packetType:    packetType,
     payloadLength: payloadLength,
-    timestamp: timestamp,
-    payload: payload,
-    signature: signature,
-    raw: frameRaw,
+    timestamp:     timestamp,
+    payload:       payload,
+    signature:     signature,
+    raw:           frameRaw,
   );
 }
 
 /// Tries to extract one complete frame from the buffer.
-/// Returns (frame, bytesConsumed) or null if not enough data.
 ({ParsedFrame frame, int bytesConsumed})? tryExtractFrame(List<int> buffer) {
   if (buffer.length < SgtpConstants.headerSize + SgtpConstants.signatureSize) {
     return null;
   }
 
-  final bd = ByteData.view(Uint8List.fromList(
-          buffer.sublist(0, SgtpConstants.headerSize))
-      .buffer);
+  final bd = ByteData.view(
+      Uint8List.fromList(buffer.sublist(0, SgtpConstants.headerSize)).buffer);
   final payloadLength = bd.getUint32(52, Endian.big);
 
-  if (payloadLength > SgtpConstants.maxPayloadSize) {
-    return null;
-  }
+  if (payloadLength > SgtpConstants.maxPayloadSize) return null;
 
   final totalExpected =
       SgtpConstants.headerSize + payloadLength + SgtpConstants.signatureSize;
 
-  if (buffer.length < totalExpected) {
-    return null;
-  }
+  if (buffer.length < totalExpected) return null;
 
   final rawBytes = Uint8List.fromList(buffer.sublist(0, totalExpected));
   final frame = tryParseFrame(rawBytes);
