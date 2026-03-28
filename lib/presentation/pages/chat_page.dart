@@ -63,10 +63,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     try {
       final devices = await _recorder.listInputDevices();
       if (mounted) {
-        setState(() {
-          _inputDevices = devices;
-          if (devices.isNotEmpty) _selectedDevice = devices.first;
-        });
+        setState(() => _inputDevices = devices);
       }
     } catch (_) {}
   }
