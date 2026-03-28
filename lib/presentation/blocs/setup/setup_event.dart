@@ -31,13 +31,6 @@ class SetupPickWhitelistFiles extends SetupEvent {
   const SetupPickWhitelistFiles();
 }
 
-class SetupRoomUUIDChanged extends SetupEvent {
-  final String uuid;
-  const SetupRoomUUIDChanged(this.uuid);
-  @override
-  List<Object?> get props => [uuid];
-}
-
 class SetupConnect extends SetupEvent {
   const SetupConnect();
 }

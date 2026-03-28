@@ -291,7 +291,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           onPopInvokedWithResult: (didPop, _) {
             if (!didPop) {
               if (_isRecording) _recorder.stop();
-              context.read<ChatBloc>().add(const ChatDisconnect());
+              Navigator.of(context).pop();
             }
           },
           child: Scaffold(
@@ -314,25 +314,28 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final roomDisplay = state.roomUUID.isNotEmpty ? state.roomUUID : '…';
 
     return AppBar(
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('SGTP Chat'),
-          if (state.roomUUID.isNotEmpty)
-            GestureDetector(
-              onTap: () {
+      title: GestureDetector(
+        onTap: state.roomUUID.isNotEmpty
+            ? () {
                 Clipboard.setData(ClipboardData(text: state.roomUUID));
                 _showFloatingSnackbar(context, 'Room UUID copied');
-              },
-              child: Text(
-                roomDisplay,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontFamily: 'monospace',
-                ),
+              }
+            : null,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              roomDisplay,
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
+            Text(
+              'tap to copy UUID',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-        ],
+          ],
+        ),
       ),
       actions: [
         if (state.status == ChatStatus.ready)
@@ -355,26 +358,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           icon: const Icon(Icons.more_vert),
           onSelected: (action) {
             switch (action) {
-              case _ChatMenuAction.newChat:
-                // Disconnect → listener pops back → SetupPage pre-filled → new connect
-                if (_isRecording) _recorder.stop();
-                context.read<ChatBloc>().add(const ChatDisconnect());
               case _ChatMenuAction.disconnect:
                 if (_isRecording) _recorder.stop();
                 context.read<ChatBloc>().add(const ChatDisconnect());
             }
           },
           itemBuilder: (_) => const [
-            PopupMenuItem(
-              value: _ChatMenuAction.newChat,
-              child: ListTile(
-                leading: Icon(Icons.add_circle_outline),
-                title: Text('New chat'),
-                subtitle: Text('Return to setup & start fresh'),
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-            PopupMenuDivider(),
             PopupMenuItem(
               value: _ChatMenuAction.disconnect,
               child: ListTile(
@@ -693,4 +682,4 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
 // ── Menu action enum ──────────────────────────────────────────────────────────
 
-enum _ChatMenuAction { newChat, disconnect }
+enum _ChatMenuAction { disconnect }

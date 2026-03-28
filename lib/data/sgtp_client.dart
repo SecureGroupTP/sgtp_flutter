@@ -76,6 +76,14 @@ class SgtpConfig {
     required this.identityKeyPair, required this.myPublicKey,
     required this.whitelist,
   });
+
+  SgtpConfig copyWithRoomUUID(Uint8List roomUUID) => SgtpConfig(
+    serverAddr:      serverAddr,
+    roomUUID:        roomUUID,
+    identityKeyPair: identityKeyPair,
+    myPublicKey:     myPublicKey,
+    whitelist:       whitelist,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,6 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     on<SetupPickPrivateKey>(_onPickPrivateKey);
     on<SetupPickWhitelistFolder>(_onPickWhitelistFolder);
     on<SetupPickWhitelistFiles>(_onPickWhitelistFiles);
-    on<SetupRoomUUIDChanged>(_onRoomUUIDChanged);
     on<SetupConnect>(_onConnect);
     on<SetupClearConnection>(_onClearConnection);
   }
@@ -206,13 +205,6 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     }
   }
 
-  // ── Room UUID ─────────────────────────────────────────────────────────────
-
-  void _onRoomUUIDChanged(
-      SetupRoomUUIDChanged event, Emitter<SetupState> emit) {
-    emit(state.copyWith(roomUUID: event.uuid, clearError: true));
-  }
-
   // ── Connect ───────────────────────────────────────────────────────────────
 
   Future<void> _onConnect(SetupConnect event, Emitter<SetupState> emit) async {
@@ -232,20 +224,9 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
           .map((b) => b.map((x) => x.toRadixString(16).padLeft(2, '0')).join())
           .toSet();
 
-      Uint8List roomUUID;
-      final uuidStr = state.roomUUID.trim().replaceAll('-', '');
-      if (uuidStr.isEmpty) {
-        roomUUID = Uint8List(16); // zeros = create new random room
-      } else {
-        if (uuidStr.length != 32) {
-          throw const FormatException('UUID must be 32 hex chars (without dashes)');
-        }
-        roomUUID = _hexToBytes(uuidStr);
-      }
-
       final config = SgtpConfig(
         serverAddr:      state.serverAddress.trim(),
-        roomUUID:        roomUUID,
+        roomUUID:        Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey:     parsed.publicKey,
         whitelist:       whitelist,
@@ -292,11 +273,4 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     return result;
   }
 
-  Uint8List _hexToBytes(String hex) {
-    final result = Uint8List(hex.length ~/ 2);
-    for (var i = 0; i < result.length; i++) {
-      result[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return result;
-  }
 }

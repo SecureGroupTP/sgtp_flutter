@@ -17,7 +17,6 @@ class SetupState extends Equatable {
   /// e.g. "friend.pub" → nickname "friend"
   final Map<String, String> nicknames;
 
-  final String roomUUID;
   final bool isLoading;
   final String? error;
   final SgtpConfig? connectionConfig;
@@ -31,7 +30,6 @@ class SetupState extends Equatable {
     this.whitelistPaths = const [],
     this.whitelistBytes = const [],
     this.nicknames = const {},
-    this.roomUUID = '',
     this.isLoading = false,
     this.error,
     this.connectionConfig,
@@ -49,7 +47,6 @@ class SetupState extends Equatable {
     List<String>? whitelistPaths,
     List<Uint8List>? whitelistBytes,
     Map<String, String>? nicknames,
-    String? roomUUID,
     bool? isLoading,
     String? error,
     SgtpConfig? connectionConfig,
@@ -66,7 +63,6 @@ class SetupState extends Equatable {
       whitelistPaths: whitelistPaths ?? this.whitelistPaths,
       whitelistBytes: whitelistBytes ?? this.whitelistBytes,
       nicknames: nicknames ?? this.nicknames,
-      roomUUID: roomUUID ?? this.roomUUID,
       isLoading: isLoading ?? this.isLoading,
       error: clearError ? null : (error ?? this.error),
       connectionConfig: clearConnectionConfig
@@ -85,7 +81,6 @@ class SetupState extends Equatable {
         whitelistPaths,
         whitelistBytes,
         nicknames,
-        roomUUID,
         isLoading,
         error,
         connectionConfig,

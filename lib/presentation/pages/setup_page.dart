@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../blocs/chat/chat_bloc.dart';
-import '../blocs/chat/chat_event.dart';
+import '../blocs/rooms/rooms_bloc.dart';
 import '../blocs/setup/setup_bloc.dart';
 import '../blocs/setup/setup_event.dart';
 import '../blocs/setup/setup_state.dart';
-import 'chat_page.dart';
+import 'rooms_page.dart';
 
 class SetupPage extends StatefulWidget {
   const SetupPage({super.key});
@@ -18,7 +17,6 @@ class SetupPage extends StatefulWidget {
 
 class _SetupPageState extends State<SetupPage> {
   final _serverCtrl = TextEditingController();
-  final _roomCtrl   = TextEditingController();
   final _formKey    = GlobalKey<FormState>();
 
   @override
@@ -30,7 +28,6 @@ class _SetupPageState extends State<SetupPage> {
   @override
   void dispose() {
     _serverCtrl.dispose();
-    _roomCtrl.dispose();
     super.dispose();
   }
 
@@ -56,18 +53,20 @@ class _SetupPageState extends State<SetupPage> {
         if (state.connectionConfig != null) {
           final config    = state.connectionConfig!;
           final nicknames = state.nicknames;
+          final server    = state.serverAddress;
 
           // Clear config immediately so we don't re-navigate on rebuild
           context.read<SetupBloc>().add(const SetupClearConnection());
 
-          final chatBloc = ChatBloc()
-            ..add(ChatConnect(config, nicknames: nicknames));
-
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => BlocProvider.value(
-                value: chatBloc,
-                child: const ChatPage(),
+              builder: (_) => BlocProvider(
+                create: (_) => RoomsBloc(
+                  baseConfig:    config,
+                  nicknames:     nicknames,
+                  serverAddress: server,
+                ),
+                child: const RoomsPage(),
               ),
             ),
           );
@@ -91,8 +90,6 @@ class _SetupPageState extends State<SetupPage> {
                     _buildPrivateKeySection(context, state),
                     const SizedBox(height: 16),
                     _buildWhitelistSection(context, state),
-                    const SizedBox(height: 16),
-                    _buildRoomUUIDField(context, state),
                     const SizedBox(height: 32),
                     _buildConnectButton(context, state),
                     if (state.myPublicKey != null) ...[
@@ -286,21 +283,6 @@ class _SetupPageState extends State<SetupPage> {
     );
   }
 
-  Widget _buildRoomUUIDField(BuildContext context, SetupState state) {
-    return TextFormField(
-      controller: _roomCtrl,
-      decoration: const InputDecoration(
-        labelText: 'Room UUID (optional)',
-        hintText: 'Leave empty to create a new random room',
-        prefixIcon: Icon(Icons.meeting_room_outlined),
-        border: OutlineInputBorder(),
-        helperText: 'Paste a 32-char hex UUID (without dashes) to join existing room',
-      ),
-      onChanged: (v) =>
-          context.read<SetupBloc>().add(SetupRoomUUIDChanged(v)),
-    );
-  }
-
   Widget _buildConnectButton(BuildContext context, SetupState state) {
     return FilledButton.icon(
       onPressed: state.isLoading || !state.isReadyToConnect
@@ -313,7 +295,7 @@ class _SetupPageState extends State<SetupPage> {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : const Icon(Icons.login),
-      label: Text(state.isLoading ? 'Connecting...' : 'Connect'),
+      label: Text(state.isLoading ? 'Loading…' : 'Continue'),
       style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
     );
   }
