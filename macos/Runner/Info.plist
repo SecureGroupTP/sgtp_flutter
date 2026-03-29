@@ -28,5 +28,13 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is required to record voice messages.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Access to Documents is required to open key files.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Access to Downloads is required to open key files.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Access to Desktop is required to open key files.</string>
 </dict>
 </plist>

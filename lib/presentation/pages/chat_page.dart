@@ -98,10 +98,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         setState(() => _isPageVisible = true);
         // Clear notifications that were shown while in background
         NotificationService.cancelAll();
-        // Auto-reconnect if the connection dropped while minimised
+        // Auto-reconnect if the connection dropped or errored while minimised.
+        // We check both disconnected AND error: a "connection refused" from the
+        // server while backgrounded sets ChatStatus.error, not disconnected.
         final bloc = _chatBloc;
         if (bloc != null &&
-            bloc.state.status == ChatStatus.disconnected) {
+            (bloc.state.status == ChatStatus.disconnected ||
+             bloc.state.status == ChatStatus.error)) {
           bloc.add(const ChatReconnect());
         }
         // Send read receipts for messages that arrived while in background
@@ -116,8 +119,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         break;
 
       case AppLifecycleState.detached:
-        // App is being terminated
-        _chatBloc?.add(const ChatDisconnect());
+        // NOTE: Do NOT call ChatDisconnect here.
+        // On Android/iOS, AppLifecycleState.detached can fire when the app
+        // is merely moved to the background (process is still alive) on some
+        // devices/OS versions — not only on actual termination. Disconnecting
+        // here would kill the TCP socket every time the user presses Home.
+        // The OS will clean up the socket naturally when the process is truly
+        // killed, so no explicit disconnect is needed.
         break;
     }
   }
@@ -342,9 +350,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final bytes = await file.readAsBytes();
       if (context.mounted) {
         if (_isVideoNoteMode) {
-          // Audio-only video note: wrap in voice for now
-          // (true camera video note needs camera plugin - use voice as fallback)
-          context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+          // Video note (circle): audio-only fallback recorded as m4a,
+          // sent as video_note type so the receiver renders it as a circle bubble.
+          context.read<ChatBloc>().add(ChatSendVideoNote(bytes: bytes, mime: 'audio/m4a'));
         } else {
           context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
         }
@@ -446,7 +454,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return BlocConsumer<ChatBloc, ChatState>(
       listener: (context, state) {
+        // Always cache the bloc via context.read — it is always valid inside
+        // a BlocConsumer listener (unlike _chatBloc which starts as null).
         _chatBloc ??= context.read<ChatBloc>();
+        final bloc = context.read<ChatBloc>();
+
         if (state.messages.isNotEmpty) {
           // Jump instantly on first load, animate for new messages
           final isFirst = !_infoShown;
@@ -464,11 +476,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           if (_sentReadReceipts.contains(msg.id)) continue;
 
           if (_isPageVisible) {
-            // Chat window is open → send receipt immediately
+            // Chat window is open → send read receipt immediately.
+            // Use context.read<ChatBloc>() (always non-null here) so receipts
+            // are never dropped on the first listener call when _chatBloc
+            // was still null.
             _sentReadReceipts.add(msg.id);
-            context.read<ChatBloc>().add(ChatSendMessageRead(msg.id));
+            bloc.add(ChatSendMessageRead(msg.id));
           } else {
-            // App in background → show notification so the user can read it
+            // App in background → show notification so the user can read it.
             final senderLabel = state.peerNicknames[msg.senderUUID] ??
                 state.peerNicknamesHistory[msg.senderUUID] ??
                 (msg.senderUUID.length >= 8
@@ -477,10 +492,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             final body = msg.type == MessageType.text
                 ? msg.content
                 : '[${msg.type.name}]';
+            // Pass sender avatar if available — shown as icon on Android
+            // and as attachment thumbnail on iOS/macOS.
+            final avatar = state.peerAvatars[msg.senderUUID]
+                ?? msg.senderAvatarBytes;
             NotificationService.showMessage(
-              sender: senderLabel,
-              body:   body,
-              messageId: msg.id,
+              sender:      senderLabel,
+              body:        body,
+              messageId:   msg.id,
+              avatarBytes: avatar,
             );
           }
         }
@@ -894,6 +914,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   )
                 else
                   // ── Mobile: short tap = toggle mode, hold = record ──────────
+                  // NOTE: We deliberately avoid IconButton+tooltip here because
+                  // Flutter's Tooltip widget registers its own LongPressGestureRecognizer
+                  // which wins the gesture arena over the parent GestureDetector,
+                  // causing the tooltip to appear but _startHoldRecording never fires.
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -912,37 +936,39 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                             ),
                           ),
                         ),
-                      // Main record button — hold to record, release to send
+                      // Main record button — hold to record, tap to stop&send.
+                      // Pure GestureDetector+Material: no tooltip, no inner
+                      // InkWell long-press recognizer competing with ours.
                       GestureDetector(
-                        onLongPressStart: canSend
+                        onTap: canSend && _isRecording
+                            ? () => _stopAndSend(context)
+                            : null,
+                        onLongPressStart: canSend && !_isRecording
                             ? (_) => _startHoldRecording(context)
                             : null,
-                        onLongPressEnd: canSend
+                        onLongPressEnd: canSend && _isRecording
                             ? (_) => _stopHoldRecording(context)
                             : null,
-                        // Also allow tap-to-toggle for accessibility
-                        child: IconButton.filled(
-                          onPressed: canSend && _isRecording
-                              ? () => _stopAndSend(context)
-                              : null,
-                          icon: _isRecording
-                              ? const Icon(Icons.stop_rounded)
-                              : Icon(_isVideoNoteMode
-                                  ? Icons.radio_button_checked
-                                  : Icons.mic_rounded),
-                          style: IconButton.styleFrom(
-                            backgroundColor: _isRecording
-                                ? theme.colorScheme.error
-                                : _isVideoNoteMode
-                                    ? Colors.blueAccent
-                                    : theme.colorScheme.primary,
-                            foregroundColor: theme.colorScheme.onPrimary,
-                          ),
-                          tooltip: _isRecording
-                              ? 'Release to send'
+                        child: Material(
+                          color: _isRecording
+                              ? theme.colorScheme.error
                               : _isVideoNoteMode
-                                  ? 'Hold to record video note'
-                                  : 'Hold to record voice',
+                                  ? Colors.blueAccent
+                                  : theme.colorScheme.primary,
+                          shape: const CircleBorder(),
+                          child: SizedBox(
+                            width: 40,
+                            height: 40,
+                            child: Icon(
+                              _isRecording
+                                  ? Icons.stop_rounded
+                                  : _isVideoNoteMode
+                                      ? Icons.radio_button_checked
+                                      : Icons.mic_rounded,
+                              color: theme.colorScheme.onPrimary,
+                              size: 22,
+                            ),
+                          ),
                         ),
                       ),
                     ],
