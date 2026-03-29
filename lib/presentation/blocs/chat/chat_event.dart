@@ -119,7 +119,11 @@ class ChatToggleReaction extends ChatEvent {
 
 class ChatInternalSgtpEvent extends ChatEvent {
   final SgtpEvent sgtpEvent;
-  const ChatInternalSgtpEvent(this.sgtpEvent);
+  /// The session generation counter at the time this event was dispatched.
+  /// The BLoC ignores events whose sessionId doesn't match the current one,
+  /// preventing stale reconnect events from corrupting the peer list.
+  final int sessionId;
+  const ChatInternalSgtpEvent(this.sgtpEvent, {this.sessionId = 0});
   @override
-  List<Object?> get props => [sgtpEvent];
+  List<Object?> get props => [sgtpEvent, sessionId];
 }

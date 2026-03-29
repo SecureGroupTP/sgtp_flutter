@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../core/app_logger.dart';
 import '../core/constants.dart';
 import '../core/crypto/chacha20_utils.dart';
 import '../core/crypto/ed25519_utils.dart';
@@ -293,6 +294,7 @@ class SgtpClient {
     if (_state != _ClientState.disconnected) return;
     _state = _ClientState.connecting;
     _eventController.add(SgtpConnecting());
+    AppLogger.i('Connecting to server...', tag: 'SGTP');
     try {
       _ephemeralX25519    = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
@@ -316,6 +318,7 @@ class SgtpClient {
 
       _state  = _ClientState.waitingHandshake;
       _eventController.add(SgtpHandshaking());
+    AppLogger.i('Performing handshake...', tag: 'SGTP');
       _socket!.listen(_onData,
           onError: _onSocketError, onDone: _onSocketDone, cancelOnError: false);
       _stalePruneTimer = Timer.periodic(
@@ -330,7 +333,7 @@ class SgtpClient {
       await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       Future.delayed(Duration(milliseconds: SgtpConstants.infoDelayMs), () async {
         if (_state == _ClientState.waitingHandshake && _peers.isEmpty && !_readyEmitted) {
-          debugPrint('[SGTP] no peers after delay, going ready solo');
+          AppLogger.i('No peers after delay — ready solo', tag: 'SGTP');
           _updateMaster();
           _chatRequestSent = true;
           await _issueCK();
@@ -338,6 +341,7 @@ class SgtpClient {
       });
     } catch (e) {
       _state = _ClientState.disconnected;
+      AppLogger.e('Connection failed: $e', tag: 'SGTP');
       _eventController.add(SgtpError(error: 'Connection failed: $e'));
     }
   }
@@ -378,6 +382,7 @@ class SgtpClient {
         replyToSender: replyToSender,
       )));
     } catch (e) {
+      AppLogger.e('Failed to send message: $e', tag: 'SGTP');
       _eventController.add(SgtpError(error: 'Failed to send message: $e'));
     }
   }
@@ -432,9 +437,9 @@ class SgtpClient {
       final plain     = Uint8List.fromList(utf8.encode(json.encode(payload)));
       final cipher    = await encrypt(plain, _chatKey!, nonce);
       await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
-      debugPrint('[SGTP] sent chat_meta: $name');
+      AppLogger.d('Sent chat_meta: $name', tag: 'SGTP');
     } catch (e) {
-      debugPrint('[SGTP] sendChatMeta error: $e');
+      AppLogger.e('sendChatMeta error: $e', tag: 'SGTP');
     }
   }
 
@@ -488,6 +493,7 @@ class SgtpClient {
                 id: fileId, isSending: false, sendProgress: 1.0)));
       }
     } catch (e) {
+      AppLogger.e('Failed to send $mediaType: $e', tag: 'SGTP');
       _eventController.add(SgtpError(error: 'Failed to send $mediaType: $e'));
     }
   }
@@ -557,6 +563,7 @@ class SgtpClient {
   }
 
   void _onSocketError(Object e) {
+    AppLogger.e('Socket error: $e', tag: 'SGTP');
     _eventController.add(SgtpError(error: 'Socket error: $e'));
     _cleanup();
   }
@@ -564,6 +571,7 @@ class SgtpClient {
   void _onSocketDone() {
     if (_state != _ClientState.disconnected) {
       _cleanup();
+      AppLogger.i('Disconnected from server', tag: 'SGTP');
       _eventController.add(SgtpDisconnected());
     }
   }
@@ -579,7 +587,7 @@ class SgtpClient {
 
   void _handleFrame(ParsedFrame frame) async {
     try { await _dispatch(frame); } catch (e) {
-      debugPrint('[SGTP] frame error: $e');
+      AppLogger.w('Frame error: $e', tag: 'SGTP');
     }
   }
 
@@ -639,6 +647,8 @@ class SgtpClient {
       _peers.remove(h);
       _peerLastSeen.remove(h);
       _pendingHandshakes.remove(h);
+      AppLogger.i('Peer left: \${h.substring(0,8)}', tag: 'SGTP');
+      if (!_eventController.isClosed) AppLogger.i('Peer left: \${h.substring(0,8)}', tag: 'SGTP');
       if (!_eventController.isClosed) _eventController.add(SgtpPeerLeft(peerUUID: h));
     }
     if (_state == _ClientState.ready) {
@@ -675,6 +685,7 @@ class SgtpClient {
     _peerPublicKeys[h] = edH;
     if (!_eventController.isClosed && !_announcedJoins.contains(h)) {
       _announcedJoins.add(h);
+      AppLogger.i('Peer joined: \${h.substring(0,8)}', tag: 'SGTP');
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
   }
@@ -756,7 +767,7 @@ class SgtpClient {
         chatAvatarBytes: _currentChatAvatar,
       ));
       _chatRequestSent = true;
-      debugPrint('[SGTP] sent CHAT_REQUEST name="$_currentChatName"');
+      AppLogger.d('Sent CHAT_REQUEST name="$_currentChatName"', tag: 'SGTP');
     } else {
       _chatRequestSent = true;
       await _issueCK();
@@ -765,7 +776,7 @@ class SgtpClient {
 
   Future<void> _onChatRequest(ParsedFrame f) async {
     final sender = uuidBytesToHex(f.senderUUID);
-    debugPrint('[SGTP] CHAT_REQUEST from $sender');
+    AppLogger.d('CHAT_REQUEST from $sender', tag: 'SGTP');
 
     // Parse metadata from the extended CHAT_REQUEST
     final name   = f.chatRequestName;
@@ -792,7 +803,7 @@ class SgtpClient {
       final enc = await encrypt(_chatKey!, peer.sharedKey, _chatEpoch);
       await _sendFrame(buildChatKey(_roomUUID, peer.uuidBytes, _myUUID, _chatEpoch, enc));
     } catch (e) {
-      debugPrint('[SGTP] _issueCKToPeer failed for $peerHex: $e');
+      AppLogger.e('_issueCKToPeer failed for $peerHex: $e', tag: 'SGTP');
     }
   }
 
@@ -808,12 +819,13 @@ class SgtpClient {
         final enc = await encrypt(key, peer.sharedKey, _chatEpoch);
         await _sendFrame(buildChatKey(_roomUUID, peer.uuidBytes, _myUUID, _chatEpoch, enc));
       } catch (e) {
-        debugPrint('[SGTP] issueCK: encrypt failed for ${peer.uuid}: $e');
+        AppLogger.e('issueCK encrypt failed for ${peer.uuid}: $e', tag: 'SGTP');
       }
     }
     if (!_readyEmitted) {
       _readyEmitted = true;
       _state        = _ClientState.ready;
+      AppLogger.i('Ready (master) room=\${roomUUIDHex.substring(0,8)}', tag: 'SGTP');
       _eventController.add(SgtpReady(isMaster: true, roomUUIDHex: roomUUIDHex));
     }
     _ckRotationTimer?.cancel();
@@ -836,10 +848,12 @@ class SgtpClient {
       if (!_readyEmitted) {
         _readyEmitted = true;
         _state        = _ClientState.ready;
+        AppLogger.i('Ready (peer) room=\${roomUUIDHex.substring(0,8)}', tag: 'SGTP');
         _eventController.add(SgtpReady(isMaster: false, roomUUIDHex: roomUUIDHex));
         _requestHistory();
       }
     } catch (e) {
+      AppLogger.e('Failed to decrypt CHAT_KEY: $e', tag: 'SGTP');
       _eventController.add(SgtpError(error: 'Failed to decrypt CHAT_KEY: $e'));
     }
   }
@@ -1108,6 +1122,7 @@ class SgtpClient {
       final plain = await decrypt(f.payload, peer.sharedKey, f.timestamp);
       if (plain.length >= 2) {
         final code = ByteData.view(plain.buffer, plain.offsetInBytes, 2).getUint16(0, Endian.big);
+        AppLogger.e('Server status $code', tag: 'SGTP');
         _eventController.add(SgtpError(error: 'Server status $code'));
       }
     } catch (_) {}
@@ -1172,6 +1187,7 @@ class SgtpClient {
       signed = await signFrame(unsigned, _config.identityKeyPair);
     } catch (e) {
       if (!_eventController.isClosed) {
+        AppLogger.e('Failed to sign frame: $e', tag: 'SGTP');
         _eventController.add(SgtpError(error: 'Failed to sign frame: $e'));
       }
       return;
@@ -1196,6 +1212,7 @@ class SgtpClient {
       }
     } catch (e) {
       if (!_eventController.isClosed) {
+        AppLogger.e('Failed to send frame: $e', tag: 'SGTP');
         _eventController.add(SgtpError(error: 'Failed to send frame: $e'));
       }
     } finally {

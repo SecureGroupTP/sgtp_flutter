@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import '../../core/app_logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -11,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
@@ -60,6 +62,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   ChatBloc? _chatBloc;
   int _lastMessageCount = 0;
 
+  /// Room UUID for which we last saved/restored a scroll position.
+  String _lastScrollRoomUUID = '';
+
+  /// True after we have already restored (or skipped restoring) the saved
+  /// scroll position for the current room. Prevents re-firing on every state rebuild.
+  bool _scrollRestored = false;
+
   /// Timestamp when the app went to background. Used to decide whether
   /// to force-reconnect on resume (NAT may have killed the TCP connection).
   DateTime? _wentToBackground;
@@ -92,6 +101,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _saveScrollPosition();
     WidgetsBinding.instance.removeObserver(this);
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
@@ -127,7 +137,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               bgDuration.inSeconds > 50;
 
           if (isDown || staleTcp) {
-            debugPrint('[Chat] reconnecting after background '
+            AppLogger.w('[Chat] reconnecting after background '
                 '(${bgDuration.inSeconds}s, status=$status)');
             bloc.add(const ChatReconnect());
           }
@@ -183,6 +193,40 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         }
       }
     });
+  }
+
+  /// Persist the current scroll offset for this room so we can restore it later.
+  void _saveScrollPosition() {
+    final roomUUID = _chatBloc?.state.roomUUID ?? '';
+    if (roomUUID.isEmpty || !_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.offset;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setDouble('chat_scroll_$roomUUID', pos);
+    }).catchError((_) {});
+  }
+
+  /// Restore the saved scroll position for [roomUUID], or jump to bottom if
+  /// nothing was saved (first visit).
+  Future<void> _tryRestoreScrollPosition(String roomUUID) async {
+    if (roomUUID.isEmpty) {
+      _scrollToBottom(jump: true);
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedPos = prefs.getDouble('chat_scroll_$roomUUID');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scrollCtrl.hasClients) return;
+        if (savedPos != null) {
+          final maxExtent = _scrollCtrl.position.maxScrollExtent;
+          _scrollCtrl.jumpTo(savedPos.clamp(0.0, maxExtent));
+        } else {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        }
+      });
+    } catch (_) {
+      _scrollToBottom(jump: true);
+    }
   }
 
   void _sendMessage(BuildContext context) {
@@ -666,9 +710,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         if (state.messages.isNotEmpty) {
           final prevCount = _lastMessageCount;
           final newCount  = state.messages.length;
-          if (prevCount == 0) {
-            // First load — jump straight to bottom
-            _scrollToBottom(jump: true);
+          if (prevCount == 0 && !_scrollRestored) {
+            // First load — restore saved position or jump to bottom
+            _scrollRestored = true;
+            final roomUUID = state.roomUUID;
+            if (roomUUID != _lastScrollRoomUUID) {
+              _lastScrollRoomUUID = roomUUID;
+            }
+            _tryRestoreScrollPosition(roomUUID);
           } else if (newCount > prevCount) {
             final newest = state.messages.last;
             if (newest.isFromMe) {
@@ -733,6 +782,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           canPop: false,
           onPopInvokedWithResult: (didPop, _) {
             if (!didPop) {
+              _saveScrollPosition();
               if (_isRecording) _recorder.stop();
               Navigator.of(context).pop();
             }
@@ -1377,38 +1427,139 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void _showPeersSheet(BuildContext context, ChatState state) {
     showModalBottomSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Connected peers', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            if (state.peerUUIDs.isEmpty)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Center(child: Text('No peers connected')))
-            else
-              ...state.peerUUIDs.map((uuid) {
-                final nick = state.peerNicknames[uuid];
-                return ListTile(
-                  leading: const Icon(Icons.person_outline),
-                  title: Text(nick != null ? '$nick  ·  ${uuid.substring(0, 8)}…' : uuid,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.copy, size: 18),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: uuid));
-                      Navigator.pop(context);
-                      _showSnack(context, 'UUID copied');
-                    },
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.45,
+        minChildSize: 0.25,
+        maxChildSize: 0.88,
+        builder: (sheetCtx, scrollCtrl) => Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF141417),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag handle
+              Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 4),
+                child: Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2C2C30),
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                );
-              }),
-            const SizedBox(height: 8),
-          ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: Row(children: [
+                  Text('Connected peers',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A84FF).withAlpha(40),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${state.peerUUIDs.length}',
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF0A84FF)),
+                    ),
+                  ),
+                ]),
+              ),
+              const Divider(height: 1, color: Color(0xFF2C2C30)),
+              Flexible(
+                child: state.peerUUIDs.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          child: Text('No peers connected',
+                              style: TextStyle(color: Color(0xFF8E8E93))),
+                        ),
+                      )
+                    : ListView.separated(
+                        controller: scrollCtrl,
+                        padding: const EdgeInsets.only(bottom: 32),
+                        itemCount: state.peerUUIDs.length,
+                        separatorBuilder: (_, __) => const Divider(
+                          height: 1,
+                          color: Color(0xFF2C2C30),
+                          indent: 72,
+                        ),
+                        itemBuilder: (_, i) {
+                          final uuid = state.peerUUIDs[i];
+                          final nick = state.peerNicknames[uuid];
+                          final displayName = nick ?? uuid.substring(0, 8);
+                          final avatarBytes = state.peerAvatars[uuid];
+                          final initial = displayName.isNotEmpty
+                              ? displayName[0].toUpperCase()
+                              : '?';
+                          return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 4),
+                            leading: Container(
+                              width: 40, height: 40,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color(0xFF1F1F24),
+                                border: Border.all(
+                                    color: const Color(0xFF2C2C30)),
+                              ),
+                              child: ClipOval(
+                                child: avatarBytes != null
+                                    ? Image.memory(avatarBytes,
+                                        fit: BoxFit.cover)
+                                    : Center(
+                                        child: Text(initial,
+                                            style: const TextStyle(
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.bold,
+                                                color: Color(0xFFF5F5F5))),
+                                      ),
+                              ),
+                            ),
+                            title: Text(
+                              nick ?? '\${uuid.substring(0, 8)}…',
+                              style: const TextStyle(
+                                  color: Color(0xFFF5F5F5),
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500),
+                            ),
+                            subtitle: nick != null
+                                ? Text(
+                                    '\${uuid.substring(0, 8)}…',
+                                    style: const TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 11,
+                                        color: Color(0xFF8E8E93)),
+                                  )
+                                : null,
+                            trailing: IconButton(
+                              icon: const Icon(Icons.copy,
+                                  size: 18, color: Color(0xFF8E8E93)),
+                              tooltip: 'Copy UUID',
+                              onPressed: () {
+                                Clipboard.setData(
+                                    ClipboardData(text: uuid));
+                                Navigator.pop(context);
+                                _showSnack(context, 'UUID copied');
+                              },
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

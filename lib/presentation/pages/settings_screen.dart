@@ -14,6 +14,8 @@ import '../../core/crypto/ed25519_utils.dart';
 import '../../core/openssh_parser.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
+import '../../core/app_logger.dart';
+import 'logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 typedef ConfigChangedCallback = void Function(
@@ -479,6 +481,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SettingsGroup(title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
           _SettingsGroup(title: 'Network',             child: _buildNetworkCard()),
           _buildGettingStarted(),
+          _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
           _SettingsGroup(title: 'About',               child: _buildAboutCard()),
           const SizedBox(height: 16),
         ],
@@ -868,6 +871,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ── Logs card ─────────────────────────────────────────────────────────────
+
+  Widget _buildLogsCard() {
+    return ListenableBuilder(
+      listenable: _LogsCountNotifier(),
+      builder: (_, __) {
+        final count = AppLogger.entries.length;
+        return Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    count == 0 ? 'No log entries yet' : '$count entries in memory',
+                    style: const TextStyle(
+                        fontSize: 14, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Tap to view live logs, filter by level, or copy.',
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            _ActionButton(
+              icon: Icons.article_outlined,
+              label: 'View',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const LogsScreen(),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // ── About card ────────────────────────────────────────────────────────────
 
   Widget _buildAboutCard() {
@@ -1082,5 +1130,21 @@ class _AboutRow extends StatelessWidget {
         Text(value,  style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
       ],
     );
+  }
+}
+
+// Thin ChangeNotifier that fires whenever AppLogger gains or loses entries,
+// so the Settings "Logs" card reflects the current count in real time.
+class _LogsCountNotifier extends ChangeNotifier {
+  _LogsCountNotifier() {
+    AppLogger.addListener(_update);
+  }
+
+  void _update(LogEntry _) => notifyListeners();
+
+  @override
+  void dispose() {
+    AppLogger.removeListener(_update);
+    super.dispose();
   }
 }

@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../../../core/app_logger.dart';
+
 import '../../../data/repositories/chat_metadata_repository.dart';
 import '../../../data/sgtp_client.dart';
 import '../../../domain/entities/chat_metadata.dart';
@@ -18,6 +20,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
   // Keep last config for reconnect
   ChatConnect? _lastConnectEvent;
+
+  /// Incremented on every (re)connect. Events emitted by a previous session
+  /// carry the old session ID and are silently ignored, which prevents stale
+  /// SgtpPeerJoined / SgtpPeerLeft events from polluting peerUUIDs after a
+  /// reconnect.
+  int _sessionId = 0;
 
   ChatBloc() : super(const ChatState()) {
     on<ChatConnect>(_onConnect);
@@ -49,8 +57,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   Future<void> _doConnect(ChatConnect event, Emitter<ChatState> emit) async {
-    await _eventSub?.cancel();
-    await _client?.close();
+    final oldSub    = _eventSub;
+    final oldClient = _client;
+    _eventSub = null;
+    _client   = null;
+    await oldSub?.cancel();
+    await oldClient?.close();
 
     // Load saved metadata from disk BEFORE creating client,
     // so we pass correct name/avatar into SgtpClient from the start.
@@ -67,10 +79,17 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (saved != null) {
           chatName   = saved.name;
           chatAvatar = saved.avatarBytes;
-          debugPrint('[ChatBloc] Pre-loaded metadata: "${saved.name}"');
+          AppLogger.i('[ChatBloc] Pre-loaded metadata: "${saved.name}"');
         }
       } catch (_) {}
     }
+
+    _eventSub = null;
+    _client = null;
+
+    // Stamp this session so any stale in-queue events from the old connection
+    // (already added to the BLoC queue before cancel()) can be discarded.
+    final sessionId = ++_sessionId;
 
     // Build config with resolved metadata so the client broadcasts correct name
     final resolvedConfig = event.config.copyWithMeta(
@@ -106,8 +125,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     ));
 
     _eventSub = client.events.listen(
-      (sgtpEvent) => add(ChatInternalSgtpEvent(sgtpEvent)),
-      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()))),
+      (sgtpEvent) => add(ChatInternalSgtpEvent(sgtpEvent, sessionId: sessionId)),
+      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()), sessionId: sessionId)),
     );
 
     await client.connect();
@@ -218,9 +237,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         updatedAt:   now,
       );
       await _metaRepo.saveChat(meta);
-      debugPrint('[ChatBloc] Saved metadata for $roomUUID: "$name"');
+      AppLogger.i('[ChatBloc] Saved metadata for $roomUUID: "$name"');
     } catch (e) {
-      debugPrint('[ChatBloc] Failed to save metadata: $e');
+      AppLogger.i('[ChatBloc] Failed to save metadata: $e');
     }
   }
 
@@ -232,6 +251,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   );
 
   void _onSgtpEvent(ChatInternalSgtpEvent event, Emitter<ChatState> emit) {
+    // Discard events from a previous (now-cancelled) connection session.
+    if (event.sessionId != _sessionId) return;
+
     final sgtpEvent = event.sgtpEvent;
     switch (sgtpEvent) {
       case SgtpConnecting():
@@ -251,7 +273,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         emit(state.copyWith(
           status: ChatStatus.ready, isMaster: isMaster,
           roomUUID: roomUUIDHex, myUUID: _client?.myUUIDHex ?? '',
-          peerUUIDs: _client?.peerUUIDs ?? [],
+          // Use a Set to ensure no duplicates survive across reconnects
+          peerUUIDs: (_client?.peerUUIDs ?? []).toSet().toList(),
         ));
         _saveMetadata(roomUUIDHex, state.chatName, state.chatAvatarBytes);
 
@@ -333,7 +356,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         emit(state.copyWith(status: ChatStatus.disconnected));
 
       case SgtpChatMetadataReceived(:final chatName, :final avatarBytes, :final senderUUID):
-        debugPrint('[ChatBloc] Got metadata from $senderUUID: "$chatName"');
+        AppLogger.i('[ChatBloc] Got metadata from $senderUUID: "$chatName"');
         emit(state.copyWith(chatName: chatName, chatAvatarBytes: avatarBytes));
         final roomUUID = state.roomUUID.isNotEmpty
             ? state.roomUUID

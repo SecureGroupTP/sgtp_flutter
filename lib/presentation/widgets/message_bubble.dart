@@ -65,16 +65,25 @@ class MessageBubble extends StatelessWidget {
     // Voice messages: no bubble frame but need reactions row — fall through to
     // the main Column below. Only skip if it's truly invisible.
     if (message.type == MessageType.voice) {
+      // Wrap with Align + ConstrainedBox identical to regular text bubbles so
+      // own messages are flush-right and peer messages are flush-left.
       final voiceWidget = _withAvatar(
         context: context,
         isMe: isMe,
-        child: Container(
-          margin: const EdgeInsets.only(
-            left: 8, right: 8,
-            top: 4, bottom: 4,
+        child: Align(
+          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78),
+            child: Container(
+              margin: const EdgeInsets.only(
+                left: 8, right: 8,
+                top: 4, bottom: 4,
+              ),
+              child: _buildVoiceContent(
+                  context, theme, cs.onSurfaceVariant, senderLabel, timeStr, isMe),
+            ),
           ),
-          child: _buildVoiceContent(
-              context, theme, cs.onSurfaceVariant, senderLabel, timeStr, isMe),
         ),
       );
       final reactionsRow = _buildReactionsRow(theme, cs);
@@ -104,13 +113,16 @@ class MessageBubble extends StatelessWidget {
       final noteWidget = _withAvatar(
         context: context,
         isMe: isMe,
-        child: Container(
-          margin: const EdgeInsets.only(
-            left: 8, right: 8,
-            top: 4, bottom: 4,
+        child: Align(
+          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            margin: const EdgeInsets.only(
+              left: 8, right: 8,
+              top: 4, bottom: 4,
+            ),
+            child: _buildVideoNoteContent(
+                context, theme, Colors.white, senderLabel, timeStr, isMe),
           ),
-          child: _buildVideoNoteContent(
-              context, theme, Colors.white, senderLabel, timeStr, isMe),
         ),
       );
       final reactionsRow = _buildReactionsRow(theme, cs);
