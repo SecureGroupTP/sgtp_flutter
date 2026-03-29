@@ -100,8 +100,14 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    final bgColor   = isMe ? cs.primaryContainer : cs.surfaceContainerHighest;
-    final textColor = isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+    // Own bubbles: #0A84FF fill, white text
+    // Other bubbles: #1F1F24 fill, #8E8E93 text, #2C2C30 border
+    const ownBubbleBg    = Color(0xFF0A84FF);
+    const otherBubbleBg  = Color(0xFF1F1F24);
+    const ownTextColor   = Colors.white;
+    const otherTextColor = Color(0xFFF5F5F5);
+    final bgColor   = isMe ? ownBubbleBg   : otherBubbleBg;
+    final textColor = isMe ? ownTextColor  : otherTextColor;
 
     // Reply preview strip
     Widget? replyPreview;
@@ -114,10 +120,15 @@ class MessageBubble extends StatelessWidget {
         ),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest.withAlpha(180),
+          color: isMe
+              ? const Color(0xFF0056B3).withAlpha(180)
+              : const Color(0xFF1F1F24).withAlpha(180),
           borderRadius: BorderRadius.circular(10),
           border: Border(
-            left: BorderSide(color: cs.primary, width: 3),
+            left: BorderSide(
+              color: isMe ? Colors.white : cs.primary,
+              width: 3,
+            ),
           ),
         ),
         child: Row(children: [
@@ -126,12 +137,19 @@ class MessageBubble extends StatelessWidget {
             children: [
               if (message.replyToSender != null)
                 Text(message.replyToSender!,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                        color: cs.primary, fontWeight: FontWeight.bold)),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isMe ? Colors.white : cs.primary,
+                    )),
               Text(message.replyToContent ?? '…',
                   maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isMe
+                        ? Colors.white.withAlpha(180)
+                        : const Color(0xFF8E8E93),
+                  )),
             ],
           )),
         ]),
@@ -148,11 +166,14 @@ class MessageBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(replyPreview != null ? 4 : 16),
-          topRight: Radius.circular(replyPreview != null ? 4 : 16),
-          bottomLeft: Radius.circular(isMe ? 16 : 4),
+          topLeft:     Radius.circular(replyPreview != null ? 4 : 16),
+          topRight:    Radius.circular(replyPreview != null ? 4 : 16),
+          bottomLeft:  Radius.circular(isMe ? 16 : 4),
           bottomRight: Radius.circular(isMe ? 4 : 16),
         ),
+        border: isMe
+            ? null
+            : Border.all(color: const Color(0xFF2C2C30)),
       ),
       child: _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
     );
@@ -271,19 +292,35 @@ class MessageBubble extends StatelessWidget {
         return GestureDetector(
           onTap: () => onReact?.call(e.key),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
               color: mine
-                  ? cs.primaryContainer
-                  : cs.surfaceContainerHighest,
+                  ? const Color(0xFF0A84FF).withAlpha(40)
+                  : const Color(0xFF1F1F24),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                  color: mine ? cs.primary : cs.outline.withAlpha(60),
-                  width: 1),
+                color: mine
+                    ? const Color(0xFF0A84FF)
+                    : const Color(0xFF2C2C30),
+                width: 1,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x33000000),
+                  blurRadius: 4,
+                  offset: Offset(0, 2),
+                ),
+              ],
             ),
-            child: Text('${e.key} $count',
-                style: theme.textTheme.labelSmall?.copyWith(
-                    color: mine ? cs.onPrimaryContainer : cs.onSurfaceVariant)),
+            child: Text(
+              '${e.key} $count',
+              style: TextStyle(
+                fontSize: 12,
+                color: mine
+                    ? const Color(0xFF0A84FF)
+                    : const Color(0xFFF5F5F5),
+              ),
+            ),
           ),
         );
       }).toList(),
@@ -297,15 +334,29 @@ class MessageBubble extends StatelessWidget {
     required Widget child,
   }) {
     final avatarBytes = isMe ? userAvatarBytes : _senderAvatarBytes();
-    final avatar = CircleAvatar(
-      radius: 14,
-      backgroundImage: avatarBytes != null ? MemoryImage(avatarBytes) : null,
-      child: avatarBytes == null
-          ? Text(
-              _senderInitial(),
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-            )
-          : null,
+    final initial     = _senderInitial();
+
+    final avatar = Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xFF1F1F24),
+        border: Border.all(color: const Color(0xFF2C2C30)),
+      ),
+      child: ClipOval(
+        child: avatarBytes != null
+            ? Image.memory(avatarBytes, fit: BoxFit.cover)
+            : Center(
+                child: Text(
+                  initial,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFF5F5F5)),
+                ),
+              ),
+      ),
     );
 
     return Row(
@@ -333,51 +384,88 @@ class MessageBubble extends StatelessWidget {
     final readers = readReceipts[message.id] ?? message.readBy;
     final isMedia = message.type == MessageType.video ||
         message.type == MessageType.voice;
-    final label = isMedia ? 'Watched' : 'Read';
+
+    Widget content;
 
     if (message.isSending) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 40, bottom: 2),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          SizedBox(width: 12, height: 12,
-              child: CircularProgressIndicator(strokeWidth: 1.5,
-                  color: cs.onSurfaceVariant.withAlpha(120))),
-          const SizedBox(width: 4),
-          Text('Sending…',
-              style: theme.textTheme.labelSmall?.copyWith(
-                  color: cs.onSurfaceVariant.withAlpha(120), fontSize: 10)),
-        ]),
+      content = Row(mainAxisSize: MainAxisSize.min, children: [
+        SizedBox(
+          width: 12, height: 12,
+          child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              color: const Color(0xFF8E8E93).withAlpha(120)),
+        ),
+        const SizedBox(width: 4),
+        const Text('Sending…',
+            style: TextStyle(fontSize: 10, color: Color(0xFF8E8E93))),
+      ]);
+    } else if (readers.isEmpty) {
+      content = const Icon(Icons.done, size: 14, color: Color(0xFF636366));
+    } else {
+      final readByAll = peerCount > 0 && readers.length >= peerCount;
+
+      // Tiny overlapping avatar circles
+      final avatarCount = readers.length.clamp(0, 5);
+      final avatarCircles = SizedBox(
+        width:  avatarCount * 10.0 + 4,
+        height: 14,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (int i = 0; i < avatarCount; i++)
+              Positioned(
+                left: i * 10.0,
+                child: Container(
+                  width: 14, height: 14,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1F1F24),
+                    border: Border.all(color: const Color(0xFF0A0A0C), width: 1),
+                  ),
+                  child: Center(
+                    child: Text(
+                      _peerInitialForUUID(readers.elementAt(i)),
+                      style: const TextStyle(
+                          fontSize: 7,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFF5F5F5)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       );
+
+      content = Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(
+          readByAll
+              ? (isMedia ? Icons.visibility : Icons.done_all)
+              : Icons.done,
+          size: 14,
+          color: readByAll
+              ? const Color(0xFF0A84FF)
+              : const Color(0xFF8E8E93).withAlpha(180),
+        ),
+        const SizedBox(width: 4),
+        avatarCircles,
+      ]);
     }
 
-    if (readers.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 40, bottom: 2),
-        child: Icon(Icons.done, size: 14, color: cs.onSurfaceVariant.withAlpha(120)),
-      );
-    }
-    final readByAll = peerCount > 0 && readers.length >= peerCount;
+    // Always pin to the right edge, matching the bubble's right margin (44px for avatar)
     return Padding(
-      padding: const EdgeInsets.only(right: 40, bottom: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            readByAll
-                ? (isMedia ? Icons.visibility : Icons.done_all)
-                : Icons.done,
-            size: 14,
-            color: readByAll ? cs.primary : cs.onSurfaceVariant.withAlpha(180),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            '$label by ${readers.length}',
-            style: theme.textTheme.labelSmall?.copyWith(
-                color: cs.onSurfaceVariant.withAlpha(160), fontSize: 10),
-          ),
-        ],
+      padding: const EdgeInsets.only(right: 44, bottom: 2),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: content,
       ),
     );
+  }
+
+  String _peerInitialForUUID(String uuid) {
+    final nick = peerNicknames[uuid];
+    if (nick != null && nick.isNotEmpty) return nick[0].toUpperCase();
+    return uuid.isNotEmpty ? uuid[0].toUpperCase() : '?';
   }
 
   String _buildSenderLabel() {
@@ -440,14 +528,23 @@ class MessageBubble extends StatelessWidget {
   Widget _buildSystemContent(BuildContext context, ThemeData theme) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-        child: Text(
-          message.content,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontStyle: FontStyle.italic,
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF141417),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF2C2C30)),
           ),
-          textAlign: TextAlign.center,
+          child: Text(
+            message.content,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF8E8E93),
+            ),
+            textAlign: TextAlign.center,
+          ),
         ),
       ),
     );
@@ -585,14 +682,17 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
-          SizedBox(
+          Container(
             width: 200,
             height: 200,
-            child: ClipOval(
-              child: _VideoThumbnail(
-                videoBytes: message.videoBytes!,
-                mediaName: message.mediaName ?? 'video',
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.fromBorderSide(
+                BorderSide(color: Color(0xFF0A84FF), width: 3),
               ),
+            ),
+            child: ClipOval(
+              child: _VideoNotePlayer(videoBytes: message.videoBytes!),
             ),
           ),
           const SizedBox(height: 4),
@@ -651,6 +751,7 @@ class MessageBubble extends StatelessWidget {
           _VoicePlayer(
             audioBytes: message.audioBytes!,
             mediaMime: message.mediaMime ?? 'audio/m4a',
+            isMe: isMe,
           ),
           const SizedBox(height: 2),
           _timeLabel(theme, textColor, timeStr),
@@ -663,23 +764,158 @@ class MessageBubble extends StatelessWidget {
 
   Widget _senderLabel(ThemeData theme, String label) => Text(
         label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.primary,
-          fontWeight: FontWeight.bold,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: Color(0xFF8E8E93),
         ),
       );
 
-  Widget _timeLabel(ThemeData theme, Color textColor, String timeStr) =>
-      Text(
+  Widget _timeLabel(ThemeData theme, Color textColor, String timeStr) => Text(
         '${message.isFromHistory ? '~ ' : ''}$timeStr',
-        style:
-            theme.textTheme.labelSmall?.copyWith(color: textColor.withAlpha(160)),
+        style: TextStyle(
+          fontSize: 11,
+          color: textColor.withAlpha(160),
+        ),
       );
 
   String _formatTime(DateTime dt) {
     final h = dt.hour.toString().padLeft(2, '0');
     final m = dt.minute.toString().padLeft(2, '0');
     return '$h:$m';
+  }
+}
+
+// ─── Circular video note player ───────────────────────────────────────────────
+
+class _VideoNotePlayer extends StatefulWidget {
+  final Uint8List videoBytes;
+  const _VideoNotePlayer({required this.videoBytes});
+
+  @override
+  State<_VideoNotePlayer> createState() => _VideoNotePlayerState();
+}
+
+class _VideoNotePlayerState extends State<_VideoNotePlayer> {
+  Player?          _player;
+  VideoController? _controller;
+  bool _loading     = false;
+  bool _initialized = false;
+  bool _playing     = false;
+  String? _tmpPath;
+
+  @override
+  void dispose() {
+    _player?.dispose();
+    if (_tmpPath != null) File(_tmpPath!).delete().catchError((_) {});
+    super.dispose();
+  }
+
+  Future<void> _togglePlay() async {
+    if (_loading) return;
+    if (_initialized) {
+      await _player?.playOrPause();
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final tmpDir = await getTemporaryDirectory();
+      final file = File('${tmpDir.path}/vnote_${widget.videoBytes.hashCode}.mp4');
+      if (!file.existsSync()) await file.writeAsBytes(widget.videoBytes);
+      _tmpPath = file.path;
+
+      final player     = Player();
+      final controller = VideoController(player);
+      await player.open(Media('file://${file.path}'), play: true);
+
+      // listen to playback state
+      player.stream.playing.listen((p) {
+        if (mounted) setState(() => _playing = p);
+      });
+
+      if (mounted) {
+        setState(() {
+          _player      = player;
+          _controller  = controller;
+          _initialized = true;
+          _loading     = false;
+          _playing     = true;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Video error: $e'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+        ));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.expand(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Placeholder — always show gradient so circle isn't transparent
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1F1F24), Color(0xFF2C2C30)],
+              ),
+            ),
+          ),
+
+          // Video (when loaded) — cover-fill the circle
+          if (_initialized && _controller != null)
+            FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: 200,
+                height: 200,
+                child: Video(
+                  controller: _controller!,
+                  controls: NoVideoControls,
+                ),
+              ),
+            ),
+
+          // Play / loading overlay
+          GestureDetector(
+            onTap: _togglePlay,
+            child: Container(
+              color: Colors.transparent,
+              alignment: Alignment.center,
+              child: AnimatedOpacity(
+                opacity: (_playing && _initialized) ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withAlpha(140),
+                    shape: BoxShape.circle,
+                  ),
+                  child: _loading
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.play_arrow_rounded,
+                          color: Colors.white, size: 30),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -903,8 +1139,13 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
 class _VoicePlayer extends StatefulWidget {
   final Uint8List audioBytes;
   final String mediaMime;
+  final bool isMe;
 
-  const _VoicePlayer({required this.audioBytes, required this.mediaMime});
+  const _VoicePlayer({
+    required this.audioBytes,
+    required this.mediaMime,
+    this.isMe = false,
+  });
 
   @override
   State<_VoicePlayer> createState() => _VoicePlayerState();
@@ -1030,6 +1271,17 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     final posLabel = _fmt(_position);
     final durLabel = _metaReady ? _fmt(_duration) : '--:--';
 
+    // HTML: own bubble → white play button + blue icon; other → dark blue button + white icon
+    final btnBg    = widget.isMe ? Colors.white : const Color(0xFF0056B3);
+    final btnFg    = widget.isMe ? const Color(0xFF0A84FF) : Colors.white;
+    final activeWave   = widget.isMe ? Colors.white : const Color(0xFF0A84FF);
+    final inactiveWave = widget.isMe
+        ? Colors.white.withAlpha(100)
+        : const Color(0xFF8E8E93);
+    final timeColor = widget.isMe
+        ? Colors.white.withAlpha(180)
+        : const Color(0xFF8E8E93);
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -1037,15 +1289,17 @@ class _VoicePlayerState extends State<_VoicePlayer> {
         GestureDetector(
           onTap: _togglePlay,
           child: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(color: cs.primary, shape: BoxShape.circle),
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(color: btnBg, shape: BoxShape.circle),
             child: _loading
                 ? Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                    padding: const EdgeInsets.all(9),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: btnFg),
                   )
-                : Icon(_playing ? Icons.pause : Icons.play_arrow, color: cs.onPrimary),
+                : Icon(_playing ? Icons.pause : Icons.play_arrow,
+                    color: btnFg, size: 20),
           ),
         ),
         const SizedBox(width: 10),
@@ -1062,8 +1316,8 @@ class _VoicePlayerState extends State<_VoicePlayer> {
                   painter: _WaveformPainter(
                     bars: _waveform,
                     progress: progress,
-                    activeColor: cs.primary,
-                    inactiveColor: cs.outlineVariant,
+                    activeColor: activeWave,
+                    inactiveColor: inactiveWave,
                   ),
                 ),
               ),
@@ -1075,11 +1329,9 @@ class _VoicePlayerState extends State<_VoicePlayer> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(posLabel,
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: cs.onSurfaceVariant)),
+                      style: TextStyle(fontSize: 11, color: timeColor)),
                   Text(durLabel,
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: cs.onSurfaceVariant)),
+                      style: TextStyle(fontSize: 11, color: timeColor)),
                 ],
               ),
             ),

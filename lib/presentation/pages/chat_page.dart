@@ -545,99 +545,188 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context, ChatState state) {
-    final theme = Theme.of(context);
-    return AppBar(
-      title: GestureDetector(
-        onTap: state.status == ChatStatus.ready
-            ? () => _showEditMetadataDialog(context, state)
-            : null,
-        child: Row(
-          children: [
-            // Avatar
-            CircleAvatar(
-              radius: 18,
-              backgroundImage: state.chatAvatarBytes != null
-                  ? MemoryImage(state.chatAvatarBytes!) : null,
-              child: state.chatAvatarBytes == null
-                  ? const Icon(Icons.chat, size: 18) : null,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(62),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Color(0xD80A0A0C),
+          border: Border(
+            bottom: BorderSide(color: Color(0xFF2C2C30)),
+          ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: SizedBox(
+            height: 62,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+              child: Row(
                 children: [
-                  Text(state.chatName,
-                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-                      overflow: TextOverflow.ellipsis),
-                  if (state.status == ChatStatus.ready)
-                    Text(
-                      state.peerUUIDs.isEmpty ? 'No peers' : '${state.peerUUIDs.length} peer${state.peerUUIDs.length == 1 ? '' : 's'}',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant),
+                  // Back button
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, size: 24),
+                    color: const Color(0xFFF5F5F5),
+                    onPressed: () {
+                      if (_isRecording) _recorder.stop();
+                      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+                    },
+                    padding: const EdgeInsets.all(4),
+                    visualDensity: VisualDensity.compact,
+                  ),
+
+                  // Avatar
+                  GestureDetector(
+                    onTap: state.status == ChatStatus.ready
+                        ? () => _showEditMetadataDialog(context, state)
+                        : null,
+                    child: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF141417),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFF2C2C30)),
+                      ),
+                      child: ClipOval(
+                        child: state.chatAvatarBytes != null
+                            ? Image.memory(state.chatAvatarBytes!,
+                                fit: BoxFit.cover)
+                            : const Center(
+                                child: Text('👽',
+                                    style: TextStyle(fontSize: 18))),
+                      ),
                     ),
+                  ),
+
+                  const SizedBox(width: 10),
+
+                  // Room name + peer count
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: state.status == ChatStatus.ready
+                          ? () => _showEditMetadataDialog(context, state)
+                          : null,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            state.chatName,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFFF5F5F5),
+                              letterSpacing: -0.2,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            state.peerUUIDs.isEmpty
+                                ? 'No peers'
+                                : '${state.peerUUIDs.length} peer${state.peerUUIDs.length == 1 ? '' : 's'}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8E8E93),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Action buttons
+                  if (state.status == ChatStatus.ready)
+                    IconButton(
+                      icon: Badge(
+                        label: Text('${state.peerUUIDs.length}'),
+                        isLabelVisible: state.peerUUIDs.isNotEmpty,
+                        child: const Icon(Icons.group_outlined, size: 22),
+                      ),
+                      color: const Color(0xFF8E8E93),
+                      onPressed: () => _showPeersSheet(context, state),
+                      padding: const EdgeInsets.all(4),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.info_outline, size: 22),
+                    color: const Color(0xFF8E8E93),
+                    onPressed: () => _showRoomInfo(context, state),
+                    padding: const EdgeInsets.all(4),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  PopupMenuButton<_ChatMenuAction>(
+                    icon: const Icon(Icons.more_vert,
+                        size: 22, color: Color(0xFF8E8E93)),
+                    padding: const EdgeInsets.all(4),
+                    onSelected: (action) {
+                      switch (action) {
+                        case _ChatMenuAction.disconnect:
+                          if (_isRecording) _recorder.stop();
+                          context
+                              .read<ChatBloc>()
+                              .add(const ChatDisconnect());
+                          if (context.mounted &&
+                              Navigator.of(context).canPop()) {
+                            Navigator.of(context).pop();
+                          }
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      if (state.status == ChatStatus.ready)
+                        const PopupMenuItem(
+                          value: _ChatMenuAction.disconnect,
+                          child: ListTile(
+                            leading: Icon(Icons.logout),
+                            title: Text('Disconnect'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      PopupMenuItem(
+                        onTap: () =>
+                            _showEditMetadataDialog(context, state),
+                        child: const ListTile(
+                          leading: Icon(Icons.edit_outlined),
+                          title: Text('Edit chat'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
-          ],
+          ),
         ),
       ),
-      actions: [
-        if (state.status == ChatStatus.ready) ...[
-          IconButton(
-            icon: Badge(
-              label: Text('${state.peerUUIDs.length}'),
-              isLabelVisible: state.peerUUIDs.isNotEmpty,
-              child: const Icon(Icons.people_outline),
-            ),
-            onPressed: () => _showPeersSheet(context, state),
-            tooltip: 'Peers',
-          ),
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: () => _showEditMetadataDialog(context, state),
-            tooltip: 'Edit chat',
-          ),
-        ],
-        IconButton(
-          icon: const Icon(Icons.info_outline),
-          onPressed: () => _showRoomInfo(context, state),
-          tooltip: 'Room info',
-        ),
-        PopupMenuButton<_ChatMenuAction>(
-          icon: const Icon(Icons.more_vert),
-          onSelected: (action) {
-            switch (action) {
-              case _ChatMenuAction.disconnect:
-                if (_isRecording) _recorder.stop();
-                context.read<ChatBloc>().add(const ChatDisconnect());
-                if (context.mounted && Navigator.of(context).canPop()) {
-                  Navigator.of(context).pop();
-                }
-            }
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(
-              value: _ChatMenuAction.disconnect,
-              child: ListTile(
-                leading: Icon(Icons.logout), title: Text('Disconnect'),
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 
   Widget _buildStatusBanner(BuildContext context, ChatState state) {
-    final theme = Theme.of(context);
     switch (state.status) {
       case ChatStatus.connecting:
-        return _banner(context, 'Connecting to server…', theme.colorScheme.primaryContainer);
+        return _statusBanner(
+          text: 'Connecting to server…',
+          color: const Color(0xFF0A84FF),
+          bgColor: const Color(0x1A0A84FF),
+          borderColor: const Color(0x330A84FF),
+          withSpinner: true,
+        );
       case ChatStatus.handshaking:
-        return _banner(context, 'Performing handshake…', theme.colorScheme.secondaryContainer);
+        return _statusBanner(
+          text: 'Performing handshake…',
+          color: const Color(0xFFFF9F0A),
+          bgColor: const Color(0x26FF9F0A),
+          borderColor: const Color(0x33FF9F0A),
+          withSpinner: true,
+        );
       case ChatStatus.error:
-        return _banner(context, state.errorMessage ?? 'Error', theme.colorScheme.errorContainer);
+        return _statusBanner(
+          text: state.errorMessage ?? 'Error',
+          color: const Color(0xFFFF3B30),
+          bgColor: const Color(0x26FF3B30),
+          borderColor: const Color(0x33FF3B30),
+          withSpinner: false,
+        );
       case ChatStatus.ready:
         return const SizedBox.shrink();
       case ChatStatus.disconnected:
@@ -645,27 +734,78 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
   }
 
-  Widget _disconnectedBanner(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget _statusBanner({
+    required String text,
+    required Color color,
+    required Color bgColor,
+    required Color borderColor,
+    required bool withSpinner,
+  }) {
     return Container(
-      color: theme.colorScheme.surfaceContainerHighest,
+      decoration: BoxDecoration(
+        color: bgColor,
+        border: Border(bottom: BorderSide(color: borderColor)),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.wifi_off_rounded, size: 16,
-              color: theme.colorScheme.onSurfaceVariant),
+          if (withSpinner) ...[
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: color,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _disconnectedBanner(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0x26636366),
+        border: Border(bottom: BorderSide(color: Color(0x33636366))),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.wifi_off_rounded,
+              size: 14, color: Color(0xFF8E8E93)),
           const SizedBox(width: 8),
-          Expanded(
-            child: Text('Disconnected',
-                style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant)),
+          const Expanded(
+            child: Text(
+              'Disconnected',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF8E8E93)),
+            ),
           ),
           TextButton.icon(
-            onPressed: () => context.read<ChatBloc>().add(const ChatReconnect()),
-            icon: const Icon(Icons.wifi_rounded, size: 16),
-            label: const Text('Reconnect'),
+            onPressed: () =>
+                context.read<ChatBloc>().add(const ChatReconnect()),
+            icon: const Icon(Icons.wifi_rounded, size: 14),
+            label: const Text('Reconnect',
+                style: TextStyle(fontSize: 13)),
             style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              foregroundColor: const Color(0xFF0A84FF),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               visualDensity: VisualDensity.compact,
             ),
           ),
@@ -674,18 +814,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _banner(BuildContext context, String text, Color color) {
-    final theme = Theme.of(context);
-    return Container(
-      color: color, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(children: [
-        SizedBox(width: 18, height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.primary)),
-        const SizedBox(width: 12),
-        Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
-      ]),
-    );
-  }
+
 
   Widget _buildMessageList(ChatState state) {
     if (state.messages.isEmpty) {
@@ -764,43 +893,54 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
-    final theme   = Theme.of(context);
     final reply   = state.replyToMessage;
 
     return SafeArea(
       child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          boxShadow: [BoxShadow(color: theme.colorScheme.shadow.withAlpha(30),
-              blurRadius: 8, offset: const Offset(0, -2))],
+        decoration: const BoxDecoration(
+          color: Color(0xF2141417),
+          border: Border(top: BorderSide(color: Color(0xFF2C2C30))),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── Upload progress ────────────────────────────────────────────
+            // ── Upload progress ───────────────────────────────────────────
             if (_uploadProgress != null)
-              LinearProgressIndicator(value: _uploadProgress,
-                  minHeight: 3, color: theme.colorScheme.primary),
+              LinearProgressIndicator(
+                value: _uploadProgress,
+                minHeight: 2,
+                backgroundColor: const Color(0xFF1F1F24),
+                color: const Color(0xFF0A84FF),
+              ),
 
             // ── Recording indicator ───────────────────────────────────────
             if (_isRecording)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                color: theme.colorScheme.errorContainer,
+                decoration: const BoxDecoration(
+                  color: Color(0x26FF3B30),
+                  border: Border(bottom: BorderSide(color: Color(0x33FF3B30))),
+                ),
                 child: Row(children: [
-                  Icon(Icons.fiber_manual_record, size: 10, color: theme.colorScheme.error),
+                  const Icon(Icons.fiber_manual_record,
+                      size: 10, color: Color(0xFFFF3B30)),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(
-                    _isVideoNoteMode
-                        ? 'Recording video note… tap ■ to send'
-                        : 'Recording… tap ■ to send',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onErrorContainer))),
+                  Expanded(
+                    child: Text(
+                      _isVideoNoteMode
+                          ? 'Recording video note… tap ■ to send'
+                          : 'Recording… tap ■ to send',
+                      style: const TextStyle(
+                          fontSize: 13, color: Color(0xFFFF3B30)),
+                    ),
+                  ),
                   TextButton(
                     onPressed: () async {
                       await _recorder.stop();
                       setState(() => _isRecording = false);
                     },
+                    style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF8E8E93)),
                     child: const Text('Cancel'),
                   ),
                 ]),
@@ -809,23 +949,33 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // ── Reply preview ─────────────────────────────────────────────
             if (reply != null)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                color: theme.colorScheme.secondaryContainer.withAlpha(120),
+                padding:
+                    const EdgeInsets.fromLTRB(16, 8, 8, 0),
                 child: Row(children: [
-                  Container(width: 3, height: 36,
-                      color: theme.colorScheme.primary,
-                      margin: const EdgeInsets.only(right: 8)),
+                  Container(
+                    width: 3,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A84FF),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          reply.isFromMe ? 'You' :
-                              (state.peerNicknames[reply.senderUUID] ??
-                               reply.senderUUID.substring(0, 8)),
-                          style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.bold),
+                          reply.isFromMe
+                              ? 'You'
+                              : (state.peerNicknames[reply.senderUUID] ??
+                                  reply.senderUUID.substring(0, 8)),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF0A84FF),
+                          ),
                         ),
                         Text(
                           reply.type == MessageType.text
@@ -833,15 +983,18 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                               : '[${reply.type.name}]',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall,
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF8E8E93)),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    onPressed: () =>
-                        context.read<ChatBloc>().add(const ChatClearReply()),
+                    icon: const Icon(Icons.close,
+                        size: 18, color: Color(0xFF8E8E93)),
+                    onPressed: () => context
+                        .read<ChatBloc>()
+                        .add(const ChatClearReply()),
                     padding: EdgeInsets.zero,
                     visualDensity: VisualDensity.compact,
                   ),
@@ -850,135 +1003,183 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
             // ── Input row ─────────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
-              child: Row(children: [
-                // Single media button
-                IconButton(
-                  onPressed: canSend && _uploadProgress == null
-                      ? () => _pickAndSendMedia(context)
-                      : null,
-                  icon: const Icon(Icons.attach_file_outlined),
-                  tooltip: 'Attach media',
-                ),
-
-                // Text field
-                Expanded(
-                  child: TextField(
-                    controller: _messageCtrl, focusNode: _focusNode,
-                    enabled: canSend && !_isRecording,
-                    decoration: InputDecoration(
-                      hintText: _isRecording ? 'Recording…'
-                          : canSend ? 'Message…' : 'Waiting…',
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none),
-                      filled: true,
-                      fillColor: theme.colorScheme.surfaceContainerHighest,
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    ),
-                    minLines: 1, maxLines: 5,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: canSend ? (_) => _sendMessage(context) : null,
-                  ),
-                ),
-                const SizedBox(width: 8),
-
-                // Send button when text typed / recording on desktop; mic/mode button otherwise
-                if (_hasText || (_isRecording && _isDesktop))
-                  IconButton.filled(
-                    onPressed: canSend && !_isRecording
-                        ? () => _sendMessage(context)
-                        : canSend && _isRecording
-                            ? () => _stopAndSend(context)
-                            : null,
-                    icon: const Icon(Icons.send),
-                    tooltip: 'Send',
-                  )
-                else if (_isDesktop)
-                  // ── Desktop: tap=start/stop, long-press=mic picker ──────────
-                  GestureDetector(
-                    onLongPress: canSend ? () => _showMicPicker(context) : null,
-                    child: IconButton.filled(
-                      onPressed: canSend ? () => _toggleRecording(context) : null,
-                      icon: Icon(_isRecording
-                          ? Icons.stop_rounded
-                          : Icons.mic_rounded),
-                      style: IconButton.styleFrom(
-                        backgroundColor: _isRecording
-                            ? theme.colorScheme.error
-                            : theme.colorScheme.primary,
-                        foregroundColor: _isRecording
-                            ? theme.colorScheme.onError
-                            : theme.colorScheme.onPrimary,
-                      ),
-                      tooltip: _isRecording
-                          ? 'Tap to stop & send'
-                          : 'Tap to record  •  Hold to pick mic',
-                    ),
-                  )
-                else
-                  // ── Mobile: short tap = toggle mode, hold = record ──────────
-                  // NOTE: We deliberately avoid IconButton+tooltip here because
-                  // Flutter's Tooltip widget registers its own LongPressGestureRecognizer
-                  // which wins the gesture arena over the parent GestureDetector,
-                  // causing the tooltip to appear but _startHoldRecording never fires.
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Mode icon (voice ↔ video note) — short tap switches
-                      if (!_isRecording)
-                        GestureDetector(
-                          onTap: _toggleMode,
-                          child: Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              _isVideoNoteMode
-                                  ? Icons.mic_rounded
-                                  : Icons.radio_button_checked_outlined,
-                              size: 20,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
+              padding: const EdgeInsets.fromLTRB(8, 10, 16, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Attach button
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: GestureDetector(
+                      onTap: canSend && _uploadProgress == null
+                          ? () => _pickAndSendMedia(context)
+                          : null,
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Transform.rotate(
+                          angle: -0.785, // -45 degrees
+                          child: Icon(
+                            Icons.attach_file_outlined,
+                            size: 24,
+                            color: canSend
+                                ? const Color(0xFF8E8E93)
+                                : const Color(0xFF3A3A3E),
                           ),
                         ),
-                      // Main record button — hold to record, tap to stop&send.
-                      // Pure GestureDetector+Material: no tooltip, no inner
-                      // InkWell long-press recognizer competing with ours.
-                      GestureDetector(
-                        onTap: canSend && _isRecording
-                            ? () => _stopAndSend(context)
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+
+                  // Text input
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0A0A0C),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFF2C2C30)),
+                      ),
+                      child: TextField(
+                        controller: _messageCtrl,
+                        focusNode: _focusNode,
+                        enabled: canSend && !_isRecording,
+                        decoration: InputDecoration(
+                          hintText: _isRecording
+                              ? 'Recording…'
+                              : canSend
+                                  ? 'Message…'
+                                  : 'Waiting…',
+                          hintStyle: const TextStyle(
+                              color: Color(0xFF8E8E93), fontSize: 15),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          fillColor: Colors.transparent,
+                          filled: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                        ),
+                        style: const TextStyle(
+                            color: Color(0xFFF5F5F5), fontSize: 15),
+                        minLines: 1,
+                        maxLines: 5,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: canSend
+                            ? (_) => _sendMessage(context)
                             : null,
-                        onLongPressStart: canSend && !_isRecording
-                            ? (_) => _startHoldRecording(context)
-                            : null,
-                        onLongPressEnd: canSend && _isRecording
-                            ? (_) => _stopHoldRecording(context)
-                            : null,
-                        child: Material(
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+
+                  // Send / Mic button
+                  if (_hasText || (_isRecording && _isDesktop))
+                    GestureDetector(
+                      onTap: canSend && !_isRecording
+                          ? () => _sendMessage(context)
+                          : canSend && _isRecording
+                              ? () => _stopAndSend(context)
+                              : null,
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF0A84FF),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.send,
+                            color: Colors.white, size: 20),
+                      ),
+                    )
+                  else if (_isDesktop)
+                    GestureDetector(
+                      onLongPress:
+                          canSend ? () => _showMicPicker(context) : null,
+                      onTap: canSend
+                          ? () => _toggleRecording(context)
+                          : null,
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
                           color: _isRecording
-                              ? theme.colorScheme.error
-                              : _isVideoNoteMode
-                                  ? Colors.blueAccent
-                                  : theme.colorScheme.primary,
-                          shape: const CircleBorder(),
-                          child: SizedBox(
+                              ? const Color(0xFFFF3B30)
+                              : const Color(0xFF1F1F24),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0xFF2C2C30)),
+                        ),
+                        child: Icon(
+                          _isRecording
+                              ? Icons.stop_rounded
+                              : Icons.mic_rounded,
+                          color: _isRecording
+                              ? Colors.white
+                              : const Color(0xFFF5F5F5),
+                          size: 22,
+                        ),
+                      ),
+                    )
+                  else
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (!_isRecording)
+                          GestureDetector(
+                            onTap: _toggleMode,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Icon(
+                                _isVideoNoteMode
+                                    ? Icons.mic_rounded
+                                    : Icons.radio_button_checked_outlined,
+                                size: 20,
+                                color: const Color(0xFF8E8E93),
+                              ),
+                            ),
+                          ),
+                        GestureDetector(
+                          onTap: canSend && _isRecording
+                              ? () => _stopAndSend(context)
+                              : null,
+                          onLongPressStart: canSend && !_isRecording
+                              ? (_) => _startHoldRecording(context)
+                              : null,
+                          onLongPressEnd: canSend && _isRecording
+                              ? (_) => _stopHoldRecording(context)
+                              : null,
+                          child: Container(
                             width: 40,
                             height: 40,
+                            decoration: BoxDecoration(
+                              color: _isRecording
+                                  ? const Color(0xFFFF3B30)
+                                  : _isVideoNoteMode
+                                      ? Colors.blueAccent
+                                      : const Color(0xFF1F1F24),
+                              shape: BoxShape.circle,
+                              border: _isRecording || _isVideoNoteMode
+                                  ? null
+                                  : Border.all(
+                                      color: const Color(0xFF2C2C30)),
+                            ),
                             child: Icon(
                               _isRecording
                                   ? Icons.stop_rounded
                                   : _isVideoNoteMode
                                       ? Icons.radio_button_checked
                                       : Icons.mic_rounded,
-                              color: theme.colorScheme.onPrimary,
+                              color: _isRecording || _isVideoNoteMode
+                                  ? Colors.white
+                                  : const Color(0xFFF5F5F5),
                               size: 22,
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-              ]),
+                      ],
+                    ),
+                ],
+              ),
             ),
           ],
         ),

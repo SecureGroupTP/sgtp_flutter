@@ -5,8 +5,12 @@ import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
 
 /// Bottom navigation bar with a frosted-glass dark background.
+<<<<<<< HEAD
 /// Place on a [Scaffold] with [extendBody: true] so the blur filter has
 /// content to render through.
+=======
+/// Three tabs: Rooms | Contacts | Settings
+>>>>>>> a3e4de3 (feat: updated chat interface & implemented contacts)
 class AppNavBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onTap;

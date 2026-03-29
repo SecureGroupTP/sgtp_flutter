@@ -101,6 +101,14 @@ class SgtpConfig {
     chatAvatarBytes: avatar ?? chatAvatarBytes,
     pingIntervalSeconds: pingIntervalSeconds,
   );
+
+  SgtpConfig copyWith({Set<String>? whitelist}) => SgtpConfig(
+    serverAddr: serverAddr, roomUUID: roomUUID,
+    identityKeyPair: identityKeyPair, myPublicKey: myPublicKey,
+    whitelist: whitelist ?? this.whitelist,
+    chatName: chatName, chatAvatarBytes: chatAvatarBytes,
+    pingIntervalSeconds: pingIntervalSeconds,
+  );
 }
 
 // ---------------------------------------------------------------------------

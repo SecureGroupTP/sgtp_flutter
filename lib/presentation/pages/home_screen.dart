@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../core/app_theme.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
@@ -12,12 +13,13 @@ import 'rooms_page.dart';
 import 'settings_screen.dart';
 
 /// Main screen shown after initial setup.
-/// Contains bottom navigation: Rooms | Settings.
+/// Three-tab bottom navigation: Rooms | Contacts | Settings.
 class HomeScreen extends StatefulWidget {
   final SgtpConfig initialConfig;
   final Map<String, String> nicknames;
   final String serverAddress;
   final Uint8List? userAvatar;
+  final List<WhitelistEntry> initialWhitelist;
 
   const HomeScreen({
     super.key,
@@ -25,6 +27,7 @@ class HomeScreen extends StatefulWidget {
     required this.nicknames,
     required this.serverAddress,
     this.userAvatar,
+    this.initialWhitelist = const [],
   });
 
   @override
@@ -39,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late String _serverAddress;
   late SgtpConfig _config;
   Uint8List? _userAvatar;
+  late List<WhitelistEntry> _whitelist;
 
   @override
   void initState() {
@@ -47,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _nicknames     = widget.nicknames;
     _serverAddress = widget.serverAddress;
     _userAvatar    = widget.userAvatar;
+    _whitelist     = List.from(widget.initialWhitelist);
     _roomsBloc = RoomsBloc(
       baseConfig:    _config,
       nicknames:     _nicknames,
@@ -61,7 +66,8 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _onConfigChanged(SgtpConfig newConfig, Map<String, String> newNicknames, String newServer) {
+  void _onConfigChanged(SgtpConfig newConfig, Map<String, String> newNicknames,
+      String newServer) {
     setState(() {
       _config        = newConfig;
       _nicknames     = newNicknames;
@@ -96,11 +102,11 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             RoomsPage(key: _roomsPageKey),
             SettingsScreen(
-              initialConfig:        _config,
-              initialNicknames:     _nicknames,
-              onConfigChanged:      _onConfigChanged,
-              onUserAvatarChanged:  _onUserAvatarChanged,
-              currentUserAvatar:    _userAvatar,
+              initialConfig:       _config,
+              initialNicknames:    _nicknames,
+              onConfigChanged:     _onConfigChanged,
+              onUserAvatarChanged: _onUserAvatarChanged,
+              currentUserAvatar:   _userAvatar,
             ),
           ],
         ),
@@ -188,10 +194,11 @@ class _AppStartScreenState extends State<AppStartScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacement(MaterialPageRoute(
           builder: (_) => HomeScreen(
-            initialConfig: config,
-            nicknames:     nicknames,
-            serverAddress: lastAddr,
-            userAvatar:    userAvatar,
+            initialConfig:    config,
+            nicknames:        nicknames,
+            serverAddress:    lastAddr,
+            userAvatar:       userAvatar,
+            initialWhitelist: entries,
           ),
         ));
       }
@@ -211,5 +218,3 @@ class _AppStartScreenState extends State<AppStartScreen> {
     );
   }
 }
-
-
