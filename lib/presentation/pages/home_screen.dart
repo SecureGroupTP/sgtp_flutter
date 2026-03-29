@@ -1,4 +1,7 @@
+import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -203,26 +206,29 @@ class _AppStartScreenState extends State<AppStartScreen> {
 
   Future<void> _checkAndNavigate() async {
     final settings = SettingsRepository();
-    final savedKey = await settings.loadPrivateKey();
-    final lastAddr = await settings.getLastAddress();
+    var savedKey = await settings.loadPrivateKey();
+    final lastAddr = await settings.getLastAddress() ?? '';
 
-    if (savedKey == null || lastAddr == null || lastAddr.isEmpty) {
-      if (mounted) _goToSetup();
-      return;
+    // First launch: auto-generate an Ed25519 identity key silently.
+    if (savedKey == null) {
+      savedKey = await _autoGenerateKey(settings);
     }
+
+    // If key generation somehow failed, we still land on HomeScreen —
+    // the user will see an empty state and can configure via Settings.
+    if (savedKey == null) return;
 
     try {
       final parsed  = parseOpenSshPrivateKey(savedKey.bytes);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
 
-      final entries   = await settings.loadWhitelistEntries();
-      final whitelist = entries.map((e) => e.hexKey).toSet();
-      final nicknames = {for (final e in entries) e.hexKey: e.name};
-
+      final entries    = await settings.loadWhitelistEntries();
+      final whitelist  = entries.map((e) => e.hexKey).toSet();
+      final nicknames  = {for (final e in entries) e.hexKey: e.name};
       final userAvatar = await settings.loadUserAvatar();
 
       final config = SgtpConfig(
-        serverAddr:      lastAddr,
+        serverAddr:      lastAddr.isEmpty ? 'localhost:7777' : lastAddr,
         roomUUID:        Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey:     parsed.publicKey,
@@ -241,13 +247,60 @@ class _AppStartScreenState extends State<AppStartScreen> {
         ));
       }
     } catch (_) {
-      if (mounted) _goToSetup();
+      // Corrupted key — clear it and try again next launch.
+      await settings.clearPrivateKey();
+      if (mounted) _checkAndNavigate();
     }
   }
 
-  void _goToSetup() {
-    Navigator.of(context).pushReplacementNamed('/setup');
+  /// Silently generates a fresh Ed25519 key on first launch.
+  Future<({Uint8List bytes, String name})?> _autoGenerateKey(
+      SettingsRepository settings) async {
+    try {
+      final algorithm = Ed25519();
+      final keyPair   = await algorithm.newKeyPair();
+      final pubKey    = await keyPair.extractPublicKey();
+      final privBytes = await keyPair.extractPrivateKeyBytes();
+      final pubBytes  = Uint8List.fromList(pubKey.bytes);
+      final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
+      await settings.savePrivateKey(opensshBytes, 'identity');
+      return (bytes: opensshBytes, name: 'identity');
+    } catch (_) {
+      return null;
+    }
   }
+
+  Uint8List _encodeOpenSshPrivateKey(List<int> seed, Uint8List pubKey) {
+    const magic = 'openssh-key-v1\x00';
+    final header = _sshStr('none') + _sshStr('none') + _sshStr('') + _u32(1);
+    final pubBlock    = _sshStr('ssh-ed25519') + _sshStr(pubKey);
+    final pubWrapped  = _sshStr(pubBlock);
+    final rng   = Random.secure();
+    final check = rng.nextInt(0xFFFFFFFF);
+    final fullPriv = Uint8List(64)..setAll(0, seed)..setAll(32, pubKey);
+    final privBlock = _u32(check) + _u32(check) +
+        _sshStr('ssh-ed25519') + _sshStr(pubKey) +
+        _sshStr(fullPriv) + _sshStr('sgtp-generated');
+    final padded = List<int>.from(privBlock);
+    int pad = 1;
+    while (padded.length % 8 != 0) padded.add(pad++);
+    final body = magic.codeUnits + header + pubWrapped + _sshStr(padded);
+    final b64  = base64Encode(body);
+    final sb   = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');
+    for (var i = 0; i < b64.length; i += 70) {
+      sb.writeln(b64.substring(i, (i + 70).clamp(0, b64.length)));
+    }
+    sb.write('-----END OPENSSH PRIVATE KEY-----');
+    return Uint8List.fromList(sb.toString().codeUnits);
+  }
+
+  List<int> _sshStr(dynamic d) {
+    final b = d is String ? d.codeUnits : (d as List<int>);
+    return _u32(b.length) + b;
+  }
+
+  List<int> _u32(int v) =>
+      [(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
 
   @override
   Widget build(BuildContext context) {

@@ -7,10 +7,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'core/app_theme.dart';
 import 'core/window_size_service.dart';
-import 'data/repositories/settings_repository.dart';
-import 'presentation/blocs/setup/setup_bloc.dart';
 import 'presentation/pages/home_screen.dart';
-import 'presentation/pages/setup_page.dart';
 
 bool get _isDesktop =>
     !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
@@ -54,10 +51,6 @@ class _SgtpAppState extends State<SgtpApp> with WindowListener {
       initialRoute: '/',
       routes: {
         '/': (_) => const AppStartScreen(),
-        '/setup': (_) => BlocProvider(
-          create: (_) => SetupBloc(settings: SettingsRepository()),
-          child: const SetupPage(),
-        ),
       },
     );
   }
