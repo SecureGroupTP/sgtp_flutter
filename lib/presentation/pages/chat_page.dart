@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -60,6 +60,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   ChatBloc? _chatBloc;
   int _lastMessageCount = 0;
 
+  /// Timestamp when the app went to background. Used to decide whether
+  /// to force-reconnect on resume (NAT may have killed the TCP connection).
+  DateTime? _wentToBackground;
+
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
 
   // Quick emoji set for reactions
@@ -100,40 +104,46 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState appState) {
     switch (appState) {
       case AppLifecycleState.resumed:
-        // App came back to foreground
         setState(() => _isPageVisible = true);
-        // Clear notifications that were shown while in background
         NotificationService.cancelAll();
-        // Flush any "Mark as Read" taps queued while the app was killed
         NotificationService.flushPendingMarkAsRead();
-        // Auto-reconnect if the connection dropped or errored while minimised.
-        // We check both disconnected AND error: a "connection refused" from the
-        // server while backgrounded sets ChatStatus.error, not disconnected.
+
         final bloc = _chatBloc;
-        if (bloc != null &&
-            (bloc.state.status == ChatStatus.disconnected ||
-             bloc.state.status == ChatStatus.error)) {
-          bloc.add(const ChatReconnect());
+        if (bloc != null) {
+          final bgDuration = _wentToBackground != null
+              ? DateTime.now().difference(_wentToBackground!)
+              : Duration.zero;
+          _wentToBackground = null;
+
+          final status = bloc.state.status;
+          final isDown = status == ChatStatus.disconnected ||
+              status == ChatStatus.error;
+
+          // Force-reconnect if status shows down, OR if we were backgrounded
+          // long enough that the NAT table likely dropped the TCP connection.
+          // NAT timeout for TCP is typically 60–300 s on mobile networks;
+          // we use 50 s as the threshold (slightly above our ping interval).
+          final staleTcp = status == ChatStatus.ready &&
+              bgDuration.inSeconds > 50;
+
+          if (isDown || staleTcp) {
+            debugPrint('[Chat] reconnecting after background '
+                '(${bgDuration.inSeconds}s, status=$status)');
+            bloc.add(const ChatReconnect());
+          }
         }
-        // Send read receipts for messages that arrived while in background
         _flushPendingReadReceipts();
         break;
 
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
-        // Going to background — keep TCP alive, just stop sending receipts
+        _wentToBackground ??= DateTime.now();
         setState(() => _isPageVisible = false);
         break;
 
       case AppLifecycleState.detached:
-        // NOTE: Do NOT call ChatDisconnect here.
-        // On Android/iOS, AppLifecycleState.detached can fire when the app
-        // is merely moved to the background (process is still alive) on some
-        // devices/OS versions — not only on actual termination. Disconnecting
-        // here would kill the TCP socket every time the user presses Home.
-        // The OS will clean up the socket naturally when the process is truly
-        // killed, so no explicit disconnect is needed.
+        // Do NOT disconnect here — see note in original code.
         break;
     }
   }

@@ -225,6 +225,11 @@ class SgtpClient {
 
   final Map<String, _PendingFile> _pendingFiles = {};
 
+  /// Serial send queue — ensures only one frame is written to the socket at a time.
+  /// Without this, concurrent async calls can interleave bytes in the TCP stream,
+  /// corrupting the length-prefix framing and causing "payload_length exceeds maximum".
+  Future<void> _sendChain = Future.value();
+
   /// Maps sessionUUID → ed25519PubHex for all ever-seen peers (survives leave).
   final Map<String, String> _peerPublicKeys = {};
 
@@ -252,6 +257,10 @@ class SgtpClient {
 
   static const int _histNonceBit = 1 << 62;
 
+  /// Timestamp of the last received bytes from the server.
+  /// Used to detect stale TCP connections after returning from background.
+  DateTime _lastReceiveAt = DateTime.now();
+
   SgtpClient(SgtpConfig config)
       : _config = config,
         _myUUID = generateUUIDv7(),
@@ -270,6 +279,9 @@ class SgtpClient {
   /// Returns sessionUUID → ed25519PubHex for all ever-seen peers.
   Map<String, String> get peerPublicKeys => Map.unmodifiable(_peerPublicKeys);
 
+  /// When the socket last received any data. Used to detect dead TCP connections.
+  DateTime get lastReceiveAt => _lastReceiveAt;
+
   /// Set the user's own avatar to attach to outgoing messages.
   void setUserAvatar(Uint8List? avatar) => _myUserAvatar = avatar;
 
@@ -286,6 +298,22 @@ class SgtpClient {
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
       final parts = _config.serverAddr.split(':');
       _socket = await Socket.connect(parts[0], int.parse(parts.last));
+
+      // Reduce latency: send small frames immediately without Nagle buffering.
+      _socket!.setOption(SocketOption.tcpNoDelay, true);
+
+      // Ask the OS to send TCP keepalive probes so the NAT entry and the
+      // server-side socket stay alive while the app is backgrounded.
+      // SO_KEEPALIVE = 9, SOL_SOCKET level = RawSocketOption.levelSocket.
+      // Silently ignored on platforms that don't support this raw option.
+      try {
+        _socket!.setRawOption(RawSocketOption(
+          RawSocketOption.levelSocket,
+          9, // SO_KEEPALIVE
+          Uint8List.fromList([1, 0, 0, 0]),
+        ));
+      } catch (_) {}
+
       _state  = _ClientState.waitingHandshake;
       _eventController.add(SgtpHandshaking());
       _socket!.listen(_onData,
@@ -523,6 +551,7 @@ class SgtpClient {
   // ---------------------------------------------------------------------------
 
   void _onData(List<int> data) {
+    _lastReceiveAt = DateTime.now();
     _receiveBuffer.addAll(data);
     _processBuffer();
   }
@@ -1137,10 +1166,40 @@ class SgtpClient {
   }
 
   Future<void> _sendFrame(Uint8List unsigned) async {
+    // Sign first — this is CPU/async work, safe to do before entering the queue.
+    final Uint8List signed;
     try {
-      _socket?.add(await signFrame(unsigned, _config.identityKeyPair));
+      signed = await signFrame(unsigned, _config.identityKeyPair);
     } catch (e) {
-      _eventController.add(SgtpError(error: 'Failed to send frame: $e'));
+      if (!_eventController.isClosed) {
+        _eventController.add(SgtpError(error: 'Failed to sign frame: $e'));
+      }
+      return;
+    }
+
+    // Serialize socket writes: one frame at a time, in call order.
+    // This prevents concurrent async sends from interleaving bytes in the
+    // TCP stream (which would corrupt the length-prefix framing).
+    final prev = _sendChain;
+    final mine = Completer<void>();
+    _sendChain = mine.future;
+
+    try {
+      await prev; // wait for the previous write to finish
+    } catch (_) {} // ignore errors from previous sends — don't block the queue
+
+    try {
+      final sock = _socket;
+      if (sock != null) {
+        sock.add(signed);       // buffer the bytes
+        await sock.flush();     // wait until they're actually sent
+      }
+    } catch (e) {
+      if (!_eventController.isClosed) {
+        _eventController.add(SgtpError(error: 'Failed to send frame: $e'));
+      }
+    } finally {
+      mine.complete(); // release the next sender
     }
   }
 
@@ -1173,6 +1232,8 @@ class SgtpClient {
     _peerPublicKeys.clear();
     _chatKey = null; _chatEpoch = 0; _myNonce = 0;
     _receiveBuffer.clear();
+    _sendChain = Future.value();   // reset the send queue
+    _lastReceiveAt = DateTime.now();
     try { await _socket?.close(); } catch (_) {}
     _socket = null;
   }
