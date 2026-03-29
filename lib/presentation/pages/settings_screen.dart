@@ -557,6 +557,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         border: InputBorder.none,
         enabledBorder: InputBorder.none,
         focusedBorder: InputBorder.none,
+        filled: false,
         isDense: true,
         contentPadding: EdgeInsets.zero,
       ),
@@ -754,14 +755,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trackHeight: 4,
                   thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
                   overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-                  activeTrackColor: AppColors.accentBlue,
+                  activeTrackColor: AppColors.border,
                   inactiveTrackColor: AppColors.border,
-                  thumbColor: AppColors.accentBlue,
-                  overlayColor: AppColors.accentBlue.withAlpha(30),
+                  thumbColor: Colors.white,
+                  overlayColor: Colors.white.withAlpha(30),
                 ),
                 child: Slider(
                   value: _pingIntervalSeconds.toDouble(),
-                  min: 5, max: 120, divisions: 23,
+                  min: 5, max: 120,
                   onChanged: (v) {
                     setState(() => _pingIntervalSeconds = v.round());
                     _tryApplyConfig();

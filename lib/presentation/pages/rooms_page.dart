@@ -93,7 +93,7 @@ class RoomsPageState extends State<RoomsPage> {
 
     return ListView(
       // Extra bottom padding so last item isn't hidden under FAB + nav bar.
-      padding: const EdgeInsets.only(top: 4, bottom: 160),
+      padding: const EdgeInsets.only(top: 4, bottom: 100),
       children: [
         // ── Active rooms ─────────────────────────────────────────────────
         ...state.rooms.map((entry) => ActiveRoomTile(
@@ -607,7 +607,7 @@ class _IconAction extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Padding(
         padding: const EdgeInsets.all(8),
-        child: Icon(icon, size: 18, color: color),
+        child: Icon(icon, size: 22, color: color),
       ),
     );
   }
@@ -989,7 +989,7 @@ class _DarkTextField extends StatelessWidget {
           borderSide: const BorderSide(color: AppColors.statusRed),
         ),
         filled: true,
-        fillColor: AppColors.bgMain,
+        fillColor: AppColors.bgSurfaceActive,
       ),
       onChanged: onChanged,
     );

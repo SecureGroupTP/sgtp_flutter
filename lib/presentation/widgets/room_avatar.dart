@@ -51,7 +51,10 @@ class SavedChatAvatar extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: const BoxDecoration(shape: BoxShape.circle),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.border),
+      ),
       child: Icon(Icons.bookmark_outlined,
           size: size * 0.46, color: AppColors.textSecondary),
     );

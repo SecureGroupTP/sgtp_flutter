@@ -21,7 +21,7 @@ class AppNavBar extends StatelessWidget {
     final bottomPad = MediaQuery.of(context).padding.bottom;
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
           decoration: const BoxDecoration(
             color: Color(0xD90A0A0C),
@@ -82,12 +82,12 @@ class _NavItem extends StatelessWidget {
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.only(top: 12, bottom: 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(isActive ? activeIcon : icon, size: 24, color: color),
-              const SizedBox(height: 3),
+              Icon(isActive ? activeIcon : icon, size: 26, color: color),
+              const SizedBox(height: 4),
               Text(
                 label,
                 style: TextStyle(

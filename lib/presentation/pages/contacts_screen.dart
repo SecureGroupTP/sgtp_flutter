@@ -257,6 +257,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           border: InputBorder.none,
                           enabledBorder: InputBorder.none,
                           focusedBorder: InputBorder.none,
+                          filled: false,
                           isDense: true,
                           contentPadding: EdgeInsets.zero,
                         ),
@@ -565,7 +566,7 @@ class _DarkField extends StatelessWidget {
         errorStyle: const TextStyle(
             color: AppColors.statusRed, fontSize: 12),
         filled:     true,
-        fillColor:  AppColors.bgMain,
+        fillColor:  AppColors.bgSurfaceActive,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: AppColors.border),

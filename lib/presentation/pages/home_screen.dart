@@ -157,14 +157,27 @@ class _HomeFab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FloatingActionButton(
-      onPressed: onPressed,
-      tooltip: 'Add room',
-      backgroundColor: AppColors.accent,
-      foregroundColor: Colors.black,
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: const Icon(Icons.add, size: 32),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.white.withAlpha(38), // rgba(255,255,255,0.15)
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: FloatingActionButton(
+        onPressed: onPressed,
+        tooltip: 'Add room',
+        backgroundColor: AppColors.accent,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        highlightElevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: const Icon(Icons.add, size: 32),
+      ),
     );
   }
 }

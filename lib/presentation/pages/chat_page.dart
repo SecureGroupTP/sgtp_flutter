@@ -746,6 +746,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               }
             },
             child: Scaffold(
+              backgroundColor: const Color(0xFF0A0A0C),
               appBar: _buildAppBar(context, state),
               body: Column(
                 children: [
@@ -776,7 +777,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           child: SizedBox(
             height: 62,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
               child: Row(
                 children: [
                   // Back button
@@ -790,6 +791,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                     padding: const EdgeInsets.all(4),
                     visualDensity: VisualDensity.compact,
                   ),
+
+                  const SizedBox(width: 4),
 
                   // Avatar
                   GestureDetector(
@@ -1013,17 +1016,27 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   color: Color(0xFF8E8E93)),
             ),
           ),
-          TextButton.icon(
-            onPressed: () =>
+          GestureDetector(
+            onTap: () =>
                 context.read<ChatBloc>().add(const ChatReconnect()),
-            icon: const Icon(Icons.wifi_rounded, size: 14),
-            label: const Text('Reconnect',
-                style: TextStyle(fontSize: 13)),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF0A84FF),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              visualDensity: VisualDensity.compact,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0x1AFFFFFF),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.wifi_rounded, size: 14, color: Color(0xFFF5F5F5)),
+                  SizedBox(width: 4),
+                  Text('Reconnect',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFFF5F5F5))),
+                ],
+              ),
             ),
           ),
         ],
@@ -1039,13 +1052,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.chat_bubble_outline, size: 64,
-                color: Theme.of(context).colorScheme.outlineVariant),
+            const Icon(Icons.chat_bubble_outline, size: 64,
+                color: Color(0xFF636366)),
             const SizedBox(height: 16),
             Text(
               state.status == ChatStatus.ready ? 'No messages yet. Say hello!' : 'Waiting for connection…',
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+              style: const TextStyle(fontSize: 16, color: Color(0xFF8E8E93)),
             ),
           ]),
         ),
@@ -1167,7 +1179,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             if (reply != null)
               Container(
                 padding:
-                    const EdgeInsets.fromLTRB(16, 8, 8, 0),
+                    const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Row(children: [
                   Container(
                     width: 3,
@@ -1220,7 +1232,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
             // ── Input row ─────────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 10, 16, 10),
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -1246,7 +1258,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 12),
 
                   // Text input
                   Expanded(
@@ -1275,7 +1287,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                           fillColor: Colors.transparent,
                           filled: true,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 10),
+                              horizontal: 14, vertical: 10),
                         ),
                         style: const TextStyle(
                             color: Color(0xFFF5F5F5), fontSize: 15),
@@ -1306,7 +1318,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.send,
-                            color: Colors.white, size: 20),
+                            color: Colors.white, size: 22),
                       ),
                     )
                   else if (_isDesktop)

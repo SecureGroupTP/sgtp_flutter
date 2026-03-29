@@ -69,9 +69,8 @@ class MessageBubble extends StatelessWidget {
         context: context,
         isMe: isMe,
         child: Container(
-          margin: EdgeInsets.only(
-            left: isMe ? 48 : 8,
-            right: isMe ? 8 : 48,
+          margin: const EdgeInsets.only(
+            left: 8, right: 8,
             top: 4, bottom: 4,
           ),
           child: _buildVoiceContent(
@@ -88,14 +87,14 @@ class MessageBubble extends StatelessWidget {
             Padding(
               padding: EdgeInsets.only(
                 left: isMe ? 0 : 44,
-                right: isMe ? 44 : 0,
+                right: isMe ? 8 : 0,
               ),
               child: Transform.translate(
                 offset: const Offset(0, -8),
                 child: reactionsRow,
               ),
             ),
-          if (isMe) _buildReadReceipts(theme, cs),
+          _buildMetaRow(theme, cs, timeStr, isMe),
         ],
       );
     }
@@ -106,9 +105,8 @@ class MessageBubble extends StatelessWidget {
         context: context,
         isMe: isMe,
         child: Container(
-          margin: EdgeInsets.only(
-            left: isMe ? 48 : 8,
-            right: isMe ? 8 : 48,
+          margin: const EdgeInsets.only(
+            left: 8, right: 8,
             top: 4, bottom: 4,
           ),
           child: _buildVideoNoteContent(
@@ -125,14 +123,14 @@ class MessageBubble extends StatelessWidget {
             Padding(
               padding: EdgeInsets.only(
                 left: isMe ? 0 : 44,
-                right: isMe ? 44 : 0,
+                right: isMe ? 8 : 0,
               ),
               child: Transform.translate(
                 offset: const Offset(0, -8),
                 child: reactionsRow,
               ),
             ),
-          if (isMe) _buildReadReceipts(theme, cs),
+          _buildMetaRow(theme, cs, timeStr, isMe),
         ],
       );
     }
@@ -150,20 +148,19 @@ class MessageBubble extends StatelessWidget {
     Widget? replyPreview;
     if (message.replyToId != null) {
       replyPreview = Container(
-        margin: EdgeInsets.only(
-          left: isMe ? 48 : 8,
-          right: isMe ? 8 : 48,
+        margin: const EdgeInsets.only(
+          left: 8, right: 8,
           top: 4,
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: isMe
-              ? const Color(0xFF0056B3).withAlpha(180)
-              : const Color(0xFF1F1F24).withAlpha(180),
-          borderRadius: BorderRadius.circular(10),
+              ? Colors.white.withAlpha(38)
+              : Colors.black.withAlpha(51),
+          borderRadius: BorderRadius.circular(6),
           border: Border(
             left: BorderSide(
-              color: isMe ? Colors.white : cs.primary,
+              color: isMe ? Colors.white : const Color(0xFF0A84FF),
               width: 3,
             ),
           ),
@@ -175,14 +172,14 @@ class MessageBubble extends StatelessWidget {
               if (message.replyToSender != null)
                 Text(message.replyToSender!,
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: isMe ? Colors.white : cs.primary,
+                      color: isMe ? Colors.white : const Color(0xFF0A84FF),
                     )),
               Text(message.replyToContent ?? '…',
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     color: isMe
                         ? Colors.white.withAlpha(180)
                         : const Color(0xFF8E8E93),
@@ -195,8 +192,8 @@ class MessageBubble extends StatelessWidget {
 
     final innerBubble = Container(
       margin: EdgeInsets.only(
-        left: isMe ? 48 : 8,
-        right: isMe ? 8 : 48,
+        left: 8,
+        right: 8,
         top: replyPreview != null ? 1 : 4,
         bottom: 4,
       ),
@@ -280,7 +277,7 @@ class MessageBubble extends StatelessWidget {
           Padding(
             padding: EdgeInsets.only(
               left: isMe ? 0 : 44,
-              right: isMe ? 44 : 0,
+              right: isMe ? 8 : 0,
               // Negative top margin so reactions sit on the bubble border
               bottom: 4,
             ),
@@ -289,7 +286,7 @@ class MessageBubble extends StatelessWidget {
               child: reactionsRow,
             ),
           ),
-        if (isMe) _buildReadReceipts(theme, cs),
+        _buildMetaRow(theme, cs, timeStr, isMe),
       ],
     );
   }
@@ -364,13 +361,16 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  /// Wraps child with a small avatar on the appropriate side.
+  /// Wraps child with a small avatar on the left for peer messages.
+  /// Own messages have no avatar (aligned right with their own margins).
   Widget _withAvatar({
     required BuildContext context,
     required bool isMe,
     required Widget child,
   }) {
-    final avatarBytes = isMe ? userAvatarBytes : _senderAvatarBytes();
+    if (isMe) return child;
+
+    final avatarBytes = _senderAvatarBytes();
     final initial     = _senderInitial();
 
     final avatar = Container(
@@ -398,9 +398,7 @@ class MessageBubble extends StatelessWidget {
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
-      children: isMe
-          ? [Expanded(child: child), const SizedBox(width: 4), avatar]
-          : [avatar, const SizedBox(width: 4), Expanded(child: child)],
+      children: [avatar, const SizedBox(width: 4), Expanded(child: child)],
     );
   }
 
@@ -416,16 +414,14 @@ class MessageBubble extends StatelessWidget {
     return label.isNotEmpty ? label[0].toUpperCase() : '?';
   }
 
-  /// Read receipts row (shown only for own messages).
-  Widget _buildReadReceipts(ThemeData theme, ColorScheme cs) {
+  /// Read receipts indicator widget (content only, no layout wrapper).
+  Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
     final isMedia = message.type == MessageType.video ||
         message.type == MessageType.voice;
 
-    Widget content;
-
     if (message.isSending) {
-      content = Row(mainAxisSize: MainAxisSize.min, children: [
+      return Row(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
           width: 12, height: 12,
           child: CircularProgressIndicator(
@@ -436,65 +432,86 @@ class MessageBubble extends StatelessWidget {
         const Text('Sending…',
             style: TextStyle(fontSize: 10, color: Color(0xFF8E8E93))),
       ]);
-    } else if (readers.isEmpty) {
-      content = const Icon(Icons.done, size: 14, color: Color(0xFF636366));
-    } else {
-      final readByAll = peerCount > 0 && readers.length >= peerCount;
+    }
 
-      // Tiny overlapping avatar circles
-      final avatarCount = readers.length.clamp(0, 5);
-      final avatarCircles = SizedBox(
-        width:  avatarCount * 10.0 + 4,
-        height: 14,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            for (int i = 0; i < avatarCount; i++)
-              Positioned(
-                left: i * 10.0,
-                child: Container(
-                  width: 14, height: 14,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF1F1F24),
-                    border: Border.all(color: const Color(0xFF0A0A0C), width: 1),
-                  ),
-                  child: Center(
-                    child: Text(
-                      _peerInitialForUUID(readers.elementAt(i)),
-                      style: const TextStyle(
-                          fontSize: 7,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFFF5F5F5)),
-                    ),
+    if (readers.isEmpty) {
+      return const Icon(Icons.done, size: 14, color: Color(0xFF636366));
+    }
+
+    final readByAll = peerCount > 0 && readers.length >= peerCount;
+    final avatarCount = readers.length.clamp(0, 5);
+    final avatarCircles = SizedBox(
+      width:  avatarCount * 10.0 + 4,
+      height: 14,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (int i = 0; i < avatarCount; i++)
+            Positioned(
+              left: i * 10.0,
+              child: Container(
+                width: 14, height: 14,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF1F1F24),
+                  border: Border.all(color: const Color(0xFF0A0A0C), width: 1),
+                ),
+                child: Center(
+                  child: Text(
+                    _peerInitialForUUID(readers.elementAt(i)),
+                    style: const TextStyle(
+                        fontSize: 7,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFF5F5F5)),
                   ),
                 ),
               ),
-          ],
-        ),
-      );
+            ),
+        ],
+      ),
+    );
 
-      content = Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(
-          readByAll
-              ? (isMedia ? Icons.visibility : Icons.done_all)
-              : Icons.done,
-          size: 14,
-          color: readByAll
-              ? const Color(0xFF0A84FF)
-              : const Color(0xFF8E8E93).withAlpha(180),
-        ),
-        const SizedBox(width: 4),
-        avatarCircles,
-      ]);
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(
+        readByAll
+            ? (isMedia ? Icons.visibility : Icons.done_all)
+            : Icons.done,
+        size: 14,
+        color: readByAll
+            ? const Color(0xFF0A84FF)
+            : const Color(0xFF8E8E93).withAlpha(180),
+      ),
+      const SizedBox(width: 4),
+      avatarCircles,
+    ]);
+  }
+
+  /// Meta row shown below every bubble: timestamp + read receipts (own) or
+  /// timestamp (other). Mirrors the `.msg-meta` element in the HTML design.
+  Widget _buildMetaRow(ThemeData theme, ColorScheme cs, String timeStr, bool isMe) {
+    final timeText = Text(
+      '${message.isFromHistory ? '~ ' : ''}$timeStr',
+      style: const TextStyle(fontSize: 11, color: Color(0xFF636366)),
+    );
+
+    if (!isMe) {
+      // Left-aligned, indented to sit after the 32px avatar + 4px gap + 6px
+      return Padding(
+        padding: const EdgeInsets.only(left: 42, top: 1, bottom: 2),
+        child: timeText,
+      );
     }
 
-    // Always pin to the right edge, matching the bubble's right margin (44px for avatar)
+    // Own message: time + receipt icon, right-aligned
     return Padding(
-      padding: const EdgeInsets.only(right: 44, bottom: 2),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: content,
+      padding: const EdgeInsets.only(right: 8, top: 1, bottom: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          timeText,
+          const SizedBox(width: 6),
+          _readReceiptsContent(theme, cs),
+        ],
       ),
     );
   }
@@ -592,18 +609,18 @@ class MessageBubble extends StatelessWidget {
   Widget _buildTextContent(ThemeData theme, Color textColor, String senderLabel,
       String timeStr, bool isMe) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
         crossAxisAlignment:
             isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isMe) _senderLabel(theme, senderLabel),
-          const SizedBox(height: 2),
+          if (!isMe) ...[
+            _senderLabel(theme, senderLabel),
+            const SizedBox(height: 4),
+          ],
           Text(message.content,
               style: theme.textTheme.bodyMedium?.copyWith(color: textColor)),
-          const SizedBox(height: 4),
-          _timeLabel(theme, textColor, timeStr),
         ],
       ),
     );
@@ -670,10 +687,6 @@ class MessageBubble extends StatelessWidget {
                   ],
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-              child: _timeLabel(theme, textColor, timeStr),
-            ),
           ],
         ),
       ),
@@ -732,8 +745,6 @@ class MessageBubble extends StatelessWidget {
               child: _VideoNotePlayer(videoBytes: message.videoBytes!),
             ),
           ),
-          const SizedBox(height: 4),
-          _timeLabel(theme, textColor, timeStr),
         ],
       ),
     );
@@ -756,14 +767,14 @@ class MessageBubble extends StatelessWidget {
               isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!isMe) _senderLabel(theme, senderLabel),
-            const SizedBox(height: 4),
+            if (!isMe) ...[
+              _senderLabel(theme, senderLabel),
+              const SizedBox(height: 4),
+            ],
             _VideoThumbnail(
               videoBytes: message.videoBytes!,
               mediaName: message.mediaName ?? 'video',
             ),
-            const SizedBox(height: 4),
-            _timeLabel(theme, textColor, timeStr),
           ],
         ),
       ),
@@ -790,8 +801,6 @@ class MessageBubble extends StatelessWidget {
             mediaMime: message.mediaMime ?? 'audio/m4a',
             isMe: isMe,
           ),
-          const SizedBox(height: 2),
-          _timeLabel(theme, textColor, timeStr),
         ],
       ),
     );
@@ -805,14 +814,6 @@ class MessageBubble extends StatelessWidget {
           fontSize: 12,
           fontWeight: FontWeight.w600,
           color: Color(0xFF8E8E93),
-        ),
-      );
-
-  Widget _timeLabel(ThemeData theme, Color textColor, String timeStr) => Text(
-        '${message.isFromHistory ? '~ ' : ''}$timeStr',
-        style: TextStyle(
-          fontSize: 11,
-          color: textColor.withAlpha(160),
         ),
       );
 
