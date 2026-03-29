@@ -7,6 +7,7 @@ import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
 import '../../data/sgtp_client.dart';
 import '../blocs/rooms/rooms_bloc.dart';
+import '../widgets/app_nav_bar.dart';
 import 'rooms_page.dart';
 import 'settings_screen.dart';
 
@@ -33,6 +34,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   late RoomsBloc _roomsBloc;
+  final _roomsPageKey = GlobalKey<RoomsPageState>();
   late Map<String, String> _nicknames;
   late String _serverAddress;
   late SgtpConfig _config;
@@ -74,6 +76,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showAddSheet() {
+    _roomsPageKey.currentState?.showAddSheet(context);
+  }
+
   void _onUserAvatarChanged(Uint8List? avatar) {
     setState(() => _userAvatar = avatar);
     _roomsBloc.setUserAvatar(avatar);
@@ -84,10 +90,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return BlocProvider.value(
       value: _roomsBloc,
       child: Scaffold(
+        extendBody: true,
         body: IndexedStack(
           index: _currentIndex,
           children: [
-            const RoomsPage(),
+            RoomsPage(key: _roomsPageKey),
             SettingsScreen(
               initialConfig:        _config,
               initialNicknames:     _nicknames,
@@ -97,26 +104,43 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-        bottomNavigationBar: NavigationBar(
+        floatingActionButton: _currentIndex == 0
+            ? _HomeFab(onPressed: _showAddSheet)
+            : null,
+        bottomNavigationBar: AppNavBar(
           selectedIndex: _currentIndex,
-          onDestinationSelected: (i) => setState(() => _currentIndex = i),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.meeting_room_outlined),
-              selectedIcon: Icon(Icons.meeting_room),
-              label: 'Rooms',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings),
-              label: 'Settings',
-            ),
-          ],
+          onTap: (i) => setState(() => _currentIndex = i),
         ),
       ),
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FAB
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _HomeFab extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _HomeFab({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton(
+      onPressed: onPressed,
+      tooltip: 'Add room',
+      backgroundColor: Colors.white,
+      foregroundColor: Colors.black,
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: const Icon(Icons.add, size: 32),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Startup screen
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Loading screen that decides where to navigate on startup.
 class AppStartScreen extends StatefulWidget {

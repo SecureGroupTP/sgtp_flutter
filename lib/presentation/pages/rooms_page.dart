@@ -1,11 +1,11 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../core/app_theme.dart';
 import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../blocs/chat/chat_bloc.dart';
@@ -16,19 +16,25 @@ import '../blocs/rooms/rooms_event.dart';
 import '../blocs/rooms/rooms_state.dart';
 import '../widgets/qr_share_dialog.dart';
 import '../widgets/qr_scanner_dialog.dart';
+import '../widgets/room_avatar.dart';
+import '../widgets/room_status_dot.dart';
 import 'chat_page.dart';
 
 bool get _isDesktop =>
     !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────────────────────
+
 class RoomsPage extends StatefulWidget {
   const RoomsPage({super.key});
 
   @override
-  State<RoomsPage> createState() => _RoomsPageState();
+  State<RoomsPage> createState() => RoomsPageState();
 }
 
-class _RoomsPageState extends State<RoomsPage> {
+class RoomsPageState extends State<RoomsPage> {
   final _settingsRepo = SettingsRepository();
   List<String> _savedUUIDs = [];
 
@@ -60,154 +66,60 @@ class _RoomsPageState extends State<RoomsPage> {
         if (state.error != null) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
-            ..showSnackBar(SnackBar(
-              content: Text(state.error!),
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ));
+            ..showSnackBar(SnackBar(content: Text(state.error!)));
         }
       },
       builder: (context, state) {
+        final statuses =
+            state.rooms.map((r) => r.chatBloc.state.status).toList();
         return Scaffold(
-          appBar: _buildAppBar(context, state),
-          body: _buildRoomList(context, state),
-          floatingActionButton: FloatingActionButton(
-            onPressed: () => _showAddSheet(context),
-            tooltip: 'Add room',
-            child: const Icon(Icons.add),
+          backgroundColor: AppColors.bgMain,
+          appBar: RoomsAppBar(
+            serverAddress: state.serverAddress,
+            statuses: statuses,
           ),
+          body: _buildBody(context, state),
         );
       },
     );
   }
 
-  PreferredSizeWidget _buildAppBar(BuildContext context, RoomsState state) {
-    final theme = Theme.of(context);
-    final statuses = state.rooms.map((r) => r.chatBloc.state.status).toList();
-    final Color dotColor;
-    if (statuses.any((s) => s == ChatStatus.ready)) {
-      dotColor = Colors.green;
-    } else if (statuses.any(
-        (s) => s == ChatStatus.connecting || s == ChatStatus.handshaking)) {
-      dotColor = Colors.orange;
-    } else if (statuses.isNotEmpty) {
-      dotColor = Colors.red;
-    } else {
-      dotColor = theme.colorScheme.outlineVariant;
-    }
-
-    return AppBar(
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('SGTP Chat'),
-          Text(
-            state.serverAddress,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontFamily: 'monospace',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: 16),
-          child: Tooltip(
-            message: _statusTooltip(statuses),
-            child: Container(
-              width: 12, height: 12,
-              decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _statusTooltip(List<ChatStatus> statuses) {
-    if (statuses.isEmpty) return 'No active rooms';
-    if (statuses.any((s) => s == ChatStatus.ready)) return 'Connected';
-    if (statuses.any((s) => s == ChatStatus.connecting || s == ChatStatus.handshaking)) {
-      return 'Connecting…';
-    }
-    return 'Disconnected';
-  }
-
-  Widget _buildEmpty(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.meeting_room_outlined,
-                size: 72, color: theme.colorScheme.outlineVariant),
-            const SizedBox(height: 16),
-            Text('No rooms yet',
-                style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant)),
-            const SizedBox(height: 8),
-            Text(
-              'Tap + to create a new room or join an existing one by UUID.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRoomList(BuildContext context, RoomsState state) {
-    final theme = Theme.of(context);
+  Widget _buildBody(BuildContext context, RoomsState state) {
     final activeUUIDs    = state.rooms.map((r) => r.roomUUID).toSet();
     final savedNotActive = _savedUUIDs.where((u) => !activeUUIDs.contains(u)).toList();
     final hasAnything    = state.rooms.isNotEmpty || savedNotActive.isNotEmpty;
 
-    if (!hasAnything) return _buildEmpty(context);
+    if (!hasAnything) return const _EmptyState();
 
     return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      // Extra bottom padding so last item isn't hidden under FAB + nav bar.
+      padding: const EdgeInsets.only(top: 4, bottom: 160),
       children: [
         // ── Active rooms ─────────────────────────────────────────────────
-        if (state.rooms.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('Active', style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant)),
-          ),
-          ...state.rooms.map((entry) => _RoomTile(
-            entry: entry,
-            serverAddress: state.serverAddress,
-            isSaved: _savedUUIDs.contains(entry.roomUUID),
-            onTap: () => _openRoom(context, entry),
-            onRemove: () =>
-                context.read<RoomsBloc>().add(RoomsRemoveRoom(entry.roomUUID)),
-            onToggleSave: () async {
-              if (_savedUUIDs.contains(entry.roomUUID)) {
-                await _unsaveChat(entry.roomUUID);
-              } else {
-                await _saveChat(entry.roomUUID);
-              }
-            },
-          )),
-        ],
+        ...state.rooms.map((entry) => ActiveRoomTile(
+          entry: entry,
+          serverAddress: state.serverAddress,
+          isSaved: _savedUUIDs.contains(entry.roomUUID),
+          onTap: () => _openRoom(context, entry),
+          onReconnect: () => entry.chatBloc.add(const ChatReconnect()),
+          onRemove: () =>
+              context.read<RoomsBloc>().add(RoomsRemoveRoom(entry.roomUUID)),
+          onToggleSave: () async {
+            if (_savedUUIDs.contains(entry.roomUUID)) {
+              await _unsaveChat(entry.roomUUID);
+            } else {
+              await _saveChat(entry.roomUUID);
+            }
+          },
+        )),
 
         // ── Saved chats (not currently joined) ───────────────────────────
         if (savedNotActive.isNotEmpty) ...[
-          const Divider(height: 24, indent: 16, endIndent: 16),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-            child: Text('Saved Chats', style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant)),
-          ),
-          ...savedNotActive.map((uuid) => _SavedChatTile(
+          const _SectionHeader(title: 'Saved Chats'),
+          ...savedNotActive.map((uuid) => SavedChatTile(
             uuid: uuid,
-            onConnect: () {
-              context.read<RoomsBloc>().add(RoomsJoinRoom(uuid));
-            },
+            onConnect: () =>
+                context.read<RoomsBloc>().add(RoomsJoinRoom(uuid)),
             onRemove: () => _unsaveChat(uuid),
           )),
         ],
@@ -216,23 +128,22 @@ class _RoomsPageState extends State<RoomsPage> {
   }
 
   void _openRoom(BuildContext context, RoomEntry entry) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => BlocProvider.value(
-          value: entry.chatBloc,
-          child: const ChatPage(),
-        ),
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => BlocProvider.value(
+        value: entry.chatBloc,
+        child: const ChatPage(),
       ),
-    );
+    ));
   }
 
-  void _showAddSheet(BuildContext context) {
+  void showAddSheet(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      backgroundColor: AppColors.bgSurface,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (sheetCtx) => _AddRoomSheet(
+      builder: (_) => _AddRoomSheet(
         roomsBloc: context.read<RoomsBloc>(),
         onSaveChat: _saveChat,
       ),
@@ -240,21 +151,98 @@ class _RoomsPageState extends State<RoomsPage> {
   }
 }
 
-// ── Room tile ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// AppBar
+// ─────────────────────────────────────────────────────────────────────────────
 
-class _RoomTile extends StatelessWidget {
+/// Custom AppBar with title + server address + global status dot.
+class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
+  final String serverAddress;
+  final List<ChatStatus> statuses;
+
+  const RoomsAppBar({
+    super.key,
+    required this.serverAddress,
+    required this.statuses,
+  });
+
+  @override
+  Size get preferredSize => const Size.fromHeight(64);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bgMain,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: preferredSize.height,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'SGTP Chat',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: -0.5,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      if (serverAddress.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          serverAddress,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                GlobalStatusDot(statuses: statuses),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Active room tile
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ActiveRoomTile extends StatelessWidget {
   final RoomEntry entry;
   final String serverAddress;
   final bool isSaved;
   final VoidCallback onTap;
+  final VoidCallback onReconnect;
   final VoidCallback onRemove;
   final VoidCallback onToggleSave;
 
-  const _RoomTile({
+  const ActiveRoomTile({
+    super.key,
     required this.entry,
     required this.serverAddress,
     required this.isSaved,
     required this.onTap,
+    required this.onReconnect,
     required this.onRemove,
     required this.onToggleSave,
   });
@@ -264,42 +252,34 @@ class _RoomTile extends StatelessWidget {
     return BlocBuilder<ChatBloc, ChatState>(
       bloc: entry.chatBloc,
       builder: (context, chatState) {
-        final statusColor = _statusColor(context, chatState.status);
-        final statusText  = _statusText(chatState.status);
-        final isDisconnected = chatState.status == ChatStatus.disconnected
-            || chatState.status == ChatStatus.error;
+        final isOffline = chatState.status == ChatStatus.disconnected ||
+            chatState.status == ChatStatus.error;
+        final name = chatState.chatName != 'Chat'
+            ? chatState.chatName
+            : entry.label;
 
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundImage: chatState.chatAvatarBytes != null
-                ? MemoryImage(chatState.chatAvatarBytes!) : null,
-            backgroundColor: chatState.chatAvatarBytes == null
-                ? Theme.of(context).colorScheme.secondaryContainer : null,
-            child: chatState.chatAvatarBytes == null
-                ? Icon(Icons.meeting_room_outlined,
-                    color: Theme.of(context).colorScheme.onSecondaryContainer)
-                : null,
+        return _ChatTile(
+          onTap: onTap,
+          leading: RoomAvatar(
+            avatarBytes: chatState.chatAvatarBytes,
+            fallbackIcon: Icons.tag,
           ),
-          title: Text(
-            chatState.chatName != 'Chat'
-                ? chatState.chatName
-                : entry.label,
-            overflow: TextOverflow.ellipsis,
-          ),
+          title: name,
           subtitle: Row(
             children: [
-              Container(
-                width: 8, height: 8,
-                margin: const EdgeInsets.only(right: 6, top: 1),
-                decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
+              RoomStatusDot(status: chatState.status),
+              const SizedBox(width: 6),
+              Text(
+                _statusText(chatState.status),
+                style: const TextStyle(
+                    fontSize: 13, color: AppColors.textSecondary),
               ),
-              Text(statusText),
               if (chatState.peerUUIDs.isNotEmpty) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 Text(
                   '· ${chatState.peerUUIDs.length} peer${chatState.peerUUIDs.length == 1 ? '' : 's'}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.textSecondary),
                 ),
               ],
             ],
@@ -307,135 +287,144 @@ class _RoomTile extends StatelessWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Reconnect button when disconnected/error
-              if (isDisconnected)
-                IconButton(
-                  icon: const Icon(Icons.wifi_rounded),
-                  tooltip: 'Reconnect',
-                  color: Theme.of(context).colorScheme.primary,
-                  onPressed: () => entry.chatBloc.add(const ChatReconnect()),
-                ),
-              PopupMenuButton<_RoomAction>(
-                icon: const Icon(Icons.more_vert),
-                onSelected: (action) {
-                  switch (action) {
-                    case _RoomAction.open:
-                      onTap();
-                    case _RoomAction.copyUUID:
-                      Clipboard.setData(ClipboardData(text: entry.roomUUID));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Room UUID copied')));
-                    case _RoomAction.shareQR:
-                      final qrData = QrShareData(
-                        type: 'room',
-                        roomUUID: entry.roomUUID,
-                        serverAddress: serverAddress,
-                        timestamp: DateTime.now().millisecondsSinceEpoch,
-                      );
-                      showDialog<void>(
-                        context: context,
-                        builder: (_) => QrShareDialog(
-                          data: qrData,
-                          title: 'Share Room',
-                          description: chatState.chatName != 'Chat'
-                              ? chatState.chatName
-                              : entry.label,
-                        ),
-                      );
-                    case _RoomAction.save:
-                      onToggleSave();
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text(isSaved ? 'Removed from saved' : 'Chat saved'),
-                      ));
-                    case _RoomAction.remove:
-                      onRemove();
-                  }
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(
-                    value: _RoomAction.open,
-                    child: ListTile(
-                      leading: Icon(Icons.open_in_new),
-                      title: Text('Open'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: _RoomAction.copyUUID,
-                    child: ListTile(
-                      leading: Icon(Icons.copy),
-                      title: Text('Copy UUID'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: _RoomAction.shareQR,
-                    child: ListTile(
-                      leading: Icon(Icons.qr_code_2),
-                      title: Text('Share QR code'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: _RoomAction.save,
-                    child: ListTile(
-                      leading: Icon(isSaved ? Icons.bookmark_remove_outlined : Icons.bookmark_add_outlined),
-                      title: Text(isSaved ? 'Remove from saved' : 'Save chat'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: _RoomAction.remove,
-                    child: ListTile(
-                      leading: Icon(Icons.delete_outline),
-                      title: Text('Remove'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                ],
+              if (isOffline)
+                _ReconnectButton(onPressed: onReconnect),
+              _ActiveRoomMoreButton(
+                entry: entry,
+                serverAddress: serverAddress,
+                isSaved: isSaved,
+                chatState: chatState,
+                onTap: onTap,
+                onToggleSave: onToggleSave,
+                onRemove: onRemove,
               ),
             ],
           ),
-          onTap: onTap,
         );
       },
     );
   }
 
-  Color _statusColor(BuildContext context, ChatStatus status) {
-    return switch (status) {
-      ChatStatus.ready       => Colors.green,
-      ChatStatus.connecting  => Colors.orange,
-      ChatStatus.handshaking => Colors.orange,
-      ChatStatus.error       => Colors.red,
-      ChatStatus.disconnected => Theme.of(context).colorScheme.outlineVariant,
-    };
+  String _statusText(ChatStatus status) => switch (status) {
+    ChatStatus.ready        => 'Ready',
+    ChatStatus.connecting   => 'Connecting…',
+    ChatStatus.handshaking  => 'Handshaking…',
+    ChatStatus.error        => 'Error',
+    ChatStatus.disconnected => 'Disconnected',
+  };
+}
+
+// Wires up _MoreButton's selection for ActiveRoomTile — done via a separate
+// stateless wrapper that has access to the needed callbacks.
+class _ActiveRoomMoreButton extends StatelessWidget {
+  final RoomEntry entry;
+  final String serverAddress;
+  final bool isSaved;
+  final ChatState chatState;
+  final VoidCallback onTap;
+  final VoidCallback onToggleSave;
+  final VoidCallback onRemove;
+
+  const _ActiveRoomMoreButton({
+    required this.entry,
+    required this.serverAddress,
+    required this.isSaved,
+    required this.chatState,
+    required this.onTap,
+    required this.onToggleSave,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_RoomAction>(
+      icon: const Icon(Icons.more_vert,
+          size: 22, color: AppColors.textSecondary),
+      color: AppColors.bgSurface,
+      onSelected: (action) => _handle(context, action),
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: _RoomAction.open,
+          child: _MenuItem(icon: Icons.open_in_new, label: 'Open'),
+        ),
+        const PopupMenuItem(
+          value: _RoomAction.copyUUID,
+          child: _MenuItem(icon: Icons.copy_outlined, label: 'Copy UUID'),
+        ),
+        const PopupMenuItem(
+          value: _RoomAction.shareQR,
+          child: _MenuItem(icon: Icons.qr_code_2_outlined, label: 'Share QR'),
+        ),
+        PopupMenuItem(
+          value: _RoomAction.save,
+          child: _MenuItem(
+            icon: isSaved
+                ? Icons.bookmark_remove_outlined
+                : Icons.bookmark_add_outlined,
+            label: isSaved ? 'Remove from saved' : 'Save chat',
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: _RoomAction.remove,
+          child: _MenuItem(
+              icon: Icons.delete_outline,
+              label: 'Remove',
+              color: AppColors.statusRed),
+        ),
+      ],
+    );
   }
 
-  String _statusText(ChatStatus status) {
-    return switch (status) {
-      ChatStatus.ready        => 'Ready',
-      ChatStatus.connecting   => 'Connecting…',
-      ChatStatus.handshaking  => 'Handshaking…',
-      ChatStatus.error        => 'Error',
-      ChatStatus.disconnected => 'Disconnected',
-    };
+  void _handle(BuildContext context, _RoomAction action) {
+    switch (action) {
+      case _RoomAction.open:
+        onTap();
+      case _RoomAction.copyUUID:
+        Clipboard.setData(ClipboardData(text: entry.roomUUID));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Room UUID copied')));
+      case _RoomAction.shareQR:
+        final qrData = QrShareData(
+          type: 'room',
+          roomUUID: entry.roomUUID,
+          serverAddress: serverAddress,
+          timestamp: DateTime.now().millisecondsSinceEpoch,
+        );
+        showDialog<void>(
+          context: context,
+          builder: (_) => QrShareDialog(
+            data: qrData,
+            title: 'Share Room',
+            description: chatState.chatName != 'Chat'
+                ? chatState.chatName
+                : entry.label,
+          ),
+        );
+      case _RoomAction.save:
+        onToggleSave();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(isSaved ? 'Removed from saved' : 'Chat saved'),
+        ));
+      case _RoomAction.remove:
+        onRemove();
+    }
   }
 }
 
 enum _RoomAction { open, copyUUID, shareQR, save, remove }
 
-// ── Add room bottom sheet ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Saved chat tile
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Saved chat tile (for chats saved but not currently joined) ──────────────
-
-class _SavedChatTile extends StatelessWidget {
+class SavedChatTile extends StatelessWidget {
   final String uuid;
   final VoidCallback onConnect;
   final VoidCallback onRemove;
 
-  const _SavedChatTile({
+  const SavedChatTile({
+    super.key,
     required this.uuid,
     required this.onConnect,
     required this.onRemove,
@@ -443,45 +432,274 @@ class _SavedChatTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: theme.colorScheme.secondaryContainer,
-        child: Icon(Icons.bookmark_outlined,
-            color: theme.colorScheme.onSecondaryContainer),
+    return _ChatTile(
+      onTap: onConnect,
+      leading: const SavedChatAvatar(),
+      title: '${uuid.substring(0, 8)}…',
+      titleStyle: const TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 14,
+        color: AppColors.textPrimary,
       ),
-      title: Text(
-        uuid.substring(0, 16) + '…',
-        style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+      subtitle: const Text(
+        'Saved · tap to connect',
+        style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
       ),
-      subtitle: Text('Saved · tap to connect',
-          style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: Icon(Icons.copy, size: 18, color: theme.colorScheme.onSurfaceVariant),
-            tooltip: 'Copy UUID',
+          _IconAction(
+            icon: Icons.copy_outlined,
             onPressed: () {
               Clipboard.setData(ClipboardData(text: uuid));
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('UUID copied')));
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('UUID copied')));
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.bookmark_remove_outlined, size: 18, color: Colors.red),
-            tooltip: 'Remove from saved',
+          _IconAction(
+            icon: Icons.delete_outline,
+            color: AppColors.statusRed,
             onPressed: onRemove,
           ),
         ],
       ),
-      onTap: onConnect,
     );
   }
 }
 
-// ── Add room bottom sheet ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared building blocks
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Base pressable tile with consistent 14 × 20 padding and ink splash.
+class _ChatTile extends StatelessWidget {
+  final VoidCallback onTap;
+  final Widget leading;
+  final String title;
+  final TextStyle? titleStyle;
+  final Widget subtitle;
+  final Widget? trailing;
+
+  const _ChatTile({
+    required this.onTap,
+    required this.leading,
+    required this.title,
+    this.titleStyle,
+    required this.subtitle,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      splashColor: AppColors.bgSurfaceActive,
+      highlightColor: AppColors.bgSurfaceActive.withAlpha(120),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    overflow: TextOverflow.ellipsis,
+                    style: titleStyle ??
+                        const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textPrimary,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  subtitle,
+                ],
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: 8),
+              trailing!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "SAVED CHATS" style section header with a trailing divider line.
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+      child: Row(
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+              letterSpacing: 1,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(child: Divider(color: AppColors.border, height: 1)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Pill-shaped "Reconnect" button.
+class _ReconnectButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _ReconnectButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        margin: const EdgeInsets.only(right: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(25), // rgba(255,255,255,0.1)
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: const Text(
+          'Reconnect',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tiny icon button used in saved chat trailing area.
+class _IconAction extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onPressed;
+
+  const _IconAction({
+    required this.icon,
+    this.color = AppColors.textSecondary,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Icon(icon, size: 18, color: color),
+      ),
+    );
+  }
+}
+
+/// Menu item row used inside [PopupMenuButton].
+class _MenuItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    this.color = AppColors.textPrimary,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: color),
+        const SizedBox(width: 12),
+        Text(label, style: TextStyle(color: color)),
+      ],
+    );
+  }
+}
+
+/// White squircle FAB.
+/// Wrapped in Padding so the Scaffold positions it above the outer nav bar
+/// (the outer Scaffold with extendBody:true propagates nav bar height into
+/// MediaQuery.padding.bottom, which we use here to shift the FAB up).
+class _AddFab extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _AddFab({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: FloatingActionButton(
+        onPressed: onPressed,
+        tooltip: 'Add room',
+        backgroundColor: AppColors.accent,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: const Icon(Icons.add, size: 32),
+      ),
+    );
+  }
+}
+
+/// Full-screen empty state.
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.forum_outlined, size: 72, color: AppColors.textSecondary),
+            SizedBox(height: 16),
+            Text(
+              'No rooms yet',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Tap + to create a new room\nor join an existing one by UUID.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Add room bottom sheet
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _AddRoomSheet extends StatefulWidget {
   final RoomsBloc roomsBloc;
@@ -508,41 +726,43 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   }
 
   void _handleQrScanned(QrShareData data) {
-    // QrScannerDialog already popped itself — just join and close the sheet.
     if (data.type == 'room' && data.roomUUID != null) {
-      widget.roomsBloc.add(RoomsJoinRoom(data.roomUUID!));
-      Navigator.of(context).pop(); // close the add-room bottom sheet
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid room QR code')),
-      );
-    }
-  }
-
-  /// Decode base64, validate, and immediately join if valid.
-  void _joinFromBase64() {
-    final raw = _base64Ctrl.text.trim();
-    if (raw.isEmpty) return;
-
-    final data = QrShareData.fromBase64(raw);
-    if (data != null && data.type == 'room' && data.roomUUID != null) {
       widget.roomsBloc.add(RoomsJoinRoom(data.roomUUID!));
       Navigator.of(context).pop();
     } else {
-      // Maybe the user pasted a raw UUID hex directly in the base64 field
-      final hex = raw.replaceAll('-', '');
-      if (hex.length == 32 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
-        widget.roomsBloc.add(RoomsJoinRoom(hex));
-        Navigator.of(context).pop();
-      } else {
-        setState(() => _decodeError = 'Could not parse — paste valid base64 or 32-char hex UUID');
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid room QR code')));
     }
+  }
+
+  void _joinFromInput() async {
+    String? uuid;
+    if (_showBase64Input) {
+      final raw = _base64Ctrl.text.trim();
+      if (raw.isEmpty) return;
+      final data = QrShareData.fromBase64(raw);
+      if (data != null && data.type == 'room' && data.roomUUID != null) {
+        uuid = data.roomUUID;
+      } else {
+        final hex = raw.replaceAll('-', '');
+        if (hex.length == 32) uuid = hex;
+      }
+      if (uuid == null) {
+        setState(() =>
+            _decodeError = 'Could not parse — paste valid base64 or 32-char hex');
+        return;
+      }
+    } else {
+      uuid = _uuidCtrl.text.trim();
+      if (uuid.isEmpty) return;
+    }
+    widget.roomsBloc.add(RoomsJoinRoom(uuid));
+    if (_saveAfterJoin) await widget.onSaveChat?.call(uuid);
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Padding(
       padding: EdgeInsets.fromLTRB(
           24, 24, 24, MediaQuery.of(context).viewInsets.bottom + 24),
@@ -551,54 +771,57 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Add room', style: theme.textTheme.titleLarge),
+            const Text(
+              'Add room',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary),
+            ),
             const SizedBox(height: 24),
 
             // Create new
-            FilledButton.icon(
+            _SheetButton(
+              label: 'Create new room',
+              icon: Icons.add_circle_outline,
+              filled: true,
               onPressed: () {
                 widget.roomsBloc.add(const RoomsCreateRoom());
                 Navigator.of(context).pop();
               },
-              icon: const Icon(Icons.add_circle_outline),
-              label: const Text('Create new room'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             ),
             const SizedBox(height: 16),
-            const _Divider(),
+            const _OrDivider(),
             const SizedBox(height: 16),
 
             // Scan QR — mobile only
             if (!_isDesktop) ...[
-              FilledButton.tonalIcon(
+              _SheetButton(
+                label: 'Scan QR code',
+                icon: Icons.qr_code_scanner,
                 onPressed: () {
                   Navigator.push<void>(
                     context,
                     MaterialPageRoute(
                       fullscreenDialog: true,
-                      builder: (_) => QrScannerDialog(onQrScanned: _handleQrScanned),
+                      builder: (_) =>
+                          QrScannerDialog(onQrScanned: _handleQrScanned),
                     ),
                   );
                 },
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan QR code'),
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
               ),
               const SizedBox(height: 12),
-              const _Divider(),
+              const _OrDivider(),
               const SizedBox(height: 12),
             ],
 
-            // Join by UUID
+            // UUID / base64 input
             if (!_showBase64Input) ...[
-              TextField(
+              _DarkTextField(
                 controller: _uuidCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Room UUID',
-                  hintText: '32 hex chars (without dashes)',
-                  prefixIcon: Icon(Icons.vpn_key_outlined),
-                  border: OutlineInputBorder(),
-                ),
+                label: 'Room UUID',
+                hint: '32 hex chars (without dashes)',
+                prefixIcon: Icons.vpn_key_outlined,
                 onChanged: (v) => setState(() {
                   _joining = v.trim().isNotEmpty;
                   _decodeError = null;
@@ -610,21 +833,18 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
                   _showBase64Input = true;
                   _decodeError = null;
                 }),
-                child: const Text('Or paste base64 / QR data'),
+                child: const Text('Or paste base64 / QR data',
+                    style: TextStyle(color: AppColors.textSecondary)),
               ),
             ] else ...[
-              // Join by base64
-              TextField(
+              _DarkTextField(
                 controller: _base64Ctrl,
+                label: 'Base64 QR data or UUID',
+                hint: 'Paste base64 string or 32-char hex here',
+                prefixIcon: Icons.vpn_key_outlined,
                 maxLines: 3,
                 autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'Base64 QR data or UUID',
-                  hintText: 'Paste base64 string or 32-char hex here',
-                  prefixIcon: const Icon(Icons.vpn_key_outlined),
-                  border: const OutlineInputBorder(),
-                  errorText: _decodeError,
-                ),
+                errorText: _decodeError,
                 onChanged: (v) => setState(() {
                   _joining = v.trim().isNotEmpty;
                   _decodeError = null;
@@ -637,54 +857,35 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
                   _base64Ctrl.clear();
                   _decodeError = null;
                 }),
-                child: const Text('Back to UUID input'),
+                child: const Text('Back to UUID input',
+                    style: TextStyle(color: AppColors.textSecondary)),
               ),
             ],
 
-            const SizedBox(height: 12),
-            CheckboxListTile(
-              value: _saveAfterJoin,
-              onChanged: (v) => setState(() => _saveAfterJoin = v ?? false),
-              title: const Text('Save this chat'),
-              subtitle: const Text('Reconnect easily after restart'),
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Checkbox(
+                  value: _saveAfterJoin,
+                  onChanged: (v) => setState(() => _saveAfterJoin = v ?? false),
+                  activeColor: AppColors.accent,
+                  checkColor: Colors.black,
+                ),
+                const SizedBox(width: 4),
+                const Expanded(
+                  child: Text(
+                    'Save this chat for quick reconnect',
+                    style: TextStyle(
+                        fontSize: 14, color: AppColors.textSecondary),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
-            FilledButton.tonalIcon(
-              onPressed: _joining
-                  ? () async {
-                      String? uuid;
-                      if (_showBase64Input) {
-                        final raw = _base64Ctrl.text.trim();
-                        if (raw.isEmpty) return;
-                        final data = QrShareData.fromBase64(raw);
-                        if (data != null && data.type == 'room' && data.roomUUID != null) {
-                          uuid = data.roomUUID;
-                        } else {
-                          final hex = raw.replaceAll('-', '');
-                          if (hex.length == 32) uuid = hex;
-                        }
-                        if (uuid == null) {
-                          setState(() => _decodeError = 'Could not parse');
-                          return;
-                        }
-                        widget.roomsBloc.add(RoomsJoinRoom(uuid));
-                      } else {
-                        uuid = _uuidCtrl.text.trim();
-                        if (uuid.isNotEmpty) {
-                          widget.roomsBloc.add(RoomsJoinRoom(uuid));
-                        }
-                      }
-                      if (uuid != null && _saveAfterJoin) {
-                        await widget.onSaveChat?.call(uuid);
-                      }
-                      if (context.mounted) Navigator.of(context).pop();
-                    }
-                  : null,
-              icon: const Icon(Icons.login),
-              label: const Text('Join room'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            _SheetButton(
+              label: 'Join room',
+              icon: Icons.login,
+              onPressed: _joining ? _joinFromInput : null,
             ),
           ],
         ),
@@ -693,15 +894,121 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   }
 }
 
-class _Divider extends StatelessWidget {
-  const _Divider();
+/// Tonal / filled button for the bottom sheet.
+class _SheetButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool filled;
+  final VoidCallback? onPressed;
+
+  const _SheetButton({
+    required this.label,
+    required this.icon,
+    this.filled = false,
+    this.onPressed,
+  });
+
   @override
-  Widget build(BuildContext context) => const Row(children: [
-    Expanded(child: Divider()),
-    Padding(
-      padding: EdgeInsets.symmetric(horizontal: 12),
-      child: Text('or'),
-    ),
-    Expanded(child: Divider()),
-  ]);
+  Widget build(BuildContext context) {
+    final style = ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size.fromHeight(48)),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      backgroundColor: WidgetStatePropertyAll(
+        filled
+            ? AppColors.accent
+            : Colors.white.withAlpha(20),
+      ),
+      foregroundColor: WidgetStatePropertyAll(
+        filled ? Colors.black : AppColors.textPrimary,
+      ),
+      overlayColor:
+          WidgetStatePropertyAll(Colors.white.withAlpha(20)),
+    );
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon),
+      label: Text(label),
+      style: style,
+    );
+  }
+}
+
+/// Text field styled for the dark sheet.
+class _DarkTextField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final IconData prefixIcon;
+  final int maxLines;
+  final bool autofocus;
+  final String? errorText;
+  final ValueChanged<String>? onChanged;
+
+  const _DarkTextField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    required this.prefixIcon,
+    this.maxLines = 1,
+    this.autofocus = false,
+    this.errorText,
+    this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      maxLines: maxLines,
+      autofocus: autofocus,
+      style: const TextStyle(color: AppColors.textPrimary),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: AppColors.textSecondary),
+        hintText: hint,
+        hintStyle: const TextStyle(color: AppColors.textSecondary),
+        prefixIcon:
+            Icon(prefixIcon, color: AppColors.textSecondary),
+        errorText: errorText,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.accent),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.statusRed),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.statusRed),
+        ),
+        filled: true,
+        fillColor: AppColors.bgMain,
+      ),
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _OrDivider extends StatelessWidget {
+  const _OrDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(children: [
+      Expanded(child: Divider(color: AppColors.border)),
+      Padding(
+        padding: EdgeInsets.symmetric(horizontal: 12),
+        child: Text('or',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+      ),
+      Expanded(child: Divider(color: AppColors.border)),
+    ]);
+  }
 }

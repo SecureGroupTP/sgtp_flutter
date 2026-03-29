@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'core/app_theme.dart';
 import 'core/window_size_service.dart';
 import 'data/repositories/settings_repository.dart';
 import 'presentation/blocs/setup/setup_bloc.dart';
@@ -47,17 +48,9 @@ class _SgtpAppState extends State<SgtpApp> with WindowListener {
     return MaterialApp(
       title: 'SGTP Chat',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1565C0), brightness: Brightness.light),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1565C0), brightness: Brightness.dark),
-      ),
-      themeMode: ThemeMode.system,
+      theme: AppTheme.dark(),
+      darkTheme: AppTheme.dark(),
+      themeMode: ThemeMode.dark,
       initialRoute: '/',
       routes: {
         '/': (_) => const AppStartScreen(),
