@@ -101,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showAddSheet() {
-    _roomsPageKey.currentState?.showAddSheet(context);
+    _roomsPageKey.currentState?.showAddSheet();
   }
 
   void _onUserAvatarChanged(Uint8List? avatar) {

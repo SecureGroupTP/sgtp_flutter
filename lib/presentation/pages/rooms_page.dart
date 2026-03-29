@@ -136,7 +136,7 @@ class RoomsPageState extends State<RoomsPage> {
     ));
   }
 
-  void showAddSheet(BuildContext context) {
+  void showAddSheet() {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
