@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/app_theme.dart';
 import '../../core/crypto/ed25519_utils.dart';
 import '../../core/openssh_parser.dart';
 import '../../data/repositories/settings_repository.dart';
@@ -467,462 +468,432 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings'), elevation: 0),
+      backgroundColor: AppColors.bgMain,
+      appBar: const _SettingsAppBar(),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.only(bottom: 100),
         children: [
-
-          // ── User Profile ───────────────────────────────────────────────
-          _sectionTitle('My Profile'),
-          const SizedBox(height: 8),
-          _buildAvatarCard(theme),
-          const SizedBox(height: 16),
-
-          // ── Connection ──────────────────────────────────────────────────
-          _sectionTitle('Connection'),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _serverCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Server address',
-              hintText: 'host:7777',
-              prefixIcon: Icon(Icons.dns_outlined),
-              border: OutlineInputBorder(),
-            ),
-            keyboardType: TextInputType.url,
-            autocorrect: false,
-            enableSuggestions: false,
-            textCapitalization: TextCapitalization.none,
-            onChanged: (_) => _tryApplyConfig(),
-            onSubmitted: (_) => _tryApplyConfig(),
-          ),
-          const SizedBox(height: 16),
-
-          // ── Private key ─────────────────────────────────────────────────
-          _sectionTitle('Private Key (ed25519)'),
-          const SizedBox(height: 8),
-          _buildPrivateKeyCard(theme),
-          const SizedBox(height: 16),
-
-          // ── Whitelist ────────────────────────────────────────────────────
-          _sectionTitle('Trusted Peers (Whitelist)'),
-          const SizedBox(height: 4),
-          Text(
-            'Only listed keys can connect. Tap a peer to rename.',
-            style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          _buildWhitelistButtons(theme),
-          const SizedBox(height: 12),
-          _buildWhitelistItems(theme),
-
-          // ── Error ─────────────────────────────────────────────────────────
-          if (_error != null) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(_error!,
-                  style: TextStyle(color: theme.colorScheme.onErrorContainer)),
-            ),
-          ],
-
-          const SizedBox(height: 32),
-          const Divider(),
-          const SizedBox(height: 8),
-
-          // ── Network / Ping ─────────────────────────────────────────────────
-          _sectionTitle('Network'),
-          const SizedBox(height: 8),
-          Card(
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: theme.colorScheme.outline),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Ping interval',
-                          style: theme.textTheme.bodyMedium),
-                      Text('${_pingIntervalSeconds}s',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  Slider(
-                    value: _pingIntervalSeconds.toDouble(),
-                    min: 5, max: 120, divisions: 23,
-                    label: '${_pingIntervalSeconds}s',
-                    onChanged: (v) {
-                      setState(() => _pingIntervalSeconds = v.round());
-                      _tryApplyConfig();
-                    },
-                  ),
-                  Text(
-                    'Peers who don\'t respond within ${_pingIntervalSeconds * 3}s will be removed. '
-                    'Lower values detect disconnects faster but use more traffic.',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Divider(),
-          const SizedBox(height: 8),
-
-          // ── Guide ──────────────────────────────────────────────────────────
-          _sectionTitle('Getting Started'),
-          const SizedBox(height: 8),
-          _buildGuideCard(theme),
-          const SizedBox(height: 16),
-          const Divider(),
-          const SizedBox(height: 8),
-
-          // ── About ─────────────────────────────────────────────────────────
-          _sectionTitle('About'),
-          const SizedBox(height: 8),
-          _infoRow('App Version', '1.0.0'),
-          _infoRow('Protocol', 'SGTP v1'),
-          const SizedBox(height: 12),
-
-          // ── GitHub link ───────────────────────────────────────────────────
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.code_outlined),
-            title: const Text('Source Code'),
-            subtitle: const Text('github.com/SecureGroupTP/sgtp_flutter'),
-            trailing: const Icon(Icons.open_in_new, size: 16),
-            onTap: () => _launchGitHub(),
-          ),
+          _buildProfileSection(),
+          _SettingsGroup(title: 'Connection',          child: _buildConnectionCard()),
+          _SettingsGroup(title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
+          _SettingsGroup(title: 'Trusted Peers (Whitelist)', child: _buildWhitelistCard()),
+          _SettingsGroup(title: 'Network',             child: _buildNetworkCard()),
+          _buildGettingStarted(),
+          _SettingsGroup(title: 'About',               child: _buildAboutCard()),
           const SizedBox(height: 16),
         ],
       ),
     );
   }
 
-  // ── Guide card ────────────────────────────────────────────────────────────
+  // ── Profile section ───────────────────────────────────────────────────────
 
-  Widget _buildGuideCard(ThemeData theme) {
-    const steps = [
-      (Icons.vpn_key_outlined,    'Private Key',   'Generate or import your Ed25519 identity key. This is your unique identity — never share the private key.'),
-      (Icons.people_outline,      'Whitelist',     'Add trusted peers\' public keys. Only whitelisted keys can join your rooms. Share your public key hex with friends.'),
-      (Icons.dns_outlined,        'Server',        'Enter the SGTP relay server address (host:port). All participants must use the same server.'),
-      (Icons.meeting_room_outlined,'Rooms',        'Create a new room or join one by UUID. Share the room UUID with peers so they can join.'),
-      (Icons.chat_bubble_outline, 'Chatting',      'Hold the mic button to record voice. Long-press a message to reply or react. Swipe right on a message to reply quickly.'),
-    ];
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: theme.colorScheme.outline),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          children: steps.map((s) => ListTile(
-            leading: Icon(s.$1, color: theme.colorScheme.primary, size: 22),
-            title: Text(s.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: Text(s.$3,
-                style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant)),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          )).toList(),
-        ),
+  Widget _buildProfileSection() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 32, 20, 24),
+      child: Column(
+        children: [
+          GestureDetector(
+            onTap: _pickUserAvatar,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 88, height: 88,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.bgSurface,
+                    border: Border.all(color: AppColors.border),
+                    image: _userAvatar != null
+                        ? DecorationImage(image: MemoryImage(_userAvatar!), fit: BoxFit.cover)
+                        : null,
+                  ),
+                  child: _userAvatar == null
+                      ? const Icon(Icons.person, size: 40, color: AppColors.textSecondary)
+                      : null,
+                ),
+                Positioned(
+                  bottom: -2, right: -2,
+                  child: Container(
+                    width: 32, height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.bgSurfaceActive,
+                      border: Border.all(color: AppColors.bgMain, width: 2),
+                    ),
+                    child: const Icon(Icons.photo_camera, size: 18, color: AppColors.textPrimary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (_userAvatar != null)
+            GestureDetector(
+              onTap: _removeUserAvatar,
+              child: const Text(
+                'Remove avatar',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.statusRed,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
 
-  // ── Avatar card ───────────────────────────────────────────────────────────
+  // ── Connection card ───────────────────────────────────────────────────────
 
-  Widget _buildAvatarCard(ThemeData theme) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: theme.colorScheme.outline),
+  Widget _buildConnectionCard() {
+    return TextField(
+      controller: _serverCtrl,
+      style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
+      decoration: const InputDecoration(
+        hintText: 'host:port',
+        hintStyle: TextStyle(color: AppColors.textSecondary),
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        isDense: true,
+        contentPadding: EdgeInsets.zero,
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            GestureDetector(
-              onTap: _pickUserAvatar,
-              child: Stack(
-                children: [
-                  CircleAvatar(
-                    radius: 36,
-                    backgroundImage:
-                        _userAvatar != null ? MemoryImage(_userAvatar!) : null,
-                    child: _userAvatar == null
-                        ? const Icon(Icons.person, size: 32)
-                        : null,
-                  ),
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(Icons.camera_alt,
-                          size: 14, color: theme.colorScheme.onPrimary),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Your Avatar',
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Shown next to your messages.\nOther peers see it too.',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                  if (_userAvatar != null) ...[
-                    const SizedBox(height: 8),
-                    TextButton.icon(
-                      onPressed: _removeUserAvatar,
-                      icon: const Icon(Icons.delete_outline, size: 16),
-                      label: const Text('Remove'),
-                      style: TextButton.styleFrom(
-                          foregroundColor: theme.colorScheme.error,
-                          padding: EdgeInsets.zero,
-                          minimumSize: const Size(0, 32)),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      keyboardType: TextInputType.url,
+      autocorrect: false,
+      enableSuggestions: false,
+      textCapitalization: TextCapitalization.none,
+      onChanged: (_) => _tryApplyConfig(),
+      onSubmitted: (_) => _tryApplyConfig(),
     );
   }
 
   // ── Private key card ──────────────────────────────────────────────────────
 
-  Widget _buildPrivateKeyCard(ThemeData theme) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: theme.colorScheme.outline),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildPrivateKeyCard() {
+    final pubHex = _myPublicKey
+        ?.map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _privateKeyPath ?? 'No key loaded',
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Row(children: [
-              Expanded(
-                child: Text(
-                  _privateKeyPath ?? 'No key loaded',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                      color: _privateKeyPath != null
-                          ? theme.colorScheme.onSurface
-                          : theme.colorScheme.onSurfaceVariant),
-                  overflow: TextOverflow.ellipsis,
+            _ActionButton(
+              icon: Icons.folder_open_outlined,
+              label: 'Browse',
+              onPressed: _isLoading ? null : _pickPrivateKey,
+            ),
+            _ActionButton(
+              icon: Icons.key_outlined,
+              label: 'Generate',
+              loading: _isGenerating,
+              onPressed: (_isLoading || _isGenerating) ? null : _generatePrivateKey,
+            ),
+          ],
+        ),
+        if (pubHex != null) ...[
+          const SizedBox(height: 16),
+          const Text(
+            'Public Key',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 8),
+          Stack(
+            children: [
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: AppColors.bgMain,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-              ),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(
-                child: FilledButton.tonalIcon(
-                  onPressed: _isLoading ? null : _pickPrivateKey,
-                  icon: const Icon(Icons.file_open_outlined, size: 18),
-                  label: const Text('Browse'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton.tonalIcon(
-                  onPressed: (_isLoading || _isGenerating) ? null : _generatePrivateKey,
-                  icon: _isGenerating
-                      ? const SizedBox(
-                          width: 16, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.auto_fix_high_outlined, size: 18),
-                  label: const Text('Generate'),
-                ),
-              ),
-            ]),
-            if (_myPublicKey != null) ...[
-              const SizedBox(height: 8),
-              const Divider(),
-              const SizedBox(height: 4),
-              Text('Your public key (share with peers):',
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.primary)),
-              const SizedBox(height: 4),
-              Row(children: [
-                Expanded(
-                  child: SelectableText(
-                    _myPublicKey!
-                        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                        .join(),
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(fontFamily: 'monospace'),
+                padding: const EdgeInsets.fromLTRB(12, 12, 48, 32),
+                child: SelectableText(
+                  pubHex,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: AppColors.textPrimary,
+                    height: 1.4,
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.copy, size: 16),
-                  tooltip: 'Copy public key',
-                  onPressed: () {
-                    final hex = _myPublicKey!
-                        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                        .join();
-                    Clipboard.setData(ClipboardData(text: hex));
+              ),
+              Positioned(
+                bottom: 8, right: 8,
+                child: GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: pubHex));
                     ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Public key copied')));
                   },
+                  child: Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                      color: AppColors.bgSurfaceActive,
+                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(Icons.content_copy, size: 16, color: AppColors.textPrimary),
+                  ),
                 ),
-              ]),
+              ),
             ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ── Whitelist card ────────────────────────────────────────────────────────
+
+  Widget _buildWhitelistCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Only listed keys can connect.',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _ActionButton(
+              icon: Icons.snippet_folder_outlined,
+              label: 'Folder',
+              onPressed: _pickWhitelistFolder,
+            ),
+            _ActionButton(
+              icon: Icons.description_outlined,
+              label: 'Files',
+              onPressed: _pickWhitelistFiles,
+            ),
+            _ActionButton(
+              icon: Icons.content_paste_outlined,
+              label: 'Paste',
+              onPressed: _pastePublicKeyFromClipboard,
+            ),
+          ],
+        ),
+        if (_wlEntries.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: List.generate(_wlEntries.length, (i) {
+              final entry = _wlEntries[i];
+              return Container(
+                decoration: BoxDecoration(
+                  color: AppColors.bgMain,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                padding: const EdgeInsets.only(left: 12, right: 10, top: 6, bottom: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      onTap: () => _renameEntry(i),
+                      child: Text(
+                        entry.name,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: () => _showDeleteConfirm(i),
+                      child: const Icon(Icons.close, size: 16, color: AppColors.statusRed),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ],
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(_error!, style: const TextStyle(fontSize: 13, color: AppColors.statusRed)),
+        ],
+      ],
+    );
+  }
+
+  // ── Network card ──────────────────────────────────────────────────────────
+
+  Widget _buildNetworkCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Ping interval',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 4,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+                  activeTrackColor: AppColors.accent,
+                  inactiveTrackColor: AppColors.border,
+                  thumbColor: AppColors.accent,
+                  overlayColor: Colors.white.withAlpha(30),
+                ),
+                child: Slider(
+                  value: _pingIntervalSeconds.toDouble(),
+                  min: 5, max: 120, divisions: 23,
+                  onChanged: (v) {
+                    setState(() => _pingIntervalSeconds = v.round());
+                    _tryApplyConfig();
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 40,
+              child: Text(
+                '${_pingIntervalSeconds} s',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ── Getting Started (collapsible) ─────────────────────────────────────────
+
+  Widget _buildGettingStarted() {
+    const steps = [
+      ('Generate key:', 'Create or load an Ed25519 private key.'),
+      ('Add peers:',    'Whitelist public keys of your friends.'),
+      ('Server:',       'Enter a valid SGTP relay address.'),
+      ('Rooms:',        'Create a new room or join by UUID.'),
+      ('Chat:',         'Send messages (End-to-End Encrypted).'),
+    ];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      decoration: const BoxDecoration(
+        color: AppColors.bgSurface,
+        border: Border(
+          top: BorderSide(color: AppColors.border),
+          bottom: BorderSide(color: AppColors.border),
+        ),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 20),
+          childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          title: const Text(
+            'Getting Started',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          iconColor: AppColors.textSecondary,
+          collapsedIconColor: AppColors.textSecondary,
+          children: [
+            const Text(
+              'Follow these steps to start chatting securely:',
+              style: TextStyle(fontSize: 14, color: AppColors.textSecondary, height: 1.6),
+            ),
+            const SizedBox(height: 8),
+            ...List.generate(steps.length, (i) {
+              final step = steps[i];
+              return Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${i + 1}. ',
+                        style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                    Expanded(
+                      child: Text.rich(TextSpan(children: [
+                        TextSpan(
+                          text: '${step.$1} ',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        TextSpan(
+                          text: step.$2,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: AppColors.textSecondary,
+                            height: 1.6,
+                          ),
+                        ),
+                      ])),
+                    ),
+                  ],
+                ),
+              );
+            }),
           ],
         ),
       ),
     );
   }
 
-  // ── Whitelist buttons ─────────────────────────────────────────────────────
+  // ── About card ────────────────────────────────────────────────────────────
 
-  Widget _buildWhitelistButtons(ThemeData theme) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        FilledButton.tonalIcon(
-          onPressed: _pickWhitelistFolder,
-          icon: const Icon(Icons.folder_open_outlined, size: 18),
-          label: const Text('Load Folder'),
-        ),
-        FilledButton.tonalIcon(
-          onPressed: _pickWhitelistFiles,
-          icon: const Icon(Icons.file_present_outlined, size: 18),
-          label: const Text('Load Files'),
-        ),
-        FilledButton.tonalIcon(
-          onPressed: _pastePublicKeyFromClipboard,
-          icon: const Icon(Icons.content_paste_outlined, size: 18),
-          label: const Text('Paste Key'),
-        ),
-      ],
-    );
-  }
-
-  // ── Whitelist items ───────────────────────────────────────────────────────
-
-  Widget _buildWhitelistItems(ThemeData theme) {
-    if (_wlEntries.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          border: Border.all(color: theme.colorScheme.outlineVariant),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Center(
-          child: Column(children: [
-            Icon(Icons.person_off_outlined,
-                size: 40, color: theme.colorScheme.outlineVariant),
-            const SizedBox(height: 8),
-            const Text('No peers in whitelist'),
-            const SizedBox(height: 4),
-            Text('Use "Load Files" or "Paste Key" to add trusted peers.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                textAlign: TextAlign.center),
-          ]),
-        ),
-      );
-    }
-
+  Widget _buildAboutCard() {
     return Column(
-      children: List.generate(_wlEntries.length, (i) {
-        final entry = _wlEntries[i];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 8),
-          child: ListTile(
-            leading: CircleAvatar(
-              child: Text(entry.name.substring(0, 1).toUpperCase()),
-            ),
-            title: Text(entry.name,
-                style: const TextStyle(fontWeight: FontWeight.w500)),
-            subtitle: SelectableText(
-              '${entry.hexKey.substring(0, 16)}…',
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            ),
-            onTap: () => _renameEntry(i),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.copy, size: 18),
-                  tooltip: 'Copy full key',
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: entry.hexKey));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('${entry.name} key copied')));
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  tooltip: 'Rename',
-                  onPressed: () => _renameEntry(i),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                  tooltip: 'Remove',
-                  onPressed: () => _showDeleteConfirm(i),
-                ),
-              ],
-            ),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _AboutRow(label: 'App Version', value: '1.0.0-beta'),
+        const SizedBox(height: 4),
+        _AboutRow(label: 'Protocol',    value: 'SGTP v1'),
+        const SizedBox(height: 12),
+        GestureDetector(
+          onTap: _launchGitHub,
+          child: const Row(
+            children: [
+              Icon(Icons.open_in_new, size: 18, color: Color(0xFF0A84FF)),
+              SizedBox(width: 4),
+              Text(
+                'GitHub Repository',
+                style: TextStyle(fontSize: 14, color: Color(0xFF0A84FF)),
+              ),
+            ],
           ),
-        );
-      }),
+        ),
+      ],
     );
   }
-
-  Widget _sectionTitle(String title) => Text(title,
-      style: Theme.of(context)
-          .textTheme
-          .titleMedium
-          ?.copyWith(fontWeight: FontWeight.bold));
-
-  Widget _infoRow(String label, String value) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: const TextStyle(color: Colors.grey)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
-      ],
-    ),
-  );
 
   void _showDeleteConfirm(int index) {
     final entry = _wlEntries[index];
@@ -956,5 +927,160 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared UI components
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _SettingsAppBar();
+
+  @override
+  Size get preferredSize => const Size.fromHeight(64);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bgMain,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: preferredSize.height,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Settings',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.5,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Section header label + full-bleed settings card (bgSurface, top/bottom borders).
+class _SettingsGroup extends StatelessWidget {
+  final String title;
+  final Widget child;
+  const _SettingsGroup({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text(
+            title.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 24),
+          decoration: const BoxDecoration(
+            color: AppColors.bgSurface,
+            border: Border(
+              top: BorderSide(color: AppColors.border),
+              bottom: BorderSide(color: AppColors.border),
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: child,
+        ),
+      ],
+    );
+  }
+}
+
+/// Small tinted button used in settings cards (Browse, Generate, Folder…).
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool loading;
+  final VoidCallback? onPressed;
+
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    this.loading = false,
+    this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null && !loading;
+    return GestureDetector(
+      onTap: enabled ? onPressed : null,
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.4,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.bgSurfaceActive,
+            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (loading)
+                const SizedBox(
+                  width: 18, height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.textPrimary),
+                )
+              else
+                Icon(icon, size: 18, color: AppColors.textPrimary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _AboutRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+        Text(value,  style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+      ],
+    );
   }
 }
