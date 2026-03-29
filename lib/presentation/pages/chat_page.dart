@@ -78,6 +78,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _chatBloc?.add(ChatSendMessageRead(messageId));
       }
     };
+    // Flush any "Mark as Read" taps that arrived while the app was killed
+    // (stored in SharedPreferences by the background isolate handler).
+    NotificationService.flushPendingMarkAsRead();
   }
 
   @override
@@ -98,6 +101,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         setState(() => _isPageVisible = true);
         // Clear notifications that were shown while in background
         NotificationService.cancelAll();
+        // Flush any "Mark as Read" taps queued while the app was killed
+        NotificationService.flushPendingMarkAsRead();
         // Auto-reconnect if the connection dropped or errored while minimised.
         // We check both disconnected AND error: a "connection refused" from the
         // server while backgrounded sets ChatStatus.error, not disconnected.

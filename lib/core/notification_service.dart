@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Handles local push notifications (Android / iOS / macOS).
 /// On Windows/Linux desktop — silently no-ops.
@@ -24,6 +25,13 @@ class NotificationService {
 
   static const _categoryId  = 'sgtp_message';
 
+  // ── SharedPreferences key for background-queued receipts ─────────────────
+  // When the app is killed and the user taps "Mark as Read", we can't call
+  // the Bloc directly (wrong isolate / not initialised).  We queue the IDs
+  // to SharedPreferences and flush them the next time the chat page resumes.
+
+  static const _prefsPendingKey = 'notif_pending_read';
+
   // ── Platform guard ───────────────────────────────────────────────────────
 
   static bool get _supported =>
@@ -39,11 +47,12 @@ class NotificationService {
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
     // Register the 'mark_read' action category for iOS & macOS.
-    // Without notificationCategories here, the action button never appears
-    // on Darwin platforms even if categoryIdentifier is set on each notification.
+    // Without notificationCategories here the action button never appears,
+    // even if categoryIdentifier is set per-notification.
     final markReadAction = DarwinNotificationAction.plain(
       _actionRead,
       'Mark as Read',
+      // foreground: brings app to front so the response callback fires reliably.
       options: {DarwinNotificationActionOption.foreground},
     );
     final darwinCategory = DarwinNotificationCategory(
@@ -63,20 +72,12 @@ class NotificationService {
         iOS:     darwinSettings,
         macOS:   darwinSettings,
       ),
-      onDidReceiveNotificationResponse: (details) {
-        if (details.actionId == _actionRead &&
-            details.payload != null &&
-            details.payload!.isNotEmpty) {
-          onMarkAsRead?.call(details.payload!);
-        }
-      },
-      // Also handle action taps when app was launched from a notification
-      // (background-terminated state on iOS/Android).
+      onDidReceiveNotificationResponse: _onResponse,
+      // Background/killed isolate handler — must be a top-level function.
       onDidReceiveBackgroundNotificationResponse: _backgroundHandler,
     );
     _initialized = true;
 
-    // Ask for Android 13+ POST_NOTIFICATIONS permission
     if (Platform.isAndroid) {
       await _plugin
           .resolvePlatformSpecificImplementation<
@@ -85,12 +86,18 @@ class NotificationService {
     }
   }
 
+  // ── Response handler (foreground, or background+showsUserInterface) ───────
+
+  static void _onResponse(NotificationResponse details) {
+    if (details.actionId == _actionRead &&
+        details.payload != null &&
+        details.payload!.isNotEmpty) {
+      onMarkAsRead?.call(details.payload!);
+    }
+  }
+
   // ── Show ─────────────────────────────────────────────────────────────────
 
-  /// Show a notification for a new incoming message.
-  /// [messageId] is used as the payload for "Mark as Read".
-  /// [avatarBytes] is optional — shown as the large icon on Android and as
-  /// an attachment thumbnail on iOS/macOS.
   static Future<void> showMessage({
     required String sender,
     required String body,
@@ -100,47 +107,44 @@ class NotificationService {
     if (!_supported || !_initialized) return;
 
     // ── Android ──────────────────────────────────────────────────────────
-    AndroidNotificationDetails androidDetails;
+    // showsUserInterface: true  ← KEY FIX:
+    //   When the app is backgrounded (process alive), Android delivers action
+    //   taps to onDidReceiveBackgroundNotificationResponse by default, where
+    //   we cannot call the Bloc.  Setting showsUserInterface = true makes
+    //   Android bring the app to the foreground on action tap, which routes
+    //   the response back through onDidReceiveNotificationResponse — where
+    //   onMarkAsRead is wired up correctly.
+    const markAsReadAction = AndroidNotificationAction(
+      _actionRead,
+      'Mark as Read',
+      cancelNotification: true,
+      showsUserInterface: true,  // ← brings app to foreground → callback fires
+    );
 
+    AndroidNotificationDetails androidDetails;
     if (avatarBytes != null && avatarBytes.isNotEmpty) {
-      final androidBitmap =
-          ByteArrayAndroidBitmap.fromBase64String(_toBase64(avatarBytes));
+      final bmp = ByteArrayAndroidBitmap.fromBase64String(_toBase64(avatarBytes));
       androidDetails = AndroidNotificationDetails(
-        _channelId,
-        _channelName,
+        _channelId, _channelName,
         channelDescription: 'Incoming SGTP messages',
         importance: Importance.high,
-        priority: Priority.high,
-        largeIcon: androidBitmap,
+        priority:   Priority.high,
+        largeIcon:  bmp,
         styleInformation: BigTextStyleInformation(body),
-        actions: [
-          const AndroidNotificationAction(
-            _actionRead,
-            'Mark as Read',
-            cancelNotification: true,
-          ),
-        ],
+        actions: const [markAsReadAction],
       );
     } else {
       androidDetails = AndroidNotificationDetails(
-        _channelId,
-        _channelName,
+        _channelId, _channelName,
         channelDescription: 'Incoming SGTP messages',
         importance: Importance.high,
-        priority: Priority.high,
+        priority:   Priority.high,
         styleInformation: BigTextStyleInformation(body),
-        actions: [
-          const AndroidNotificationAction(
-            _actionRead,
-            'Mark as Read',
-            cancelNotification: true,
-          ),
-        ],
+        actions: const [markAsReadAction],
       );
     }
 
     // ── iOS / macOS ───────────────────────────────────────────────────────
-    // Attach avatar as a thumbnail image if available.
     DarwinNotificationDetails darwinDetails;
     if (avatarBytes != null && avatarBytes.isNotEmpty) {
       try {
@@ -170,6 +174,23 @@ class NotificationService {
     );
   }
 
+  // ── Flush queued receipts (call on chat-page resume) ──────────────────────
+
+  /// Processes any "Mark as Read" taps that arrived while the app was killed.
+  /// Call this from didChangeAppLifecycleState(resumed) or initState.
+  static Future<void> flushPendingMarkAsRead() async {
+    if (!_supported) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pending = prefs.getStringList(_prefsPendingKey) ?? [];
+      if (pending.isEmpty) return;
+      await prefs.remove(_prefsPendingKey);
+      for (final id in pending) {
+        onMarkAsRead?.call(id);
+      }
+    } catch (_) {}
+  }
+
   // ── Cancel ───────────────────────────────────────────────────────────────
 
   static Future<void> cancelAll() async {
@@ -182,46 +203,51 @@ class NotificationService {
   static String _toBase64(Uint8List bytes) {
     const chars =
         'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    final output = StringBuffer();
+    final out = StringBuffer();
     var i = 0;
     while (i + 2 < bytes.length) {
       final b0 = bytes[i++], b1 = bytes[i++], b2 = bytes[i++];
-      output.write(chars[(b0 >> 2) & 0x3F]);
-      output.write(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)]);
-      output.write(chars[((b1 & 0xF) << 2) | ((b2 >> 6) & 0x3)]);
-      output.write(chars[b2 & 0x3F]);
+      out.write(chars[(b0 >> 2) & 0x3F]);
+      out.write(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)]);
+      out.write(chars[((b1 & 0xF) << 2) | ((b2 >> 6) & 0x3)]);
+      out.write(chars[b2 & 0x3F]);
     }
     if (i < bytes.length) {
       final b0 = bytes[i++];
       final b1 = i < bytes.length ? bytes[i] : 0;
-      output.write(chars[(b0 >> 2) & 0x3F]);
-      output.write(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)]);
-      if (i <= bytes.length - 1) output.write(chars[((b1 & 0xF) << 2)]);
-      else output.write('=');
-      output.write('=');
+      out.write(chars[(b0 >> 2) & 0x3F]);
+      out.write(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)]);
+      if (i <= bytes.length - 1) out.write(chars[(b1 & 0xF) << 2]);
+      else out.write('=');
+      out.write('=');
     }
-    return output.toString();
+    return out.toString();
   }
 
-  /// Write avatar bytes to a temp file and return its path.
-  /// iOS/macOS DarwinNotificationAttachment needs a file path.
   static Future<String> _writeTmpAvatar(
       String messageId, Uint8List bytes) async {
-    final dir = Directory.systemTemp;
     final file = File(
-        '${dir.path}/sgtp_avatar_${messageId.hashCode & 0x7FFFFFFF}.jpg');
+        '${Directory.systemTemp.path}/sgtp_av_${messageId.hashCode & 0x7FFFFFFF}.jpg');
     await file.writeAsBytes(bytes, flush: true);
     return file.path;
   }
 }
 
-/// Top-level function required by flutter_local_notifications for background
-/// notification action handling (iOS/Android killed state).
-/// Must be a top-level function (not a class method).
+// ── Background isolate handler ────────────────────────────────────────────────
+// Called when a notification action is tapped while the app is KILLED.
+// Runs in a separate isolate — cannot access Blocs or Flutter widgets.
+// We queue the messageId to SharedPreferences so the next app launch can flush it.
 @pragma('vm:entry-point')
-void _backgroundHandler(NotificationResponse details) {
-  // When the app is killed, we can't call the Bloc directly.
-  // The receipt will be sent on next resume via _flushPendingReadReceipts.
-  // Nothing to do here — the callback is required to be registered so the
-  // plugin doesn't drop the action event on iOS.
+void _backgroundHandler(NotificationResponse details) async {
+  if (details.actionId != 'mark_read') return;
+  final id = details.payload;
+  if (id == null || id.isEmpty) return;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('notif_pending_read') ?? [];
+    if (!list.contains(id)) {
+      list.add(id);
+      await prefs.setStringList('notif_pending_read', list);
+    }
+  } catch (_) {}
 }
