@@ -42,6 +42,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatSetReply>(_onSetReply);
     on<ChatClearReply>(_onClearReply);
     on<ChatToggleReaction>(_onToggleReaction);
+    on<ChatUpdateWhitelist>((event, emit) {
+      _client?.updateWhitelist(event.whitelist);
+    });
     on<ChatInternalSgtpEvent>(_onSgtpEvent);
   }
 
@@ -203,10 +206,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   Future<void> _onDisconnect(ChatDisconnect event, Emitter<ChatState> emit) async {
-    await _client?.disconnect();
+    final client = _client;
+    _client = null; // null first so SgtpDisconnected handler won't auto-reconnect
+    await client?.disconnect();
     await _eventSub?.cancel();
     _eventSub = null;
-    _client   = null;
     emit(state.copyWith(status: ChatStatus.disconnected));
   }
 
@@ -354,6 +358,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
       case SgtpDisconnected():
         emit(state.copyWith(status: ChatStatus.disconnected));
+        // Auto-reconnect on unexpected server disconnect (e.g. NAT timeout,
+        // server restart). We wait 3 s to avoid a tight reconnect loop.
+        // If the user explicitly disconnected via ChatDisconnect, _lastConnectEvent
+        // is still set but _client is null — we guard against that.
+        if (_lastConnectEvent != null && _client != null) {
+          Future.delayed(const Duration(seconds: 3), () {
+            if (!isClosed && state.status == ChatStatus.disconnected) {
+              AppLogger.i('[ChatBloc] Auto-reconnecting after unexpected disconnect');
+              add(const ChatReconnect());
+            }
+          });
+        }
 
       case SgtpChatMetadataReceived(:final chatName, :final avatarBytes, :final senderUUID):
         AppLogger.i('[ChatBloc] Got metadata from $senderUUID: "$chatName"');

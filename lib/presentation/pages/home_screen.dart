@@ -11,6 +11,7 @@ import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
 import '../../data/sgtp_client.dart';
 import '../blocs/rooms/rooms_bloc.dart';
+import '../blocs/rooms/rooms_event.dart';
 import '../widgets/app_nav_bar.dart';
 import 'contacts_screen.dart';
 import 'rooms_page.dart';
@@ -90,17 +91,15 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _whitelist = entries;
       _nicknames = {for (final e in entries) e.hexKey: e.name};
-    });
-    // Rebuild RoomsBloc with updated whitelist + nicknames
-    _roomsBloc.close();
-    _roomsBloc = RoomsBloc(
-      baseConfig: _config.copyWith(
+      // Keep stored config in sync so future rooms use the new whitelist.
+      _config = _config.copyWith(
         whitelist: entries.map((e) => e.hexKey).toSet(),
-      ),
-      nicknames:     _nicknames,
-      serverAddress: _serverAddress,
-      userAvatar:    _userAvatar,
-    );
+      );
+    });
+    // Hot-push to all already-running rooms — no reconnect, no data loss.
+    _roomsBloc.add(RoomsUpdateWhitelist(
+      entries.map((e) => e.hexKey).toSet(),
+    ));
   }
 
   void _showAddSheet() {

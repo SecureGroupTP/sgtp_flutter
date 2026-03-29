@@ -18,7 +18,7 @@ class _RoomsRefresh extends RoomsEvent {
 }
 
 class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
-  final SgtpConfig _baseConfig;
+  SgtpConfig _baseConfig;
   final Map<String, String> _nicknames;
   Uint8List? _userAvatar;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
@@ -35,6 +35,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     on<RoomsCreateRoom>(_onCreate);
     on<RoomsJoinRoom>(_onJoin);
     on<RoomsRemoveRoom>(_onRemove);
+    on<RoomsUpdateWhitelist>(_onUpdateWhitelist);
     on<_RoomsRefresh>(_onRefresh);
   }
 
@@ -61,20 +62,34 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
     try {
       final bytes = hexToBytes(hexClean);
-      _addRoom(bytes, emit);
+      // Use the server from the QR/invite if provided, otherwise fall back to
+      // the configured default server.
+      final configOverride = (event.serverAddress != null && event.serverAddress!.isNotEmpty)
+          ? _baseConfig.copyWith(serverAddr: event.serverAddress)
+          : null;
+      _addRoom(bytes, emit, configOverride: configOverride);
     } catch (_) {
       emit(state.copyWith(error: 'Invalid UUID format'));
     }
   }
 
-  void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit) {
+  void _onUpdateWhitelist(RoomsUpdateWhitelist event, Emitter<RoomsState> emit) {
+    // Update base config so future rooms use the new whitelist.
+    _baseConfig = _baseConfig.copyWith(whitelist: event.whitelist);
+    // Hot-push to all already-running rooms — no reconnect needed.
+    for (final room in state.rooms) {
+      room.chatBloc.add(ChatUpdateWhitelist(event.whitelist));
+    }
+  }
+
+  void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit, {SgtpConfig? configOverride}) {
     final hexUUID = uuidBytesToHex(roomUUID);
     if (state.rooms.any((r) => r.roomUUID == hexUUID)) {
       emit(state.copyWith(error: 'Already joined this room'));
       return;
     }
 
-    final config   = _baseConfig.copyWithRoomUUID(roomUUID);
+    final config   = (configOverride ?? _baseConfig).copyWithRoomUUID(roomUUID);
     final chatBloc = ChatBloc()
       ..add(ChatConnect(config, nicknames: _nicknames));
 

@@ -103,8 +103,9 @@ class SgtpConfig {
     pingIntervalSeconds: pingIntervalSeconds,
   );
 
-  SgtpConfig copyWith({Set<String>? whitelist}) => SgtpConfig(
-    serverAddr: serverAddr, roomUUID: roomUUID,
+  SgtpConfig copyWith({Set<String>? whitelist, String? serverAddr}) => SgtpConfig(
+    serverAddr: serverAddr ?? this.serverAddr,
+    roomUUID: roomUUID,
     identityKeyPair: identityKeyPair, myPublicKey: myPublicKey,
     whitelist: whitelist ?? this.whitelist,
     chatName: chatName, chatAvatarBytes: chatAvatarBytes,
@@ -245,6 +246,9 @@ class SgtpClient {
   bool   _chatRequestSent   = false;
   bool   _readyEmitted       = false;
 
+  // Mutable copy of the whitelist — updated via updateWhitelist() without reconnect.
+  late Set<String> _whitelist;
+
   final Map<String, int> _peerLastSeen = {};
   Timer? _stalePruneTimer;
   /// Peers already announced via SgtpPeerJoined this session.
@@ -270,6 +274,7 @@ class SgtpClient {
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
+    _whitelist = Set.unmodifiable(config.whitelist);
   }
 
   bool get isMaster    => _isMaster;
@@ -285,6 +290,13 @@ class SgtpClient {
 
   /// Set the user's own avatar to attach to outgoing messages.
   void setUserAvatar(Uint8List? avatar) => _myUserAvatar = avatar;
+
+  /// Hot-update the peer whitelist without reconnecting.
+  /// Newly added keys are accepted on the next ping/pong; removed keys are
+  /// dropped at the next prune cycle.
+  void updateWhitelist(Set<String> whitelist) {
+    _whitelist = Set.unmodifiable(whitelist);
+  }
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -668,7 +680,7 @@ class SgtpClient {
     if (f.payloadLength < SgtpConstants.pingPayloadMinLength) return;
     final ed  = f.ed25519PubKey;
     final edH = _hex(ed);
-    if (!_config.whitelist.contains(edH)) return;
+    if (!_whitelist.contains(edH)) return;
     if (!await verifyFrame(f.raw, ed)) return;
     if (f.payloadLength >= SgtpConstants.pingPayloadLength) {
       final hello = ascii.decode(f.payload.sublist(64, 76), allowInvalid: true);
@@ -696,7 +708,7 @@ class SgtpClient {
     if (f.payloadLength < SgtpConstants.pingPayloadMinLength) return;
     final ed  = f.ed25519PubKey;
     final edH = _hex(ed);
-    if (!_config.whitelist.contains(edH)) return;
+    if (!_whitelist.contains(edH)) return;
     if (!await verifyFrame(f.raw, ed)) return;
     if (f.payloadLength >= SgtpConstants.pingPayloadLength) {
       final hello = ascii.decode(f.payload.sublist(64, 76), allowInvalid: true);
@@ -1167,9 +1179,14 @@ class SgtpClient {
     await _sendFrame(buildPingFrame(_roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey));
   }
 
-  /// Proactively ping every connected peer to keep connections alive.
+  /// Proactively ping every connected peer to keep connections alive,
+  /// and always re-send an INTENT frame so the server-side TCP connection
+  /// stays alive even when there are no peers (prevents NAT/server timeout).
   Future<void> _sendKeepalive() async {
     if (_state != _ClientState.ready) return;
+    // Always announce ourselves to keep the server TCP connection alive.
+    await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
+    // Also ping known peers so their last-seen timestamps stay fresh.
     for (final peer in _peers.values.toList()) {
       await _sendPing(peer.uuidBytes);
     }

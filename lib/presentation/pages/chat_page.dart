@@ -1528,7 +1528,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                               ),
                             ),
                             title: Text(
-                              nick ?? '\${uuid.substring(0, 8)}…',
+                              nick ?? '${uuid.substring(0, 8)}…',
                               style: const TextStyle(
                                   color: Color(0xFFF5F5F5),
                                   fontSize: 15,
@@ -1536,7 +1536,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                             ),
                             subtitle: nick != null
                                 ? Text(
-                                    '\${uuid.substring(0, 8)}…',
+                                    '${uuid.substring(0, 8)}…',
                                     style: const TextStyle(
                                         fontFamily: 'monospace',
                                         fontSize: 11,

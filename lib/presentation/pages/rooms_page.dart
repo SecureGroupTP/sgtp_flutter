@@ -727,7 +727,10 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
 
   void _handleQrScanned(QrShareData data) {
     if (data.type == 'room' && data.roomUUID != null) {
-      widget.roomsBloc.add(RoomsJoinRoom(data.roomUUID!));
+      widget.roomsBloc.add(RoomsJoinRoom(
+        data.roomUUID!,
+        serverAddress: data.serverAddress,
+      ));
       Navigator.of(context).pop();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -737,12 +740,14 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
 
   void _joinFromInput() async {
     String? uuid;
+    String? serverAddress;
     if (_showBase64Input) {
       final raw = _base64Ctrl.text.trim();
       if (raw.isEmpty) return;
       final data = QrShareData.fromBase64(raw);
       if (data != null && data.type == 'room' && data.roomUUID != null) {
         uuid = data.roomUUID;
+        serverAddress = data.serverAddress; // use server from QR if present
       } else {
         final hex = raw.replaceAll('-', '');
         if (hex.length == 32) uuid = hex;
@@ -756,7 +761,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       uuid = _uuidCtrl.text.trim();
       if (uuid.isEmpty) return;
     }
-    widget.roomsBloc.add(RoomsJoinRoom(uuid));
+    widget.roomsBloc.add(RoomsJoinRoom(uuid, serverAddress: serverAddress));
     if (_saveAfterJoin) await widget.onSaveChat?.call(uuid);
     if (mounted) Navigator.of(context).pop();
   }
