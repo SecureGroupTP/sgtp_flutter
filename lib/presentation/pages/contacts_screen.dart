@@ -106,8 +106,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
             ),
             FilledButton(
               style: FilledButton.styleFrom(
-                backgroundColor: AppColors.accentBlue,
-                foregroundColor: Colors.white,
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.black,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
               ),
@@ -308,8 +308,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
         child: FloatingActionButton(
           onPressed: _addContact,
           tooltip: 'Add contact',
-          backgroundColor: AppColors.accentBlue,
-          foregroundColor: Colors.white,
+          backgroundColor: AppColors.accent,
+          foregroundColor: Colors.black,
           elevation: 0,
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(18)),

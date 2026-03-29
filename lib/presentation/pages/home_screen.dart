@@ -9,6 +9,7 @@ import '../../core/crypto/ed25519_utils.dart';
 import '../../data/sgtp_client.dart';
 import '../blocs/rooms/rooms_bloc.dart';
 import '../widgets/app_nav_bar.dart';
+import 'contacts_screen.dart';
 import 'rooms_page.dart';
 import 'settings_screen.dart';
 
@@ -82,6 +83,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _onWhitelistChanged(List<WhitelistEntry> entries) {
+    setState(() {
+      _whitelist = entries;
+      _nicknames = {for (final e in entries) e.hexKey: e.name};
+    });
+    // Rebuild RoomsBloc with updated whitelist + nicknames
+    _roomsBloc.close();
+    _roomsBloc = RoomsBloc(
+      baseConfig: _config.copyWith(
+        whitelist: entries.map((e) => e.hexKey).toSet(),
+      ),
+      nicknames:     _nicknames,
+      serverAddress: _serverAddress,
+      userAvatar:    _userAvatar,
+    );
+  }
+
   void _showAddSheet() {
     _roomsPageKey.currentState?.showAddSheet(context);
   }
@@ -100,7 +118,14 @@ class _HomeScreenState extends State<HomeScreen> {
         body: IndexedStack(
           index: _currentIndex,
           children: [
+            // 0 — Rooms
             RoomsPage(key: _roomsPageKey),
+            // 1 — Contacts
+            ContactsScreen(
+              initialEntries:   _whitelist,
+              onEntriesChanged: _onWhitelistChanged,
+            ),
+            // 2 — Settings
             SettingsScreen(
               initialConfig:       _config,
               initialNicknames:    _nicknames,
@@ -135,7 +160,7 @@ class _HomeFab extends StatelessWidget {
     return FloatingActionButton(
       onPressed: onPressed,
       tooltip: 'Add room',
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.accent,
       foregroundColor: Colors.black,
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -165,8 +190,8 @@ class _AppStartScreenState extends State<AppStartScreen> {
 
   Future<void> _checkAndNavigate() async {
     final settings = SettingsRepository();
-    final savedKey  = await settings.loadPrivateKey();
-    final lastAddr  = await settings.getLastAddress();
+    final savedKey = await settings.loadPrivateKey();
+    final lastAddr = await settings.getLastAddress();
 
     if (savedKey == null || lastAddr == null || lastAddr.isEmpty) {
       if (mounted) _goToSetup();
@@ -179,7 +204,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
 
       final entries   = await settings.loadWhitelistEntries();
       final whitelist = entries.map((e) => e.hexKey).toSet();
-      final nicknames = { for (final e in entries) e.hexKey: e.name };
+      final nicknames = {for (final e in entries) e.hexKey: e.name};
 
       final userAvatar = await settings.loadUserAvatar();
 

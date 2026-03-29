@@ -9,7 +9,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29"/>
+        android:maxSdkVersion="29"
+        tools:replace="android:maxSdkVersion"/>
+
+    <!-- ── Камера (видеозаписи-кружки) ─────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <!-- Android 13+ (медиафайлы по типу) -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>

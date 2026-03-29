@@ -5,12 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
 
 /// Bottom navigation bar with a frosted-glass dark background.
-<<<<<<< HEAD
-/// Place on a [Scaffold] with [extendBody: true] so the blur filter has
-/// content to render through.
-=======
 /// Three tabs: Rooms | Contacts | Settings
->>>>>>> a3e4de3 (feat: updated chat interface & implemented contacts)
 class AppNavBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onTap;
@@ -29,25 +24,32 @@ class AppNavBar extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: Container(
           decoration: const BoxDecoration(
-            color: Color(0xD90A0A0C), // ~85 % opacity
+            color: Color(0xD90A0A0C),
             border: Border(top: BorderSide(color: AppColors.border)),
           ),
           padding: EdgeInsets.only(bottom: bottomPad),
           child: Row(
             children: [
               _NavItem(
-                icon: Icons.forum_outlined,
+                icon:       Icons.forum_outlined,
                 activeIcon: Icons.forum,
-                label: 'Rooms',
-                isActive: selectedIndex == 0,
-                onTap: () => onTap(0),
+                label:      'Rooms',
+                isActive:   selectedIndex == 0,
+                onTap:      () => onTap(0),
               ),
               _NavItem(
-                icon: Icons.settings_outlined,
+                icon:       Icons.contacts_outlined,
+                activeIcon: Icons.contacts,
+                label:      'Contacts',
+                isActive:   selectedIndex == 1,
+                onTap:      () => onTap(1),
+              ),
+              _NavItem(
+                icon:       Icons.settings_outlined,
                 activeIcon: Icons.settings,
-                label: 'Settings',
-                isActive: selectedIndex == 1,
-                onTap: () => onTap(1),
+                label:      'Settings',
+                isActive:   selectedIndex == 2,
+                onTap:      () => onTap(2),
               ),
             ],
           ),
@@ -84,8 +86,8 @@ class _NavItem extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(isActive ? activeIcon : icon, size: 26, color: color),
-              const SizedBox(height: 4),
+              Icon(isActive ? activeIcon : icon, size: 24, color: color),
+              const SizedBox(height: 3),
               Text(
                 label,
                 style: TextStyle(

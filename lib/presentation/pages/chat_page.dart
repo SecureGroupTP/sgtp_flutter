@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:record/record.dart';
 
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
+import '../widgets/video_note_recorder.dart';
 import '../blocs/chat/chat_state.dart';
 import '../widgets/message_bubble.dart';
 import '../../domain/entities/message.dart';
@@ -56,6 +58,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   bool _isHoldRecording = false;
 
   ChatBloc? _chatBloc;
+  int _lastMessageCount = 0;
 
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
 
@@ -208,60 +211,226 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickAndSendMedia(BuildContext context) async {
-    // Show a bottom sheet to choose photo or video (Telegram-style single button)
     final choice = await showModalBottomSheet<String>(
       context: context,
+      backgroundColor: const Color(0xFF141417),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.image_outlined),
-              title: const Text('Photo / GIF'),
-              onTap: () => Navigator.pop(context, 'image'),
+            const SizedBox(height: 8),
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFF2C2C30),
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-            ListTile(
-              leading: const Icon(Icons.videocam_outlined),
-              title: const Text('Video'),
-              onTap: () => Navigator.pop(context, 'video'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.radio_button_checked_outlined),
-              title: const Text('Video note (кружок)'),
-              subtitle: const Text('Circular video message'),
-              onTap: () => Navigator.pop(context, 'videonote'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.content_paste_outlined),
-              title: const Text('Paste from clipboard'),
-              onTap: () => Navigator.pop(context, 'paste'),
-            ),
+            const SizedBox(height: 8),
+            _SheetTile(icon: Icons.image_outlined,              label: 'Photo / GIF',        subtitle: 'Select one or more images', value: 'image',     ctx: context),
+            _SheetTile(icon: Icons.videocam_outlined,           label: 'Video',               subtitle: null,                        value: 'video',     ctx: context),
+            _SheetTile(icon: Icons.radio_button_checked_outlined, label: 'Video note',        subtitle: 'Circular video message',    value: 'videonote', ctx: context),
+            _SheetTile(icon: Icons.content_paste_outlined,      label: 'Paste from clipboard', subtitle: null,                      value: 'paste',     ctx: context),
+            const SizedBox(height: 8),
           ],
         ),
       ),
     );
     if (!context.mounted) return;
-    if (choice == 'image')     await _withProgress(() => _pickAndSendImage(context));
+    if (choice == 'image')     await _withProgress(() => _pickAndSendImages(context));
     if (choice == 'video')     await _withProgress(() => _pickAndSendVideo(context));
     if (choice == 'videonote') await _withProgress(() => _pickAndSendVideoNote(context));
     if (choice == 'paste')     await _withProgress(() => _pasteImageFromClipboard(context));
   }
 
-  Future<void> _pickAndSendImage(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+  /// Pick one OR multiple images, show caption sheet, then send text+images.
+  Future<void> _pickAndSendImages(BuildContext context) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+      allowMultiple: true,
+    );
     if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.bytes == null) return;
-    final ext  = file.name.split('.').last.toLowerCase();
-    final mime = switch (ext) {
-      'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
-      _ => 'image/jpeg',
-    };
     if (!context.mounted) return;
-    context.read<ChatBloc>().add(ChatSendImage(bytes: file.bytes!, name: file.name, mime: mime));
+
+    // Build file list with mime types
+    final files = result.files
+        .where((f) => f.bytes != null)
+        .map((f) {
+          final ext = f.name.split('.').last.toLowerCase();
+          final mime = switch (ext) {
+            'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
+            _ => 'image/jpeg',
+          };
+          return (bytes: f.bytes!, name: f.name, mime: mime);
+        })
+        .toList();
+    if (files.isEmpty) return;
+
+    // If there's already text in the input field OR multiple files, show caption sheet
+    final existingText = _messageCtrl.text.trim();
+    final String caption;
+
+    if (files.length > 1 || existingText.isNotEmpty) {
+      // Show caption bottom sheet
+      final captionResult = await _showCaptionSheet(
+        context,
+        imageCount: files.length,
+        initialCaption: existingText,
+      );
+      if (!context.mounted) return;
+      if (captionResult == null) return; // user cancelled
+      caption = captionResult;
+    } else {
+      caption = existingText;
+    }
+
+    final bloc = context.read<ChatBloc>();
+
+    // Send caption as text first if non-empty
+    if (caption.isNotEmpty) {
+      final reply = bloc.state.replyToMessage;
+      bloc.add(ChatSendMessage(
+        caption,
+        replyToId:      reply?.id,
+        replyToContent: reply?.content != null && reply!.content.length > 80
+            ? '${reply.content.substring(0, 80)}…'
+            : reply?.content,
+        replyToSender:  reply != null
+            ? (bloc.state.peerNicknames[reply.senderUUID] ?? reply.senderUUID.substring(0, 8))
+            : null,
+      ));
+      _messageCtrl.clear();
+    }
+
+    // Send all images sequentially
+    for (final f in files) {
+      bloc.add(ChatSendImage(bytes: f.bytes, name: f.name, mime: f.mime));
+    }
     _scrollToBottom();
+  }
+
+  /// Shows a bottom sheet with a text field for caption + send button.
+  /// Returns the caption string, or null if cancelled.
+  Future<String?> _showCaptionSheet(
+    BuildContext context, {
+    required int imageCount,
+    String initialCaption = '',
+  }) async {
+    final ctrl = TextEditingController(text: initialCaption);
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF141417),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2C2C30),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(children: [
+              const Icon(Icons.photo_library_outlined,
+                  color: Color(0xFF8E8E93), size: 18),
+              const SizedBox(width: 8),
+              Text(
+                imageCount == 1 ? '1 photo selected' : '$imageCount photos selected',
+                style: const TextStyle(
+                    color: Color(0xFF8E8E93), fontSize: 13),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A0A0C),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF2C2C30)),
+              ),
+              child: TextField(
+                controller: ctrl,
+                autofocus: true,
+                maxLines: 4,
+                minLines: 1,
+                style: const TextStyle(color: Color(0xFFF5F5F5), fontSize: 15),
+                decoration: const InputDecoration(
+                  hintText: 'Add a caption…',
+                  hintStyle: TextStyle(color: Color(0xFF8E8E93)),
+                  border: InputBorder.none,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(ctx, null),
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F1F24),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF2C2C30)),
+                    ),
+                    child: const Center(
+                      child: Text('Cancel',
+                          style: TextStyle(
+                              color: Color(0xFF8E8E93),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500)),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(ctx, ctrl.text.trim()),
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A84FF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.send, color: Colors.white, size: 16),
+                          const SizedBox(width: 6),
+                          Text(
+                            imageCount == 1 ? 'Send' : 'Send $imageCount',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _pickAndSendVideoNote(BuildContext context) async {
@@ -316,6 +485,26 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     if (_isRecording) return;
     setState(() => _isHoldRecording = true);
     await _startRecording(context);
+  }
+
+  /// In video-note mode: open camera recorder. In voice mode: start hold-recording.
+  Future<void> _startHoldRecordingOrCamera(BuildContext context) async {
+    if (_isVideoNoteMode) {
+      // Open full-screen camera recorder; get bytes back on close
+      final bytes = await Navigator.of(context).push<Uint8List?>(
+        MaterialPageRoute(
+          builder: (_) => const VideoNoteRecorderPage(),
+          fullscreenDialog: true,
+        ),
+      );
+      if (bytes != null && context.mounted) {
+        context.read<ChatBloc>().add(
+            ChatSendVideoNote(bytes: bytes, mime: 'video/mp4'));
+        _scrollToBottom();
+      }
+    } else {
+      await _startHoldRecording(context);
+    }
   }
 
   /// Stop hold-recording and send (mobile long-press up).
@@ -465,9 +654,27 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         final bloc = context.read<ChatBloc>();
 
         if (state.messages.isNotEmpty) {
-          // Jump instantly on first load, animate for new messages
-          final isFirst = !_infoShown;
-          _scrollToBottom(jump: isFirst);
+          final prevCount = _lastMessageCount;
+          final newCount  = state.messages.length;
+          if (prevCount == 0) {
+            // First load — jump straight to bottom
+            _scrollToBottom(jump: true);
+          } else if (newCount > prevCount) {
+            final newest = state.messages.last;
+            if (newest.isFromMe) {
+              // Own message — always scroll to bottom
+              _scrollToBottom();
+            } else {
+              // Incoming message — only scroll if already near bottom
+              if (_scrollCtrl.hasClients) {
+                final pos = _scrollCtrl.position;
+                final nearBottom =
+                    pos.maxScrollExtent - pos.pixels < 120;
+                if (nearBottom) _scrollToBottom();
+              }
+            }
+          }
+          _lastMessageCount = newCount;
         }
         if (state.status == ChatStatus.ready && !_infoShown) {
           _infoShown = true;
@@ -1121,62 +1328,20 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                       ),
                     )
                   else
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (!_isRecording)
-                          GestureDetector(
-                            onTap: _toggleMode,
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 4),
-                              child: Icon(
-                                _isVideoNoteMode
-                                    ? Icons.mic_rounded
-                                    : Icons.radio_button_checked_outlined,
-                                size: 20,
-                                color: const Color(0xFF8E8E93),
-                              ),
-                            ),
-                          ),
-                        GestureDetector(
-                          onTap: canSend && _isRecording
-                              ? () => _stopAndSend(context)
-                              : null,
-                          onLongPressStart: canSend && !_isRecording
-                              ? (_) => _startHoldRecording(context)
-                              : null,
-                          onLongPressEnd: canSend && _isRecording
-                              ? (_) => _stopHoldRecording(context)
-                              : null,
-                          child: Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: _isRecording
-                                  ? const Color(0xFFFF3B30)
-                                  : _isVideoNoteMode
-                                      ? Colors.blueAccent
-                                      : const Color(0xFF1F1F24),
-                              shape: BoxShape.circle,
-                              border: _isRecording || _isVideoNoteMode
-                                  ? null
-                                  : Border.all(
-                                      color: const Color(0xFF2C2C30)),
-                            ),
-                            child: Icon(
-                              _isRecording
-                                  ? Icons.stop_rounded
-                                  : _isVideoNoteMode
-                                      ? Icons.radio_button_checked
-                                      : Icons.mic_rounded,
-                              color: _isRecording || _isVideoNoteMode
-                                  ? Colors.white
-                                  : const Color(0xFFF5F5F5),
-                              size: 22,
-                            ),
-                          ),
-                        ),
-                      ],
+                    _MobileModeButton(
+                      isVideoNoteMode: _isVideoNoteMode,
+                      isRecording:     _isRecording,
+                      canSend:         canSend,
+                      onTap: () { if (!_isRecording) _toggleMode(); },
+                      onHoldStart: canSend && !_isRecording
+                          ? () => _startHoldRecordingOrCamera(context)
+                          : null,
+                      onHoldEnd: canSend && _isRecording
+                          ? () => _stopHoldRecording(context)
+                          : null,
+                      onTapStop: canSend && _isRecording
+                          ? () => _stopAndSend(context)
+                          : null,
                     ),
                 ],
               ),
@@ -1318,3 +1483,156 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 }
 
 enum _ChatMenuAction { disconnect }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Media picker sheet tile
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SheetTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String? subtitle;
+  final String value;
+  final BuildContext ctx;
+
+  const _SheetTile({
+    required this.icon,
+    required this.label,
+    this.subtitle,
+    required this.value,
+    required this.ctx,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => Navigator.pop(ctx, value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(children: [
+          Icon(icon, color: const Color(0xFF8E8E93), size: 22),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400)),
+              if (subtitle != null)
+                Text(subtitle!,
+                    style: const TextStyle(
+                        color: Color(0xFF8E8E93), fontSize: 12)),
+            ],
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mobile mode button (mic ↔ video-note) — single button, tap = swap, hold = record
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MobileModeButton extends StatelessWidget {
+  final bool isVideoNoteMode;
+  final bool isRecording;
+  final bool canSend;
+  final VoidCallback onTap;
+  final VoidCallback? onHoldStart;
+  final VoidCallback? onHoldEnd;
+  final VoidCallback? onTapStop;
+
+  const _MobileModeButton({
+    required this.isVideoNoteMode,
+    required this.isRecording,
+    required this.canSend,
+    required this.onTap,
+    this.onHoldStart,
+    this.onHoldEnd,
+    this.onTapStop,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Colours
+    final Color bg = isRecording
+        ? const Color(0xFFFF3B30)
+        : isVideoNoteMode
+            ? const Color(0xFF0A84FF)
+            : const Color(0xFF1F1F24);
+
+    final Color fg = (isRecording || isVideoNoteMode)
+        ? Colors.white
+        : const Color(0xFFF5F5F5);
+
+    final IconData icon = isRecording
+        ? Icons.stop_rounded
+        : isVideoNoteMode
+            ? Icons.radio_button_checked
+            : Icons.mic_rounded;
+
+    // Mode indicator chip shown above button when idle
+    final String modeLabel = isVideoNoteMode ? 'Circle' : 'Voice';
+    final IconData modeIcon = isVideoNoteMode
+        ? Icons.radio_button_checked_outlined
+        : Icons.mic_outlined;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Tiny mode label (visible when not recording)
+        AnimatedOpacity(
+          opacity: isRecording ? 0.0 : 1.0,
+          duration: const Duration(milliseconds: 150),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(modeIcon, size: 10, color: const Color(0xFF8E8E93)),
+              const SizedBox(width: 3),
+              Text(
+                modeLabel,
+                style: const TextStyle(
+                    fontSize: 9,
+                    color: Color(0xFF8E8E93),
+                    fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 2),
+
+        GestureDetector(
+          onTap: isRecording ? onTapStop : onTap,
+          onLongPressStart: onHoldStart != null
+              ? (_) => onHoldStart!()
+              : null,
+          onLongPressEnd: onHoldEnd != null
+              ? (_) => onHoldEnd!()
+              : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: isRecording ? 44 : 40,
+            height: isRecording ? 44 : 40,
+            decoration: BoxDecoration(
+              color: bg,
+              shape: BoxShape.circle,
+              border: (!isRecording && !isVideoNoteMode)
+                  ? Border.all(color: const Color(0xFF2C2C30))
+                  : null,
+              boxShadow: isRecording
+                  ? [BoxShadow(
+                      color: const Color(0xFFFF3B30).withAlpha(80),
+                      blurRadius: 12, spreadRadius: 1)]
+                  : null,
+            ),
+            child: Icon(icon, color: fg, size: 22),
+          ),
+        ),
+      ],
+    );
+  }
+}

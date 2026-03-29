@@ -978,7 +978,7 @@ class _DarkTextField extends StatelessWidget {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.accent),
+          borderSide: const BorderSide(color: AppColors.accentBlue),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),

@@ -100,6 +100,43 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    // Video notes: circular — no bubble bg for own messages (only blue ring)
+    if (message.type == MessageType.videoNote) {
+      final noteWidget = _withAvatar(
+        context: context,
+        isMe: isMe,
+        child: Container(
+          margin: EdgeInsets.only(
+            left: isMe ? 48 : 8,
+            right: isMe ? 8 : 48,
+            top: 4, bottom: 4,
+          ),
+          child: _buildVideoNoteContent(
+              context, theme, Colors.white, senderLabel, timeStr, isMe),
+        ),
+      );
+      final reactionsRow = _buildReactionsRow(theme, cs);
+      return Column(
+        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          noteWidget,
+          if (reactionsRow != null)
+            Padding(
+              padding: EdgeInsets.only(
+                left: isMe ? 0 : 44,
+                right: isMe ? 44 : 0,
+              ),
+              child: Transform.translate(
+                offset: const Offset(0, -8),
+                child: reactionsRow,
+              ),
+            ),
+          if (isMe) _buildReadReceipts(theme, cs),
+        ],
+      );
+    }
+
     // Own bubbles: #0A84FF fill, white text
     // Other bubbles: #1F1F24 fill, #8E8E93 text, #2C2C30 border
     const ownBubbleBg    = Color(0xFF0A84FF);
