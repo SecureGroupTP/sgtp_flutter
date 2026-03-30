@@ -22,7 +22,13 @@ jobs:
             arch: universal
           - os: ubuntu-latest
             platform: android
-            arch: universal
+            arch: arm64
+          - os: ubuntu-latest
+            platform: android
+            arch: arm32
+          - os: ubuntu-latest
+            platform: android
+            arch: x86_64
 
     runs-on: ${{ matrix.os }}
 
@@ -71,9 +77,17 @@ jobs:
         if: matrix.platform == 'macos'
         run: flutter build macos --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
 
-      - name: Build (Android)
-        if: matrix.platform == 'android'
-        run: flutter build apk --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+      - name: Build (Android arm64)
+        if: matrix.platform == 'android' && matrix.arch == 'arm64'
+        run: flutter build apk --release --target-platform android-arm64 --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+
+      - name: Build (Android arm32)
+        if: matrix.platform == 'android' && matrix.arch == 'arm32'
+        run: flutter build apk --release --target-platform android-arm --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
+
+      - name: Build (Android x86_64)
+        if: matrix.platform == 'android' && matrix.arch == 'x86_64'
+        run: flutter build apk --release --target-platform android-x64 --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
 
       - name: Package (Windows)
         if: matrix.platform == 'windows'
@@ -99,7 +113,7 @@ jobs:
       - name: Package (Android)
         if: matrix.platform == 'android'
         shell: bash
-        run: cp build/app/outputs/flutter-apk/app-release.apk "sgtp-client-${GITHUB_REF_NAME}-android.apk"
+        run: cp build/app/outputs/flutter-apk/app-release.apk "sgtp-client-${GITHUB_REF_NAME}-android-${{ matrix.arch }}.apk"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
