@@ -5,15 +5,18 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/crypto/ed25519_utils.dart';
 import '../../core/interaction_prefs.dart';
 import '../../core/openssh_parser.dart';
+import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
 import '../../core/app_logger.dart';
@@ -46,8 +49,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _settings   = SettingsRepository();
-  final _serverCtrl = TextEditingController();
+  final _settings      = SettingsRepository();
+  final _serverCtrl    = TextEditingController();
+  final _nicknameCtrl  = TextEditingController();
 
   String?    _privateKeyPath;
   Uint8List? _privateKeyBytes;
@@ -57,6 +61,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, String>  _nicknames = {};
 
   Uint8List? _userAvatar;
+  String     _nickname  = '';
 
   bool    _isLoading    = false;
   bool    _isGenerating = false;
@@ -116,9 +121,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final avatar = await _settings.loadUserAvatar();
     if (avatar != null) setState(() => _userAvatar = avatar);
 
-    // Load persisted interaction prefs (Fix 7)
+    // Load persisted prefs (nickname + interaction)
     final prefs = await SharedPreferences.getInstance();
+    final savedNickname = prefs.getString('sgtp_user_nickname') ?? '';
     setState(() {
+      _nickname = savedNickname;
+      _nicknameCtrl.text = savedNickname;
       _pingIntervalSeconds = prefs.getInt('sgtp_ping_interval') ?? 30;
       _doubleTapDesktop    = prefs.getString('iprefs_doubletap_desktop') ?? 'react';
       _swipeToReply        = prefs.getBool('iprefs_swipe_to_reply')       ?? true;
@@ -133,6 +141,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _serverCtrl.dispose();
+    _nicknameCtrl.dispose();
     super.dispose();
   }
 
@@ -512,58 +521,277 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Profile section ───────────────────────────────────────────────────────
 
+  Future<void> _saveNickname(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('sgtp_user_nickname', value.trim());
+    setState(() => _nickname = value.trim());
+  }
+
+  void _showMyProfileShare() {
+    if (_myPublicKey == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No public key loaded yet')),
+      );
+      return;
+    }
+    final hexKey = _myPublicKey!
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    final shareData = QrShareData(
+      type: 'profile',
+      publicKeyHex: hexKey,
+      nickname: _nickname.isEmpty ? null : _nickname,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+    );
+    final base64Str = shareData.toBase64();
+    final isMobile = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _nickname.isEmpty ? 'My Profile' : _nickname,
+                          style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${hexKey.substring(0, 8)}…${hexKey.substring(hexKey.length - 8)}',
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                              color: AppColors.textSecondary),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close,
+                        color: AppColors.textSecondary),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Share this so others can add you as a contact without typing your key manually.',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                    height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              // QR code — shown on all platforms
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: QrImageView(
+                    data: base64Str,
+                    version: QrVersions.auto,
+                    size: 240,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.bgSurfaceActive,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: SelectableText(
+                  base64Str,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: base64Str));
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Profile copied as base64')),
+                  );
+                },
+                child: Container(
+                  width: double.infinity,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: AppColors.bgSurfaceActive,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.copy_outlined,
+                          size: 18, color: AppColors.textPrimary),
+                      SizedBox(width: 8),
+                      Text('Copy Base64',
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildProfileSection() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 32, 20, 24),
-      child: Column(
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          // Avatar tap area
           GestureDetector(
             onTap: _pickUserAvatar,
+            onLongPress: _userAvatar != null ? _removeUserAvatar : null,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
                 Container(
-                  width: 88, height: 88,
+                  width: 72, height: 72,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.bgSurface,
                     border: Border.all(color: AppColors.border),
                     image: _userAvatar != null
-                        ? DecorationImage(image: MemoryImage(_userAvatar!), fit: BoxFit.cover)
+                        ? DecorationImage(
+                            image: MemoryImage(_userAvatar!),
+                            fit: BoxFit.cover)
                         : null,
                   ),
                   child: _userAvatar == null
-                      ? const Icon(Icons.person, size: 40, color: AppColors.textSecondary)
+                      ? const Icon(Icons.person,
+                          size: 32, color: AppColors.textSecondary)
                       : null,
                 ),
                 Positioned(
                   bottom: -2, right: -2,
                   child: Container(
-                    width: 32, height: 32,
+                    width: 26, height: 26,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: AppColors.bgSurfaceActive,
                       border: Border.all(color: AppColors.bgMain, width: 2),
                     ),
-                    child: const Icon(Icons.photo_camera, size: 18, color: AppColors.textPrimary),
+                    child: const Icon(Icons.photo_camera,
+                        size: 14, color: AppColors.textPrimary),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          if (_userAvatar != null)
-            GestureDetector(
-              onTap: _removeUserAvatar,
-              child: const Text(
-                'Remove avatar',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.statusRed,
+          const SizedBox(width: 16),
+
+          // Nickname field + share button
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Nickname text field
+                Container(
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: AppColors.bgSurface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: TextField(
+                    controller: _nicknameCtrl,
+                    onChanged: _saveNickname,
+                    onSubmitted: _saveNickname,
+                    style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500),
+                    decoration: const InputDecoration(
+                      hintText: 'Your nickname…',
+                      hintStyle: TextStyle(
+                          color: AppColors.textSecondary, fontSize: 15),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      filled: false,
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                      prefixIcon: Icon(Icons.badge_outlined,
+                          size: 16, color: AppColors.textSecondary),
+                      prefixIconConstraints:
+                          BoxConstraints(minWidth: 28, minHeight: 0),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 8),
+                // Share profile button
+                GestureDetector(
+                  onTap: _showMyProfileShare,
+                  child: Container(
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.bgSurface,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.ios_share_outlined,
+                            size: 15, color: AppColors.textSecondary),
+                        SizedBox(width: 6),
+                        Text('Share My Profile',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textSecondary)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
         ],
       ),
     );

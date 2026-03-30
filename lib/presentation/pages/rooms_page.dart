@@ -804,15 +804,15 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
               _SheetButton(
                 label: 'Scan QR code',
                 icon: Icons.qr_code_scanner,
-                onPressed: () {
-                  Navigator.push<void>(
+                onPressed: () async {
+                  final data = await Navigator.push<QrShareData>(
                     context,
                     MaterialPageRoute(
                       fullscreenDialog: true,
-                      builder: (_) =>
-                          QrScannerDialog(onQrScanned: _handleQrScanned),
+                      builder: (_) => const QrScannerDialog(),
                     ),
                   );
+                  if (data != null) _handleQrScanned(data);
                 },
               ),
               const SizedBox(height: 12),
