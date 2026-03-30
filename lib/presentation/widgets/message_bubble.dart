@@ -1134,7 +1134,6 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
   double? _aspectRatio;
   bool _initialized = false;
   String? _tmpPath;
-  bool _preferPortraitZoom = true;
 
   @override
   void dispose() {
@@ -1228,10 +1227,8 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
   Widget build(BuildContext context) {
     final sourceAspectRatio = _aspectRatio ?? 16 / 9;
     final isPortraitVideo = sourceAspectRatio < 0.8;
-    final displayAspectRatio = isPortraitVideo && _preferPortraitZoom
-        ? 4 / 5
-        : sourceAspectRatio;
-    final maxWidth = isPortraitVideo && _preferPortraitZoom ? 360.0 : 300.0;
+    final displayAspectRatio = isPortraitVideo ? 4 / 5 : sourceAspectRatio;
+    final maxWidth = isPortraitVideo ? 360.0 : 300.0;
 
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
@@ -1343,39 +1340,6 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                       ),
                     ),
                   ),
-                if (isPortraitVideo)
-                  Positioned(
-                    top: 10,
-                    right: 10,
-                    child: GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _preferPortraitZoom = !_preferPortraitZoom;
-                        });
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withAlpha(150),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: Colors.white.withAlpha(40),
-                          ),
-                        ),
-                        child: Text(
-                          _preferPortraitZoom ? 'Fit' : 'Zoom',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -1412,6 +1376,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
   double _aspectRatio = 16 / 9;
   bool _controlsVisible = true;
   Timer? _controlsTimer;
+  bool _preferPortraitZoom = true;
 
   bool get _isDesktop =>
       !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
@@ -1478,6 +1443,9 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
     final player = _player;
     final controller = _controller;
     final isMobile = !_isDesktop;
+    final isPortraitVideo = _aspectRatio < 0.8;
+    final viewportAspectRatio =
+        isPortraitVideo && _preferPortraitZoom ? 4 / 5 : _aspectRatio;
 
     return Scaffold(
       backgroundColor: AppColors.bgMain,
@@ -1511,10 +1479,19 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                   ColoredBox(
                                     color: Colors.black,
                                     child: AspectRatio(
-                                      aspectRatio: _aspectRatio,
-                                      child: Video(
-                                        controller: controller,
-                                        controls: NoVideoControls,
+                                      aspectRatio: viewportAspectRatio,
+                                      child: ClipRect(
+                                        child: FittedBox(
+                                          fit: BoxFit.cover,
+                                          child: SizedBox(
+                                            width: _aspectRatio * 1000,
+                                            height: 1000,
+                                            child: Video(
+                                              controller: controller,
+                                              controls: NoVideoControls,
+                                            ),
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -1560,6 +1537,35 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                         icon: const Icon(Icons.arrow_back_rounded),
                                       ),
                                       const Spacer(),
+                                      if (isPortraitVideo) ...[
+                                        GestureDetector(
+                                          onTap: () {
+                                            _onUserActivity();
+                                            setState(() {
+                                              _preferPortraitZoom = !_preferPortraitZoom;
+                                            });
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: AppColors.bgSurface,
+                                              borderRadius: BorderRadius.circular(999),
+                                              border: Border.all(color: AppColors.border),
+                                            ),
+                                            child: Text(
+                                              _preferPortraitZoom ? 'Zoom' : 'Fit',
+                                              style: const TextStyle(
+                                                color: AppColors.textPrimary,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                      ],
                                       StreamBuilder<double>(
                                         stream: player.stream.rate,
                                         initialData: player.state.rate,
