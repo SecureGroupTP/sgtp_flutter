@@ -347,7 +347,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final updatedNick = Map<String, String>.from(state.peerNicknames);
         if (nick != null) updatedNick[peerUUID] = nick;
         final displayName = nick ?? peerUUID.substring(0, 8);
-        final systemMsg = _createSystemMessage('👤 $displayName joined the chat');
+        final systemMsg = _createSystemMessage('$displayName joined the chat');
         final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
         final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
         if (nick != null) updatedHistory[peerUUID] = nick;
@@ -370,7 +370,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       case SgtpPeerLeft(:final peerUUID):
         final nick = state.peerNicknames[peerUUID] ?? state.peerNicknamesHistory[peerUUID];
         final displayName = nick ?? peerUUID.substring(0, 8);
-        final systemMsg = _createSystemMessage('👤 $displayName left the chat');
+        final systemMsg = _createSystemMessage('$displayName left the chat');
         final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
         final updatedNicknames = Map<String, String>.from(state.peerNicknames)..remove(peerUUID);
         final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);

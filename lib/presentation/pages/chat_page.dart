@@ -1139,7 +1139,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
     return ListView.builder(
       controller: _scrollCtrl,
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       itemCount: state.messages.length,
       itemBuilder: (context, index) {
         final msg = state.messages[index];
@@ -1781,27 +1781,6 @@ class _MobileModeButton extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Tiny mode label (visible when not recording)
-        AnimatedOpacity(
-          opacity: isRecording ? 0.0 : 1.0,
-          duration: const Duration(milliseconds: 150),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(modeIcon, size: 10, color: const Color(0xFF8E8E93)),
-              const SizedBox(width: 3),
-              Text(
-                modeLabel,
-                style: const TextStyle(
-                    fontSize: 9,
-                    color: Color(0xFF8E8E93),
-                    fontWeight: FontWeight.w500),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 2),
-
         GestureDetector(
           onTap: isRecording ? onTapStop : onTap,
           onLongPressStart: onHoldStart != null

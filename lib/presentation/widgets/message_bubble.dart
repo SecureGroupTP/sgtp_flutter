@@ -81,7 +81,7 @@ class MessageBubble extends StatelessWidget {
             constraints: BoxConstraints(
                 maxWidth: MediaQuery.of(context).size.width * 0.78),
             child: Container(
-              margin: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 4),
+              margin: const EdgeInsets.only(top: 4, bottom: 4),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: bgColor,
@@ -272,7 +272,7 @@ class MessageBubble extends StatelessWidget {
     }
 
     final innerBubble = Container(
-      margin: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 4),
+      margin: const EdgeInsets.only(top: 4, bottom: 4),
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.only(
