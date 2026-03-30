@@ -2,11 +2,12 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 
-import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image/image.dart' as img;
 import '../../core/app_logger.dart';
 import '../../core/interaction_prefs.dart';
+import '../../data/repositories/settings_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -32,12 +33,16 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
-  final _messageCtrl  = TextEditingController();
-  final _scrollCtrl   = ScrollController();
-  final _recorder     = AudioRecorder();
-  final _focusNode    = FocusNode();
-  bool _infoShown     = false;
-  bool _isRecording   = false;
+  static const int _maxUploadImageDimension = 2560;
+  static const int _targetUploadImageBytes = 3 * 1024 * 1024;
+
+  final _settingsRepo = SettingsRepository();
+  final _messageCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
+  final _recorder = AudioRecorder();
+  final _focusNode = FocusNode();
+  bool _infoShown = false;
+  bool _isRecording = false;
   String? _recordingPath;
   List<InputDevice> _inputDevices = [];
   InputDevice? _selectedDevice;
@@ -78,7 +83,18 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
 
   // Quick emoji set for reactions
-  static const _quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉', '🤔', '💯'];
+  static const _quickEmojis = [
+    '👍',
+    '❤️',
+    '😂',
+    '😮',
+    '😢',
+    '🔥',
+    '👏',
+    '🎉',
+    '🤔',
+    '💯'
+  ];
 
   @override
   void initState() {
@@ -128,15 +144,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           _wentToBackground = null;
 
           final status = bloc.state.status;
-          final isDown = status == ChatStatus.disconnected ||
-              status == ChatStatus.error;
+          final isDown =
+              status == ChatStatus.disconnected || status == ChatStatus.error;
 
           // Force-reconnect if status shows down, OR if we were backgrounded
           // long enough that the NAT table likely dropped the TCP connection.
           // NAT timeout for TCP is typically 60–300 s on mobile networks;
           // we use 50 s as the threshold (slightly above our ping interval).
-          final staleTcp = status == ChatStatus.ready &&
-              bgDuration.inSeconds > 50;
+          final staleTcp =
+              status == ChatStatus.ready && bgDuration.inSeconds > 50;
 
           if (isDown || staleTcp) {
             AppLogger.w('[Chat] reconnecting after background '
@@ -163,7 +179,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// Send read receipts for all messages that have not been acknowledged yet.
   /// Called when the app returns to the foreground.
   void _flushPendingReadReceipts() {
-    final bloc  = _chatBloc;
+    final bloc = _chatBloc;
     final state = bloc?.state;
     if (bloc == null || state == null) return;
     for (final msg in state.messages) {
@@ -191,7 +207,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
         } else {
           _scrollCtrl.animateTo(_scrollCtrl.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut);
         }
       }
     });
@@ -234,16 +251,18 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void _sendMessage(BuildContext context) {
     final text = _messageCtrl.text.trim();
     if (text.isEmpty) return;
-    final bloc  = context.read<ChatBloc>();
+    final bloc = context.read<ChatBloc>();
     final reply = bloc.state.replyToMessage;
     bloc.add(ChatSendMessage(
       text,
-      replyToId:      reply?.id,
-      replyToContent: reply?.content.length != null && reply!.content.length > 80
-          ? '${reply.content.substring(0, 80)}…'
-          : reply?.content,
-      replyToSender:  reply != null
-          ? (bloc.state.peerNicknames[reply.senderUUID] ?? reply.senderUUID.substring(0, 8))
+      replyToId: reply?.id,
+      replyToContent:
+          reply?.content.length != null && reply!.content.length > 80
+              ? '${reply.content.substring(0, 80)}…'
+              : reply?.content,
+      replyToSender: reply != null
+          ? (bloc.state.peerNicknames[reply.senderUUID] ??
+              reply.senderUUID.substring(0, 8))
           : null,
     ));
     _messageCtrl.clear();
@@ -278,31 +297,57 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           children: [
             const SizedBox(height: 8),
             Container(
-              width: 36, height: 4,
+              width: 36,
+              height: 4,
               decoration: BoxDecoration(
                 color: const Color(0xFF2C2C30),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
             const SizedBox(height: 8),
-            _SheetTile(icon: Icons.image_outlined,              label: 'Photo / GIF',        subtitle: 'Select one or more images', value: 'image',     ctx: context),
-            _SheetTile(icon: Icons.videocam_outlined,           label: 'Video',               subtitle: null,                        value: 'video',     ctx: context),
-            _SheetTile(icon: Icons.radio_button_checked_outlined, label: 'Video note',        subtitle: 'Circular video message',    value: 'videonote', ctx: context),
-            _SheetTile(icon: Icons.content_paste_outlined,      label: 'Paste from clipboard', subtitle: null,                      value: 'paste',     ctx: context),
+            _SheetTile(
+                icon: Icons.image_outlined,
+                label: 'Photo / GIF',
+                subtitle: 'Select one or more images',
+                value: 'image',
+                ctx: context),
+            _SheetTile(
+                icon: Icons.videocam_outlined,
+                label: 'Video',
+                subtitle: null,
+                value: 'video',
+                ctx: context),
+            _SheetTile(
+                icon: Icons.radio_button_checked_outlined,
+                label: 'Video note',
+                subtitle: 'Circular video message',
+                value: 'videonote',
+                ctx: context),
+            _SheetTile(
+                icon: Icons.content_paste_outlined,
+                label: 'Paste from clipboard',
+                subtitle: null,
+                value: 'paste',
+                ctx: context),
             const SizedBox(height: 8),
           ],
         ),
       ),
     );
     if (!context.mounted) return;
-    if (choice == 'image')     await _withProgress(() => _pickAndSendImages(context));
-    if (choice == 'video')     await _withProgress(() => _pickAndSendVideo(context));
-    if (choice == 'videonote') await _withProgress(() => _pickAndSendVideoNote(context));
-    if (choice == 'paste')     await _withProgress(() => _pasteImageFromClipboard(context));
+    if (choice == 'image')
+      await _withProgress(() => _pickAndSendImages(context));
+    if (choice == 'video')
+      await _withProgress(() => _pickAndSendVideo(context));
+    if (choice == 'videonote')
+      await _withProgress(() => _pickAndSendVideoNote(context));
+    if (choice == 'paste')
+      await _withProgress(() => _pasteImageFromClipboard(context));
   }
 
   /// Pick one OR multiple images, show caption sheet, then send text+images.
   Future<void> _pickAndSendImages(BuildContext context) async {
+    final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       withData: true,
@@ -312,28 +357,40 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     if (!context.mounted) return;
 
     // Build file list with mime types
-    final files = result.files
-        .where((f) => f.bytes != null)
-        .map((f) {
-          final ext = f.name.split('.').last.toLowerCase();
-          final mime = switch (ext) {
-            'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
-            _ => 'image/jpeg',
-          };
-          return (bytes: f.bytes!, name: f.name, mime: mime);
-        })
-        .toList();
+    final files = result.files.where((f) => f.bytes != null).map((f) {
+      final ext = f.name.split('.').last.toLowerCase();
+      final mime = switch (ext) {
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        _ => 'image/jpeg',
+      };
+      return (bytes: f.bytes!, name: f.name, mime: mime);
+    }).toList();
     if (files.isEmpty) return;
+
+    final preparedFiles = <({Uint8List bytes, String name, String mime})>[];
+    for (final file in files) {
+      if (mediaSettings.shouldCompressPhotos) {
+        preparedFiles.add(await _prepareImageForUpload(
+          bytes: file.bytes,
+          name: file.name,
+          mime: file.mime,
+        ));
+      } else {
+        preparedFiles.add(file);
+      }
+    }
 
     // If there's already text in the input field OR multiple files, show caption sheet
     final existingText = _messageCtrl.text.trim();
     final String caption;
 
-    if (files.length > 1 || existingText.isNotEmpty) {
+    if (preparedFiles.length > 1 || existingText.isNotEmpty) {
       // Show caption bottom sheet
       final captionResult = await _showCaptionSheet(
         context,
-        imageCount: files.length,
+        imageCount: preparedFiles.length,
         initialCaption: existingText,
       );
       if (!context.mounted) return;
@@ -350,19 +407,20 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final reply = bloc.state.replyToMessage;
       bloc.add(ChatSendMessage(
         caption,
-        replyToId:      reply?.id,
+        replyToId: reply?.id,
         replyToContent: reply?.content != null && reply!.content.length > 80
             ? '${reply.content.substring(0, 80)}…'
             : reply?.content,
-        replyToSender:  reply != null
-            ? (bloc.state.peerNicknames[reply.senderUUID] ?? reply.senderUUID.substring(0, 8))
+        replyToSender: reply != null
+            ? (bloc.state.peerNicknames[reply.senderUUID] ??
+                reply.senderUUID.substring(0, 8))
             : null,
       ));
       _messageCtrl.clear();
     }
 
     // Send all images sequentially
-    for (final f in files) {
+    for (final f in preparedFiles) {
       bloc.add(ChatSendImage(bytes: f.bytes, name: f.name, mime: f.mime));
     }
     _scrollToBottom();
@@ -391,7 +449,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           children: [
             Center(
               child: Container(
-                width: 36, height: 4,
+                width: 36,
+                height: 4,
                 decoration: BoxDecoration(
                   color: const Color(0xFF2C2C30),
                   borderRadius: BorderRadius.circular(2),
@@ -404,9 +463,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   color: Color(0xFF8E8E93), size: 18),
               const SizedBox(width: 8),
               Text(
-                imageCount == 1 ? '1 photo selected' : '$imageCount photos selected',
-                style: const TextStyle(
-                    color: Color(0xFF8E8E93), fontSize: 13),
+                imageCount == 1
+                    ? '1 photo selected'
+                    : '$imageCount photos selected',
+                style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 13),
               ),
             ]),
             const SizedBox(height: 12),
@@ -490,17 +550,22 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickAndSendVideoNote(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.video, withData: true);
+    final result = await FilePicker.platform
+        .pickFiles(type: FileType.video, withData: true);
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
     if (file.bytes == null) return;
     if (!context.mounted) return;
-    context.read<ChatBloc>().add(ChatSendVideoNote(bytes: file.bytes!, mime: 'video/mp4'));
+    context
+        .read<ChatBloc>()
+        .add(ChatSendVideoNote(bytes: file.bytes!, mime: 'video/mp4'));
     _scrollToBottom();
   }
 
   Future<void> _pickAndSendVideo(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.video, withData: true);
+    final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
+    final result = await FilePicker.platform
+        .pickFiles(type: FileType.video, withData: true);
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
     if (file.bytes == null) return;
@@ -510,11 +575,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       return;
     }
     final mime = switch (ext) {
-      'mp4' => 'video/mp4', 'mov' => 'video/quicktime',
-      'webm' => 'video/webm', _ => 'video/mp4',
+      'mp4' => 'video/mp4',
+      'mov' => 'video/quicktime',
+      'webm' => 'video/webm',
+      _ => 'video/mp4',
     };
     if (!context.mounted) return;
-    context.read<ChatBloc>().add(ChatSendVideo(bytes: file.bytes!, name: file.name, mime: mime));
+    if (mediaSettings.shouldCompressVideos) {
+      _showSnack(
+          context, 'Video compression is not available yet in this build');
+    }
+    context
+        .read<ChatBloc>()
+        .add(ChatSendVideo(bytes: file.bytes!, name: file.name, mime: mime));
     _scrollToBottom();
   }
 
@@ -554,8 +627,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         ),
       );
       if (bytes != null && context.mounted) {
-        context.read<ChatBloc>().add(
-            ChatSendVideoNote(bytes: bytes, mime: 'video/mp4'));
+        context
+            .read<ChatBloc>()
+            .add(ChatSendVideoNote(bytes: bytes, mime: 'video/mp4'));
         _scrollToBottom();
       }
     } else {
@@ -577,12 +651,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
     try {
       final tmpDir = await getTemporaryDirectory();
-      _recordingPath = '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-      await _recorder.start(RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-          device: _selectedDevice),
+      _recordingPath =
+          '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await _recorder.start(
+          RecordConfig(
+              encoder: AudioEncoder.aacLc,
+              bitRate: 128000,
+              sampleRate: 44100,
+              device: _selectedDevice),
           path: _recordingPath!);
       setState(() => _isRecording = true);
     } catch (e) {
@@ -593,7 +669,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Future<void> _stopAndSend(BuildContext context) async {
     try {
       final path = await _recorder.stop();
-      setState(() { _isRecording = false; _isHoldRecording = false; });
+      setState(() {
+        _isRecording = false;
+        _isHoldRecording = false;
+      });
       if (path == null) return;
       final file = File(path);
       if (!file.existsSync() || file.lengthSync() == 0) return;
@@ -602,23 +681,34 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         if (_isVideoNoteMode) {
           // Video note (circle): audio-only fallback recorded as m4a,
           // sent as video_note type so the receiver renders it as a circle bubble.
-          context.read<ChatBloc>().add(ChatSendVideoNote(bytes: bytes, mime: 'audio/m4a'));
+          context
+              .read<ChatBloc>()
+              .add(ChatSendVideoNote(bytes: bytes, mime: 'audio/m4a'));
         } else {
-          context.read<ChatBloc>().add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+          context
+              .read<ChatBloc>()
+              .add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
         }
         _scrollToBottom();
       }
       await file.delete().catchError((_) {});
     } catch (e) {
-      setState(() { _isRecording = false; _isHoldRecording = false; });
+      setState(() {
+        _isRecording = false;
+        _isHoldRecording = false;
+      });
       if (context.mounted) _showSnack(context, 'Error: $e');
     }
   }
 
   Future<void> _pasteImageFromClipboard(BuildContext context) async {
     try {
+      final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
       final imageBytes = await Pasteboard.image;
-      if (imageBytes == null) { _showSnack(context, 'No image in clipboard'); return; }
+      if (imageBytes == null) {
+        _showSnack(context, 'No image in clipboard');
+        return;
+      }
       if (!context.mounted) return;
 
       // Show preview dialog — let user confirm or cancel before sending.
@@ -628,18 +718,85 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       );
       if (confirmed != true || !context.mounted) return;
 
+      final prepared = mediaSettings.shouldCompressPhotos
+          ? await _prepareImageForUpload(
+              bytes: imageBytes,
+              name: 'clipboard_${DateTime.now().millisecondsSinceEpoch}.png',
+              mime: 'image/png',
+            )
+          : (
+              bytes: imageBytes,
+              name: 'clipboard_${DateTime.now().millisecondsSinceEpoch}.png',
+              mime: 'image/png',
+            );
+
       context.read<ChatBloc>().add(ChatSendImage(
-        bytes: imageBytes,
-        name: 'clipboard_${DateTime.now().millisecondsSinceEpoch}.png',
-        mime: 'image/png',
-      ));
+            bytes: prepared.bytes,
+            name: prepared.name,
+            mime: prepared.mime,
+          ));
       _scrollToBottom();
-    } catch (e) { _showSnack(context, 'Failed to paste image: $e'); }
+    } catch (e) {
+      _showSnack(context, 'Failed to paste image: $e');
+    }
+  }
+
+  Future<({Uint8List bytes, String name, String mime})> _prepareImageForUpload({
+    required Uint8List bytes,
+    required String name,
+    required String mime,
+  }) async {
+    if (mime == 'image/gif') {
+      return (bytes: bytes, name: name, mime: mime);
+    }
+
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      return (bytes: bytes, name: name, mime: mime);
+    }
+
+    img.Image processed = decoded;
+    final longestSide =
+        processed.width > processed.height ? processed.width : processed.height;
+    if (longestSide > _maxUploadImageDimension) {
+      processed = img.copyResize(
+        processed,
+        width: processed.width >= processed.height
+            ? _maxUploadImageDimension
+            : null,
+        height: processed.height > processed.width
+            ? _maxUploadImageDimension
+            : null,
+        interpolation: img.Interpolation.average,
+      );
+    }
+
+    final hasAlpha = processed.hasAlpha;
+    if (hasAlpha) {
+      final encodedPng = Uint8List.fromList(img.encodePng(processed, level: 6));
+      if (encodedPng.length < bytes.length ||
+          bytes.length > _targetUploadImageBytes) {
+        final pngName = name.replaceAll(RegExp(r'\.[^.]+$'), '.png');
+        return (bytes: encodedPng, name: pngName, mime: 'image/png');
+      }
+      return (bytes: bytes, name: name, mime: mime);
+    }
+
+    final encodedJpg =
+        Uint8List.fromList(img.encodeJpg(processed, quality: 84));
+    if (encodedJpg.length < bytes.length ||
+        bytes.length > _targetUploadImageBytes) {
+      final jpgName = name.replaceAll(RegExp(r'\.[^.]+$'), '.jpg');
+      return (bytes: encodedJpg, name: jpgName, mime: 'image/jpeg');
+    }
+
+    return (bytes: bytes, name: name, mime: mime);
   }
 
   void _showSnack(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(text), behavior: SnackBarBehavior.floating,
+      content: Text(text),
+      behavior: SnackBarBehavior.floating,
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
     ));
   }
@@ -661,15 +818,21 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                 onTap: () async {
                   final picker = ImagePicker();
                   final file = await picker.pickImage(
-                    source: ImageSource.gallery, maxWidth: 256, maxHeight: 256, imageQuality: 80);
+                      source: ImageSource.gallery,
+                      maxWidth: 256,
+                      maxHeight: 256,
+                      imageQuality: 80);
                   if (file == null) return;
                   final bytes = await file.readAsBytes();
                   setS(() => newAvatar = bytes);
                 },
                 child: CircleAvatar(
                   radius: 44,
-                  backgroundImage: newAvatar != null ? MemoryImage(newAvatar!) : null,
-                  child: newAvatar == null ? const Icon(Icons.camera_alt, size: 32) : null,
+                  backgroundImage:
+                      newAvatar != null ? MemoryImage(newAvatar!) : null,
+                  child: newAvatar == null
+                      ? const Icon(Icons.camera_alt, size: 32)
+                      : null,
                 ),
               ),
               if (newAvatar != null) ...[
@@ -692,12 +855,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
             FilledButton(
               onPressed: () {
                 final name = nameCtrl.text.trim();
                 if (name.isEmpty) return;
-                context.read<ChatBloc>().add(ChatUpdateMetadata(name: name, avatarBytes: newAvatar));
+                context.read<ChatBloc>().add(
+                    ChatUpdateMetadata(name: name, avatarBytes: newAvatar));
                 Navigator.pop(ctx);
               },
               child: const Text('Save'),
@@ -719,7 +885,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
         if (state.messages.isNotEmpty) {
           final prevCount = _lastMessageCount;
-          final newCount  = state.messages.length;
+          final newCount = state.messages.length;
           if (prevCount == 0 && !_scrollRestored) {
             // First load — restore saved position or jump to bottom
             _scrollRestored = true;
@@ -737,8 +903,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               // Incoming message — only scroll if already near bottom
               if (_scrollCtrl.hasClients) {
                 final pos = _scrollCtrl.position;
-                final nearBottom =
-                    pos.maxScrollExtent - pos.pixels < 120;
+                final nearBottom = pos.maxScrollExtent - pos.pixels < 120;
                 if (nearBottom) _scrollToBottom();
               }
             }
@@ -775,12 +940,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                 : '[${msg.type.name}]';
             // Pass sender avatar if available — shown as icon on Android
             // and as attachment thumbnail on iOS/macOS.
-            final avatar = state.peerAvatars[msg.senderUUID]
-                ?? msg.senderAvatarBytes;
+            final avatar =
+                state.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
             NotificationService.showMessage(
-              sender:      senderLabel,
-              body:        body,
-              messageId:   msg.id,
+              sender: senderLabel,
+              body: body,
+              messageId: msg.id,
               avatarBytes: avatar,
             );
           }
@@ -845,154 +1010,156 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               ),
             ),
             child: SafeArea(
-          bottom: false,
-          child: SizedBox(
-            height: 62,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-              child: Row(
-                children: [
-                  // Back button
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, size: 24),
-                    color: const Color(0xFFF5F5F5),
-                    onPressed: () {
-                      if (_isRecording) _recorder.stop();
-                      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-                    },
-                    padding: const EdgeInsets.all(4),
-                    visualDensity: VisualDensity.compact,
-                  ),
-
-                  const SizedBox(width: 4),
-
-                  // Avatar
-                  GestureDetector(
-                    onTap: state.status == ChatStatus.ready
-                        ? () => _showEditMetadataDialog(context, state)
-                        : null,
-                    child: Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF141417),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0xFF2C2C30)),
+              bottom: false,
+              child: SizedBox(
+                height: 62,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                  child: Row(
+                    children: [
+                      // Back button
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back, size: 24),
+                        color: const Color(0xFFF5F5F5),
+                        onPressed: () {
+                          if (_isRecording) _recorder.stop();
+                          if (Navigator.of(context).canPop())
+                            Navigator.of(context).pop();
+                        },
+                        padding: const EdgeInsets.all(4),
+                        visualDensity: VisualDensity.compact,
                       ),
-                      child: ClipOval(
-                        child: state.chatAvatarBytes != null
-                            ? Image.memory(state.chatAvatarBytes!,
-                                fit: BoxFit.cover)
-                            : const Center(
-                                child: Text('👽',
-                                    style: TextStyle(fontSize: 18))),
-                      ),
-                    ),
-                  ),
 
-                  const SizedBox(width: 10),
+                      const SizedBox(width: 4),
 
-                  // Room name + peer count
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: state.status == ChatStatus.ready
-                          ? () => _showEditMetadataDialog(context, state)
-                          : null,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            state.chatName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFFF5F5F5),
-                              letterSpacing: -0.2,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                      // Avatar
+                      GestureDetector(
+                        onTap: state.status == ChatStatus.ready
+                            ? () => _showEditMetadataDialog(context, state)
+                            : null,
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF141417),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0xFF2C2C30)),
                           ),
-                          Text(
-                            state.peerUUIDs.isEmpty
-                                ? 'No peers'
-                                : '${state.peerUUIDs.length} peer${state.peerUUIDs.length == 1 ? '' : 's'}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF8E8E93),
+                          child: ClipOval(
+                            child: state.chatAvatarBytes != null
+                                ? Image.memory(state.chatAvatarBytes!,
+                                    fit: BoxFit.cover)
+                                : const Center(
+                                    child: Text('👽',
+                                        style: TextStyle(fontSize: 18))),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 10),
+
+                      // Room name + peer count
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: state.status == ChatStatus.ready
+                              ? () => _showEditMetadataDialog(context, state)
+                              : null,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                state.chatName,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFFF5F5F5),
+                                  letterSpacing: -0.2,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                state.peerUUIDs.isEmpty
+                                    ? 'No peers'
+                                    : '${state.peerUUIDs.length} peer${state.peerUUIDs.length == 1 ? '' : 's'}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF8E8E93),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // Action buttons
+                      if (state.status == ChatStatus.ready)
+                        IconButton(
+                          icon: Badge(
+                            label: Text('${state.peerUUIDs.length}'),
+                            isLabelVisible: state.peerUUIDs.isNotEmpty,
+                            child: const Icon(Icons.group_outlined, size: 22),
+                          ),
+                          color: const Color(0xFF8E8E93),
+                          onPressed: () => _showPeersSheet(context, state),
+                          padding: const EdgeInsets.all(4),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.info_outline, size: 22),
+                        color: const Color(0xFF8E8E93),
+                        onPressed: () => _showRoomInfo(context, state),
+                        padding: const EdgeInsets.all(4),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      PopupMenuButton<_ChatMenuAction>(
+                        icon: const Icon(Icons.more_vert,
+                            size: 22, color: Color(0xFF8E8E93)),
+                        padding: const EdgeInsets.all(4),
+                        onSelected: (action) {
+                          switch (action) {
+                            case _ChatMenuAction.disconnect:
+                              if (_isRecording) _recorder.stop();
+                              context
+                                  .read<ChatBloc>()
+                                  .add(const ChatDisconnect());
+                              if (context.mounted &&
+                                  Navigator.of(context).canPop()) {
+                                Navigator.of(context).pop();
+                              }
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          if (state.status == ChatStatus.ready)
+                            const PopupMenuItem(
+                              value: _ChatMenuAction.disconnect,
+                              child: ListTile(
+                                leading: Icon(Icons.logout),
+                                title: Text('Disconnect'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          PopupMenuItem(
+                            onTap: () =>
+                                _showEditMetadataDialog(context, state),
+                            child: const ListTile(
+                              leading: Icon(Icons.edit_outlined),
+                              title: Text('Edit chat'),
+                              contentPadding: EdgeInsets.zero,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-
-                  // Action buttons
-                  if (state.status == ChatStatus.ready)
-                    IconButton(
-                      icon: Badge(
-                        label: Text('${state.peerUUIDs.length}'),
-                        isLabelVisible: state.peerUUIDs.isNotEmpty,
-                        child: const Icon(Icons.group_outlined, size: 22),
-                      ),
-                      color: const Color(0xFF8E8E93),
-                      onPressed: () => _showPeersSheet(context, state),
-                      padding: const EdgeInsets.all(4),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.info_outline, size: 22),
-                    color: const Color(0xFF8E8E93),
-                    onPressed: () => _showRoomInfo(context, state),
-                    padding: const EdgeInsets.all(4),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  PopupMenuButton<_ChatMenuAction>(
-                    icon: const Icon(Icons.more_vert,
-                        size: 22, color: Color(0xFF8E8E93)),
-                    padding: const EdgeInsets.all(4),
-                    onSelected: (action) {
-                      switch (action) {
-                        case _ChatMenuAction.disconnect:
-                          if (_isRecording) _recorder.stop();
-                          context
-                              .read<ChatBloc>()
-                              .add(const ChatDisconnect());
-                          if (context.mounted &&
-                              Navigator.of(context).canPop()) {
-                            Navigator.of(context).pop();
-                          }
-                      }
-                    },
-                    itemBuilder: (_) => [
-                      if (state.status == ChatStatus.ready)
-                        const PopupMenuItem(
-                          value: _ChatMenuAction.disconnect,
-                          child: ListTile(
-                            leading: Icon(Icons.logout),
-                            title: Text('Disconnect'),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                      PopupMenuItem(
-                        onTap: () =>
-                            _showEditMetadataDialog(context, state),
-                        child: const ListTile(
-                          leading: Icon(Icons.edit_outlined),
-                          title: Text('Edit chat'),
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
                     ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
         ),
       ),
-    ),
-  ),
-  );
+    );
   }
 
   Widget _buildStatusBanner(BuildContext context, ChatState state) {
@@ -1091,8 +1258,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             ),
           ),
           GestureDetector(
-            onTap: () =>
-                context.read<ChatBloc>().add(const ChatReconnect()),
+            onTap: () => context.read<ChatBloc>().add(const ChatReconnect()),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
@@ -1118,19 +1284,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     );
   }
 
-
-
   Widget _buildMessageList(ChatState state) {
     if (state.messages.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.chat_bubble_outline, size: 64,
-                color: Color(0xFF636366)),
+            const Icon(Icons.chat_bubble_outline,
+                size: 64, color: Color(0xFF636366)),
             const SizedBox(height: 16),
             Text(
-              state.status == ChatStatus.ready ? 'No messages yet. Say hello!' : 'Waiting for connection…',
+              state.status == ChatStatus.ready
+                  ? 'No messages yet. Say hello!'
+                  : 'Waiting for connection…',
               style: const TextStyle(fontSize: 16, color: Color(0xFF8E8E93)),
             ),
           ]),
@@ -1158,13 +1324,18 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           userAvatarBytes: state.userAvatarBytes,
           readReceipts: state.readReceipts,
           peerCount: state.peerUUIDs.length,
-          onReply: isInteractable ? () {
-            context.read<ChatBloc>().add(ChatSetReply(msg));
-          } : null,
-          onReact: isInteractable ? (emoji) {
-            context.read<ChatBloc>().add(
-                ChatToggleReaction(messageId: msg.id, emoji: emoji));
-          } : null,
+          onReply: isInteractable
+              ? () {
+                  context.read<ChatBloc>().add(ChatSetReply(msg));
+                }
+              : null,
+          onReact: isInteractable
+              ? (emoji) {
+                  context
+                      .read<ChatBloc>()
+                      .add(ChatToggleReaction(messageId: msg.id, emoji: emoji));
+                }
+              : null,
           quickEmojis: _quickEmojis,
         );
 
@@ -1196,7 +1367,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
-    final reply   = state.replyToMessage;
+    final reply = state.replyToMessage;
 
     return SafeArea(
       child: Container(
@@ -1219,7 +1390,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // ── Recording indicator ───────────────────────────────────────
             if (_isRecording)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 decoration: const BoxDecoration(
                   color: Color(0x26FF3B30),
                   border: Border(bottom: BorderSide(color: Color(0x33FF3B30))),
@@ -1252,8 +1424,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // ── Reply preview ─────────────────────────────────────────────
             if (reply != null)
               Container(
-                padding:
-                    const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Row(children: [
                   Container(
                     width: 3,
@@ -1295,9 +1466,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   IconButton(
                     icon: const Icon(Icons.close,
                         size: 18, color: Color(0xFF8E8E93)),
-                    onPressed: () => context
-                        .read<ChatBloc>()
-                        .add(const ChatClearReply()),
+                    onPressed: () =>
+                        context.read<ChatBloc>().add(const ChatClearReply()),
                     padding: EdgeInsets.zero,
                     visualDensity: VisualDensity.compact,
                   ),
@@ -1368,9 +1538,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         minLines: 1,
                         maxLines: 5,
                         textInputAction: TextInputAction.send,
-                        onSubmitted: canSend
-                            ? (_) => _sendMessage(context)
-                            : null,
+                        onSubmitted:
+                            canSend ? (_) => _sendMessage(context) : null,
                       ),
                     ),
                   ),
@@ -1399,9 +1568,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                     GestureDetector(
                       onLongPress:
                           canSend ? () => _showMicPicker(context) : null,
-                      onTap: canSend
-                          ? () => _toggleRecording(context)
-                          : null,
+                      onTap: canSend ? () => _toggleRecording(context) : null,
                       child: Container(
                         width: 40,
                         height: 40,
@@ -1413,9 +1580,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                           border: Border.all(color: const Color(0xFF2C2C30)),
                         ),
                         child: Icon(
-                          _isRecording
-                              ? Icons.stop_rounded
-                              : Icons.mic_rounded,
+                          _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
                           color: _isRecording
                               ? Colors.white
                               : const Color(0xFFF5F5F5),
@@ -1426,9 +1591,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   else
                     _MobileModeButton(
                       isVideoNoteMode: _isVideoNoteMode,
-                      isRecording:     _isRecording,
-                      canSend:         canSend,
-                      onTap: () { if (!_isRecording) _toggleMode(); },
+                      isRecording: _isRecording,
+                      canSend: canSend,
+                      onTap: () {
+                        if (!_isRecording) _toggleMode();
+                      },
                       onHoldStart: canSend && !_isRecording
                           ? () => _startHoldRecordingOrCamera(context)
                           : null,
@@ -1470,7 +1637,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               Padding(
                 padding: const EdgeInsets.only(top: 12, bottom: 4),
                 child: Container(
-                  width: 36, height: 4,
+                  width: 36,
+                  height: 4,
                   decoration: BoxDecoration(
                     color: const Color(0xFF2C2C30),
                     borderRadius: BorderRadius.circular(2),
@@ -1484,8 +1652,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                       style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: const Color(0xFF0A84FF).withAlpha(40),
                       borderRadius: BorderRadius.circular(10),
@@ -1531,12 +1699,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 20, vertical: 4),
                             leading: Container(
-                              width: 40, height: 40,
+                              width: 40,
+                              height: 40,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: const Color(0xFF1F1F24),
-                                border: Border.all(
-                                    color: const Color(0xFF2C2C30)),
+                                border:
+                                    Border.all(color: const Color(0xFF2C2C30)),
                               ),
                               child: ClipOval(
                                 child: avatarBytes != null
@@ -1572,8 +1741,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                                   size: 18, color: Color(0xFF8E8E93)),
                               tooltip: 'Copy UUID',
                               onPressed: () {
-                                Clipboard.setData(
-                                    ClipboardData(text: uuid));
+                                Clipboard.setData(ClipboardData(text: uuid));
                                 Navigator.pop(context);
                                 _showSnack(context, 'UUID copied');
                               },
@@ -1606,16 +1774,20 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             if (state.isMaster) ...[
               const SizedBox(height: 12),
               Row(children: [
-                Icon(Icons.star, size: 16, color: Theme.of(context).colorScheme.primary),
+                Icon(Icons.star,
+                    size: 16, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(width: 4),
                 Text('You are the master',
-                    style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary)),
               ]),
             ],
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close')),
         ],
       ),
     );
@@ -1626,12 +1798,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+        Text(label,
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.primary)),
         const SizedBox(height: 4),
         Row(children: [
           Expanded(
             child: SelectableText(value.isEmpty ? '—' : value,
-                style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace')),
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(fontFamily: 'monospace')),
           ),
           if (value.isNotEmpty)
             IconButton(
@@ -1650,10 +1825,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void _showMicPicker(BuildContext context) async {
     await _loadInputDevices();
     if (!context.mounted) return;
-    if (_inputDevices.isEmpty) { _showSnack(context, 'No microphones found'); return; }
+    if (_inputDevices.isEmpty) {
+      _showSnack(context, 'No microphones found');
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => StatefulBuilder(
         builder: (ctx, setSheetState) => Padding(
           padding: const EdgeInsets.all(16),
@@ -1661,16 +1840,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Select microphone', style: Theme.of(context).textTheme.titleMedium),
+              Text('Select microphone',
+                  style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               ..._inputDevices.map((device) => RadioListTile<InputDevice>(
-                title: Text(device.label), value: device, groupValue: _selectedDevice,
-                onChanged: (d) {
-                  setSheetState(() => _selectedDevice = d);
-                  setState(() => _selectedDevice = d);
-                  Navigator.pop(ctx);
-                },
-              )),
+                    title: Text(device.label),
+                    value: device,
+                    groupValue: _selectedDevice,
+                    onChanged: (d) {
+                      setSheetState(() => _selectedDevice = d);
+                      setState(() => _selectedDevice = d);
+                      Navigator.pop(ctx);
+                    },
+                  )),
             ],
           ),
         ),
@@ -1783,12 +1965,8 @@ class _MobileModeButton extends StatelessWidget {
       children: [
         GestureDetector(
           onTap: isRecording ? onTapStop : onTap,
-          onLongPressStart: onHoldStart != null
-              ? (_) => onHoldStart!()
-              : null,
-          onLongPressEnd: onHoldEnd != null
-              ? (_) => onHoldEnd!()
-              : null,
+          onLongPressStart: onHoldStart != null ? (_) => onHoldStart!() : null,
+          onLongPressEnd: onHoldEnd != null ? (_) => onHoldEnd!() : null,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             width: isRecording ? 44 : 40,
@@ -1800,9 +1978,12 @@ class _MobileModeButton extends StatelessWidget {
                   ? Border.all(color: const Color(0xFF2C2C30))
                   : null,
               boxShadow: isRecording
-                  ? [BoxShadow(
-                      color: const Color(0xFFFF3B30).withAlpha(80),
-                      blurRadius: 12, spreadRadius: 1)]
+                  ? [
+                      BoxShadow(
+                          color: const Color(0xFFFF3B30).withAlpha(80),
+                          blurRadius: 12,
+                          spreadRadius: 1)
+                    ]
                   : null,
             ),
             child: Icon(icon, color: fg, size: 22),

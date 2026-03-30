@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../../../core/app_logger.dart';
 
@@ -17,6 +16,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   SgtpClient? _client;
   StreamSubscription<SgtpEvent>? _eventSub;
   final ChatMetadataRepository _metaRepo = ChatMetadataRepository();
+  DateTime? _lastActivityPersistAt;
 
   // Keep last config for reconnect
   ChatConnect? _lastConnectEvent;
@@ -54,17 +54,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _doConnect(event, emit);
   }
 
-  Future<void> _onReconnect(ChatReconnect event, Emitter<ChatState> emit) async {
+  Future<void> _onReconnect(
+      ChatReconnect event, Emitter<ChatState> emit) async {
     final last = _lastConnectEvent;
     if (last == null) return;
     await _doConnect(last, emit);
   }
 
   Future<void> _doConnect(ChatConnect event, Emitter<ChatState> emit) async {
-    final oldSub    = _eventSub;
+    final oldSub = _eventSub;
     final oldClient = _client;
     _eventSub = null;
-    _client   = null;
+    _client = null;
     await oldSub?.cancel();
     await oldClient?.close();
 
@@ -74,14 +75,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Uint8List? chatAvatar = event.config.chatAvatarBytes;
 
     final roomUUIDHex = event.config.roomUUID
-        .map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
     final isRealRoom = !event.config.roomUUID.every((b) => b == 0);
 
     if (isRealRoom) {
       try {
         final saved = await _metaRepo.loadChat(roomUUIDHex);
         if (saved != null) {
-          chatName   = saved.name;
+          chatName = saved.name;
           chatAvatar = saved.avatarBytes;
           AppLogger.i('[ChatBloc] Pre-loaded metadata: "${saved.name}"');
         }
@@ -97,7 +99,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     // Build config with resolved metadata so the client broadcasts correct name
     final resolvedConfig = event.config.copyWithMeta(
-      name:   chatName,
+      name: chatName,
       avatar: chatAvatar,
     );
 
@@ -113,40 +115,47 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         .join();
 
     emit(state.copyWith(
-      status:          ChatStatus.connecting,
+      status: ChatStatus.connecting,
       // Preserve existing messages and reactions — they live in RAM until app close.
       // Only clear messages on a *fresh* connect (different room UUID).
-      messages:        (isRealRoom && state.roomUUID.isNotEmpty && state.roomUUID != roomUUIDHex)
-                           ? [] : state.messages,
-      peerUUIDs:       [],
-      peerNicknames:   {},
-      peerPublicKeys:  {},
-      peerAvatars:     {},
-      readReceipts:    {},
-      isMaster:        false,
-      myPublicKeyHex:  pubHex,
-      nicknames:       event.nicknames,
-      chatName:        chatName,
+      messages: (isRealRoom &&
+              state.roomUUID.isNotEmpty &&
+              state.roomUUID != roomUUIDHex)
+          ? []
+          : state.messages,
+      peerUUIDs: [],
+      peerNicknames: {},
+      peerPublicKeys: {},
+      peerAvatars: {},
+      readReceipts: {},
+      isMaster: false,
+      myPublicKeyHex: pubHex,
+      nicknames: event.nicknames,
+      chatName: chatName,
       chatAvatarBytes: chatAvatar,
-      clearError:      true,
+      clearError: true,
     ));
 
     _eventSub = client.events.listen(
-      (sgtpEvent) => add(ChatInternalSgtpEvent(sgtpEvent, sessionId: sessionId)),
-      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()), sessionId: sessionId)),
+      (sgtpEvent) =>
+          add(ChatInternalSgtpEvent(sgtpEvent, sessionId: sessionId)),
+      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()),
+          sessionId: sessionId)),
     );
 
     await client.connect();
   }
 
-  Future<void> _onSendMessage(ChatSendMessage event, Emitter<ChatState> emit) async {
+  Future<void> _onSendMessage(
+      ChatSendMessage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendMessage(
       event.text,
-      replyToId:      event.replyToId,
+      replyToId: event.replyToId,
       replyToContent: event.replyToContent,
-      replyToSender:  event.replyToSender,
+      replyToSender: event.replyToSender,
     );
+    await _touchChatActivity();
     // Clear reply after send
     if (event.replyToId != null) emit(state.copyWith(clearReply: true));
   }
@@ -157,20 +166,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     // nickname shown immediately without requiring a reconnect.
     final newNicknames = Map<String, String>.from(event.nicknames);
     final updatedPeerNicks = Map<String, String>.from(state.peerNicknames);
-    final updatedHistory   = Map<String, String>.from(state.peerNicknamesHistory);
+    final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
 
     for (final entry in state.peerPublicKeys.entries) {
       final sessionUUID = entry.key;
-      final pubHex      = entry.value;
+      final pubHex = entry.value;
       final nick = newNicknames[pubHex];
       if (nick != null) {
         updatedPeerNicks[sessionUUID] = nick;
-        updatedHistory[sessionUUID]   = nick;
+        updatedHistory[sessionUUID] = nick;
       }
     }
     emit(state.copyWith(
-      nicknames:            newNicknames,
-      peerNicknames:        updatedPeerNicks,
+      nicknames: newNicknames,
+      peerNicknames: updatedPeerNicks,
       peerNicknamesHistory: updatedHistory,
     ));
   }
@@ -185,7 +194,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
   void _onToggleReaction(ChatToggleReaction event, Emitter<ChatState> emit) {
     final current = Map<String, Map<String, Set<String>>>.from(state.reactions);
-    final msgReactions = Map<String, Set<String>>.from(current[event.messageId] ?? {});
+    final msgReactions =
+        Map<String, Set<String>>.from(current[event.messageId] ?? {});
     final who = Set<String>.from(msgReactions[event.emoji] ?? {});
     final adding = !who.contains(state.myUUID);
     if (adding) {
@@ -208,42 +218,56 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     _client?.sendReaction(event.messageId, event.emoji, adding);
   }
 
-  Future<void> _onSendImage(ChatSendImage event, Emitter<ChatState> emit) async {
+  Future<void> _onSendImage(
+      ChatSendImage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendImage(event.bytes, event.name, event.mime);
+    await _touchChatActivity();
   }
 
-  Future<void> _onSendVideo(ChatSendVideo event, Emitter<ChatState> emit) async {
+  Future<void> _onSendVideo(
+      ChatSendVideo event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVideo(event.bytes, event.name, event.mime);
+    await _touchChatActivity();
   }
 
-  Future<void> _onSendVoice(ChatSendVoice event, Emitter<ChatState> emit) async {
+  Future<void> _onSendVoice(
+      ChatSendVoice event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVoice(event.bytes, event.mime);
+    await _touchChatActivity();
   }
 
-  Future<void> _onSendVideoNote(ChatSendVideoNote event, Emitter<ChatState> emit) async {
+  Future<void> _onSendVideoNote(
+      ChatSendVideoNote event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVideoNote(event.bytes, event.mime);
+    await _touchChatActivity();
   }
 
-  Future<void> _onSendMessageRead(ChatSendMessageRead event, Emitter<ChatState> emit) async {
+  Future<void> _onSendMessageRead(
+      ChatSendMessageRead event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendMessageRead(event.messageId);
+    await _touchChatActivity();
   }
 
-  Future<void> _onDisconnect(ChatDisconnect event, Emitter<ChatState> emit) async {
+  Future<void> _onDisconnect(
+      ChatDisconnect event, Emitter<ChatState> emit) async {
     final client = _client;
-    _client = null; // null first so SgtpDisconnected handler won't auto-reconnect
+    _client =
+        null; // null first so SgtpDisconnected handler won't auto-reconnect
     await client?.disconnect();
     await _eventSub?.cancel();
     _eventSub = null;
     emit(state.copyWith(status: ChatStatus.disconnected));
   }
 
-  Future<void> _onUpdateMetadata(ChatUpdateMetadata event, Emitter<ChatState> emit) async {
-    emit(state.copyWith(chatName: event.name, chatAvatarBytes: event.avatarBytes));
+  Future<void> _onUpdateMetadata(
+      ChatUpdateMetadata event, Emitter<ChatState> emit) async {
+    emit(state.copyWith(
+        chatName: event.name, chatAvatarBytes: event.avatarBytes));
     await _client?.sendChatMeta(event.name, event.avatarBytes);
     final roomUUID = state.roomUUID.isNotEmpty
         ? state.roomUUID
@@ -251,22 +275,24 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _saveMetadata(roomUUID, event.name, event.avatarBytes);
   }
 
-  Future<void> _onSetUserAvatar(ChatSetUserAvatar event, Emitter<ChatState> emit) async {
+  Future<void> _onSetUserAvatar(
+      ChatSetUserAvatar event, Emitter<ChatState> emit) async {
     emit(state.copyWith(userAvatarBytes: event.avatarBytes));
     _client?.setUserAvatar(event.avatarBytes);
   }
 
-  Future<void> _saveMetadata(String roomUUID, String name, Uint8List? avatar) async {
+  Future<void> _saveMetadata(
+      String roomUUID, String name, Uint8List? avatar) async {
     if (roomUUID.isEmpty) return;
     try {
-      final now      = DateTime.now();
+      final now = DateTime.now();
       final existing = await _metaRepo.loadChat(roomUUID);
       final meta = ChatMetadata(
-        uuid:        roomUUID,
-        name:        name,
+        uuid: roomUUID,
+        name: name,
         avatarBytes: avatar,
-        createdAt:   existing?.createdAt ?? now,
-        updatedAt:   now,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
       );
       await _metaRepo.saveChat(meta);
       AppLogger.i('[ChatBloc] Saved metadata for $roomUUID: "$name"');
@@ -275,12 +301,45 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
+  Future<void> _touchChatActivity() async {
+    final roomUUID = state.roomUUID.isNotEmpty
+        ? state.roomUUID
+        : (_client?.roomUUIDHex ?? '');
+    if (roomUUID.isEmpty) return;
+
+    final now = DateTime.now();
+    if (_lastActivityPersistAt != null &&
+        now.difference(_lastActivityPersistAt!) < const Duration(seconds: 15)) {
+      return;
+    }
+
+    try {
+      final existing = await _metaRepo.loadChat(roomUUID);
+      final metadata = ChatMetadata(
+        uuid: roomUUID,
+        name: existing?.name ?? state.chatName,
+        avatarBytes: existing?.avatarBytes ?? state.chatAvatarBytes,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        windowWidth: existing?.windowWidth,
+        windowHeight: existing?.windowHeight,
+      );
+      await _metaRepo.saveChat(metadata);
+      _lastActivityPersistAt = now;
+    } catch (e) {
+      AppLogger.i('[ChatBloc] Failed to persist chat activity: $e');
+    }
+  }
+
   ChatMessage _createSystemMessage(String content) => ChatMessage(
-    id: DateTime.now().millisecondsSinceEpoch.toString().padLeft(16, '0'),
-    senderUUID: 'system', content: content,
-    type: MessageType.system, receivedAt: DateTime.now(),
-    isFromHistory: false, isFromMe: false,
-  );
+        id: DateTime.now().millisecondsSinceEpoch.toString().padLeft(16, '0'),
+        senderUUID: 'system',
+        content: content,
+        type: MessageType.system,
+        receivedAt: DateTime.now(),
+        isFromHistory: false,
+        isFromMe: false,
+      );
 
   void _onSgtpEvent(ChatInternalSgtpEvent event, Emitter<ChatState> emit) {
     // Discard events from a previous (now-cancelled) connection session.
@@ -328,7 +387,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         }
         // If a message with this id already exists (e.g. isSending echo being
         // updated to isSending: false), replace it instead of appending.
-        final existingIdx = state.messages.indexWhere((m) => m.id == message.id);
+        final existingIdx =
+            state.messages.indexWhere((m) => m.id == message.id);
         final List<ChatMessage> updated;
         if (existingIdx >= 0) {
           updated = List<ChatMessage>.from(state.messages);
@@ -341,6 +401,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           peerAvatars: updatedAvatars,
           peerPublicKeys: updatedPubKeys,
         ));
+        _touchChatActivity();
 
       case SgtpPeerJoined(:final peerUUID, :final ed25519PubHex):
         final nick = state.nicknames[ed25519PubHex];
@@ -348,37 +409,47 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (nick != null) updatedNick[peerUUID] = nick;
         final displayName = nick ?? peerUUID.substring(0, 8);
         final systemMsg = _createSystemMessage('$displayName joined the chat');
-        final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
-        final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
+        final updatedMessages = List<ChatMessage>.from(state.messages)
+          ..add(systemMsg);
+        final updatedHistory =
+            Map<String, String>.from(state.peerNicknamesHistory);
         if (nick != null) updatedHistory[peerUUID] = nick;
         final updatedPubKeys = Map<String, String>.from(state.peerPublicKeys);
         updatedPubKeys[peerUUID] = ed25519PubHex;
         if (!state.peerUUIDs.contains(peerUUID)) {
           emit(state.copyWith(
-            messages: updatedMessages, peerUUIDs: [...state.peerUUIDs, peerUUID],
-            peerNicknames: updatedNick, peerNicknamesHistory: updatedHistory,
+            messages: updatedMessages,
+            peerUUIDs: [...state.peerUUIDs, peerUUID],
+            peerNicknames: updatedNick,
+            peerNicknamesHistory: updatedHistory,
             peerPublicKeys: updatedPubKeys,
           ));
         } else {
           emit(state.copyWith(
             messages: updatedMessages,
-            peerNicknames: updatedNick, peerNicknamesHistory: updatedHistory,
+            peerNicknames: updatedNick,
+            peerNicknamesHistory: updatedHistory,
             peerPublicKeys: updatedPubKeys,
           ));
         }
 
       case SgtpPeerLeft(:final peerUUID):
-        final nick = state.peerNicknames[peerUUID] ?? state.peerNicknamesHistory[peerUUID];
+        final nick = state.peerNicknames[peerUUID] ??
+            state.peerNicknamesHistory[peerUUID];
         final displayName = nick ?? peerUUID.substring(0, 8);
         final systemMsg = _createSystemMessage('$displayName left the chat');
-        final updatedMessages = List<ChatMessage>.from(state.messages)..add(systemMsg);
-        final updatedNicknames = Map<String, String>.from(state.peerNicknames)..remove(peerUUID);
-        final updatedHistory = Map<String, String>.from(state.peerNicknamesHistory);
+        final updatedMessages = List<ChatMessage>.from(state.messages)
+          ..add(systemMsg);
+        final updatedNicknames = Map<String, String>.from(state.peerNicknames)
+          ..remove(peerUUID);
+        final updatedHistory =
+            Map<String, String>.from(state.peerNicknamesHistory);
         if (nick != null) updatedHistory[peerUUID] = nick;
         emit(state.copyWith(
           messages: updatedMessages,
           peerUUIDs: state.peerUUIDs.where((id) => id != peerUUID).toList(),
-          peerNicknames: updatedNicknames, peerNicknamesHistory: updatedHistory,
+          peerNicknames: updatedNicknames,
+          peerNicknamesHistory: updatedHistory,
         ));
 
       case SgtpError(:final error):
@@ -393,13 +464,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (_lastConnectEvent != null && _client != null) {
           Future.delayed(const Duration(seconds: 3), () {
             if (!isClosed && state.status == ChatStatus.disconnected) {
-              AppLogger.i('[ChatBloc] Auto-reconnecting after unexpected disconnect');
+              AppLogger.i(
+                  '[ChatBloc] Auto-reconnecting after unexpected disconnect');
               add(const ChatReconnect());
             }
           });
         }
 
-      case SgtpChatMetadataReceived(:final chatName, :final avatarBytes, :final senderUUID):
+      case SgtpChatMetadataReceived(
+          :final chatName,
+          :final avatarBytes,
+          :final senderUUID
+        ):
         AppLogger.i('[ChatBloc] Got metadata from $senderUUID: "$chatName"');
         emit(state.copyWith(chatName: chatName, chatAvatarBytes: avatarBytes));
         final roomUUID = state.roomUUID.isNotEmpty
@@ -415,12 +491,27 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         }).toList();
         emit(state.copyWith(messages: updatedMsgs));
 
-      case SgtpReactionReceived(:final messageId, :final emoji, :final senderUUID, :final add):
-        final current     = Map<String, Map<String, Set<String>>>.from(state.reactions);
-        final msgReactions = Map<String, Set<String>>.from(current[messageId] ?? {});
-        final who          = Set<String>.from(msgReactions[emoji] ?? {});
-        if (add) { who.add(senderUUID); } else { who.remove(senderUUID); }
-        if (who.isEmpty) { msgReactions.remove(emoji); } else { msgReactions[emoji] = who; }
+      case SgtpReactionReceived(
+          :final messageId,
+          :final emoji,
+          :final senderUUID,
+          :final add
+        ):
+        final current =
+            Map<String, Map<String, Set<String>>>.from(state.reactions);
+        final msgReactions =
+            Map<String, Set<String>>.from(current[messageId] ?? {});
+        final who = Set<String>.from(msgReactions[emoji] ?? {});
+        if (add) {
+          who.add(senderUUID);
+        } else {
+          who.remove(senderUUID);
+        }
+        if (who.isEmpty) {
+          msgReactions.remove(emoji);
+        } else {
+          msgReactions[emoji] = who;
+        }
         current[messageId] = msgReactions;
         final updatedMsgs = state.messages.map<ChatMessage>((m) {
           if (m.id == messageId) return m.copyWith(reactions: msgReactions);
@@ -436,11 +527,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         // Also update the message in the list so readBy set is current
         final updatedMsgs = state.messages.map<ChatMessage>((m) {
           if (m.id == readMessageId) {
-            return m.copyWith(readBy: Set<String>.from(m.readBy)..add(readerUUID));
+            return m.copyWith(
+                readBy: Set<String>.from(m.readBy)..add(readerUUID));
           }
           return m;
         }).toList();
         emit(state.copyWith(readReceipts: current, messages: updatedMsgs));
+        _touchChatActivity();
     }
   }
 

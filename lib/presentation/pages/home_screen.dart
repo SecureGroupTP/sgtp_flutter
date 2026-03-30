@@ -52,16 +52,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _config        = widget.initialConfig;
-    _nicknames     = widget.nicknames;
+    _config = widget.initialConfig;
+    _nicknames = widget.nicknames;
     _serverAddress = widget.serverAddress;
-    _userAvatar    = widget.userAvatar;
-    _whitelist     = List.from(widget.initialWhitelist);
+    _userAvatar = widget.userAvatar;
+    _whitelist = List.from(widget.initialWhitelist);
     _roomsBloc = RoomsBloc(
-      baseConfig:    _config,
-      nicknames:     _nicknames,
+      baseConfig: _config,
+      nicknames: _nicknames,
       serverAddress: _serverAddress,
-      userAvatar:    _userAvatar,
+      userAvatar: _userAvatar,
     );
   }
 
@@ -74,16 +74,16 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onConfigChanged(SgtpConfig newConfig, Map<String, String> newNicknames,
       String newServer) {
     setState(() {
-      _config        = newConfig;
-      _nicknames     = newNicknames;
+      _config = newConfig;
+      _nicknames = newNicknames;
       _serverAddress = newServer;
     });
     _roomsBloc.close();
     _roomsBloc = RoomsBloc(
-      baseConfig:    newConfig,
-      nicknames:     newNicknames,
+      baseConfig: newConfig,
+      nicknames: newNicknames,
       serverAddress: newServer,
-      userAvatar:    _userAvatar,
+      userAvatar: _userAvatar,
     );
   }
 
@@ -127,22 +127,21 @@ class _HomeScreenState extends State<HomeScreen> {
             RoomsPage(key: _roomsPageKey),
             // 1 — Contacts
             ContactsScreen(
-              initialEntries:   _whitelist,
+              initialEntries: _whitelist,
               onEntriesChanged: _onWhitelistChanged,
             ),
             // 2 — Settings
             SettingsScreen(
-              initialConfig:       _config,
-              initialNicknames:    _nicknames,
-              onConfigChanged:     _onConfigChanged,
+              initialConfig: _config,
+              initialNicknames: _nicknames,
+              onConfigChanged: _onConfigChanged,
               onUserAvatarChanged: _onUserAvatarChanged,
-              currentUserAvatar:   _userAvatar,
+              currentUserAvatar: _userAvatar,
             ),
           ],
         ),
-        floatingActionButton: _currentIndex == 0
-            ? _HomeFab(onPressed: _showAddSheet)
-            : null,
+        floatingActionButton:
+            _currentIndex == 0 ? _HomeFab(onPressed: _showAddSheet) : null,
         bottomNavigationBar: AppNavBar(
           selectedIndex: _currentIndex,
           onTap: (i) => setState(() => _currentIndex = i),
@@ -221,29 +220,31 @@ class _AppStartScreenState extends State<AppStartScreen> {
     if (savedKey == null) return;
 
     try {
-      final parsed  = parseOpenSshPrivateKey(savedKey.bytes);
+      final parsed = parseOpenSshPrivateKey(savedKey.bytes);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
+      final mediaSettings = await settings.loadMediaTransferSettings();
 
-      final entries    = await settings.loadWhitelistEntries();
-      final whitelist  = entries.map((e) => e.hexKey).toSet();
-      final nicknames  = {for (final e in entries) e.hexKey: e.name};
+      final entries = await settings.loadWhitelistEntries();
+      final whitelist = entries.map((e) => e.hexKey).toSet();
+      final nicknames = {for (final e in entries) e.hexKey: e.name};
       final userAvatar = await settings.loadUserAvatar();
 
       final config = SgtpConfig(
-        serverAddr:      lastAddr.isEmpty ? 'localhost:7777' : lastAddr,
-        roomUUID:        Uint8List(16),
+        serverAddr: lastAddr.isEmpty ? 'localhost:7777' : lastAddr,
+        roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
-        myPublicKey:     parsed.publicKey,
-        whitelist:       whitelist,
+        myPublicKey: parsed.publicKey,
+        whitelist: whitelist,
+        mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
       );
 
       if (mounted) {
         Navigator.of(context).pushReplacement(MaterialPageRoute(
           builder: (_) => HomeScreen(
-            initialConfig:    config,
-            nicknames:        nicknames,
-            serverAddress:    lastAddr,
-            userAvatar:       userAvatar,
+            initialConfig: config,
+            nicknames: nicknames,
+            serverAddress: lastAddr,
+            userAvatar: userAvatar,
             initialWhitelist: entries,
           ),
         ));
@@ -260,10 +261,10 @@ class _AppStartScreenState extends State<AppStartScreen> {
       SettingsRepository settings) async {
     try {
       final algorithm = Ed25519();
-      final keyPair   = await algorithm.newKeyPair();
-      final pubKey    = await keyPair.extractPublicKey();
+      final keyPair = await algorithm.newKeyPair();
+      final pubKey = await keyPair.extractPublicKey();
       final privBytes = await keyPair.extractPrivateKeyBytes();
-      final pubBytes  = Uint8List.fromList(pubKey.bytes);
+      final pubBytes = Uint8List.fromList(pubKey.bytes);
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
       await settings.savePrivateKey(opensshBytes, 'identity');
       return (bytes: opensshBytes, name: 'identity');
@@ -275,20 +276,25 @@ class _AppStartScreenState extends State<AppStartScreen> {
   Uint8List _encodeOpenSshPrivateKey(List<int> seed, Uint8List pubKey) {
     const magic = 'openssh-key-v1\x00';
     final header = _sshStr('none') + _sshStr('none') + _sshStr('') + _u32(1);
-    final pubBlock    = _sshStr('ssh-ed25519') + _sshStr(pubKey);
-    final pubWrapped  = _sshStr(pubBlock);
-    final rng   = Random.secure();
+    final pubBlock = _sshStr('ssh-ed25519') + _sshStr(pubKey);
+    final pubWrapped = _sshStr(pubBlock);
+    final rng = Random.secure();
     final check = rng.nextInt(0xFFFFFFFF);
-    final fullPriv = Uint8List(64)..setAll(0, seed)..setAll(32, pubKey);
-    final privBlock = _u32(check) + _u32(check) +
-        _sshStr('ssh-ed25519') + _sshStr(pubKey) +
-        _sshStr(fullPriv) + _sshStr('sgtp-generated');
+    final fullPriv = Uint8List(64)
+      ..setAll(0, seed)
+      ..setAll(32, pubKey);
+    final privBlock = _u32(check) +
+        _u32(check) +
+        _sshStr('ssh-ed25519') +
+        _sshStr(pubKey) +
+        _sshStr(fullPriv) +
+        _sshStr('sgtp-generated');
     final padded = List<int>.from(privBlock);
     int pad = 1;
     while (padded.length % 8 != 0) padded.add(pad++);
     final body = magic.codeUnits + header + pubWrapped + _sshStr(padded);
-    final b64  = base64Encode(body);
-    final sb   = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');
+    final b64 = base64Encode(body);
+    final sb = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');
     for (var i = 0; i < b64.length; i += 70) {
       sb.writeln(b64.substring(i, (i + 70).clamp(0, b64.length)));
     }

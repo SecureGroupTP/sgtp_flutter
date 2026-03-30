@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,7 +8,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_theme.dart';
@@ -20,6 +18,8 @@ import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
 import '../../core/app_logger.dart';
+import '../../core/constants.dart';
+import '../widgets/pretty_qr_share_panel.dart';
 import 'logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -49,31 +49,35 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _settings      = SettingsRepository();
-  final _serverCtrl    = TextEditingController();
-  final _nicknameCtrl  = TextEditingController();
+  final _settings = SettingsRepository();
+  final _serverCtrl = TextEditingController();
+  final _nicknameCtrl = TextEditingController();
 
-  String?    _privateKeyPath;
+  String? _privateKeyPath;
   Uint8List? _privateKeyBytes;
   Uint8List? _myPublicKey;
 
   List<WhitelistEntry> _wlEntries = [];
-  Map<String, String>  _nicknames = {};
+  Map<String, String> _nicknames = {};
 
   Uint8List? _userAvatar;
-  String     _nickname  = '';
+  String _nickname = '';
 
-  bool    _isLoading    = false;
-  bool    _isGenerating = false;
+  bool _isLoading = false;
+  bool _isGenerating = false;
   String? _error;
 
   /// Ping interval in seconds. Saved via SettingsRepository.
   int _pingIntervalSeconds = 30;
+  bool _compressFiles = false;
+  bool _compressPhotos = false;
+  bool _compressVideos = false;
+  int _mediaChunkSizeBytes = SgtpConstants.defaultMediaChunkSize;
 
   // Interaction preferences (Fix 7)
-  String _doubleTapDesktop  = 'react';  // 'react' | 'reply'
-  bool   _swipeToReply      = true;
-  bool   _longPressMenu     = true;
+  String _doubleTapDesktop = 'react'; // 'react' | 'reply'
+  bool _swipeToReply = true;
+  bool _longPressMenu = true;
 
   @override
   void initState() {
@@ -86,7 +90,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final cfg = widget.initialConfig;
     if (cfg != null) {
       _serverCtrl.text = cfg.serverAddr;
-      _myPublicKey     = cfg.myPublicKey;
+      _myPublicKey = cfg.myPublicKey;
     }
     _nicknames = Map.from(widget.initialNicknames ?? {});
     _loadFromDisk();
@@ -99,8 +103,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final parsed = parseOpenSshPrivateKey(savedKey.bytes);
         setState(() {
           _privateKeyBytes = savedKey.bytes;
-          _privateKeyPath  = savedKey.name;
-          _myPublicKey     = parsed.publicKey;
+          _privateKeyPath = savedKey.name;
+          _myPublicKey = parsed.publicKey;
         });
       } catch (_) {}
     }
@@ -120,6 +124,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final avatar = await _settings.loadUserAvatar();
     if (avatar != null) setState(() => _userAvatar = avatar);
+    final mediaSettings = await _settings.loadMediaTransferSettings();
 
     // Load persisted prefs (nickname + interaction)
     final prefs = await SharedPreferences.getInstance();
@@ -128,13 +133,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _nickname = savedNickname;
       _nicknameCtrl.text = savedNickname;
       _pingIntervalSeconds = prefs.getInt('sgtp_ping_interval') ?? 30;
-      _doubleTapDesktop    = prefs.getString('iprefs_doubletap_desktop') ?? 'react';
-      _swipeToReply        = prefs.getBool('iprefs_swipe_to_reply')       ?? true;
-      _longPressMenu       = prefs.getBool('iprefs_longpress_menu')       ?? true;
+      _compressFiles = mediaSettings.compressFiles;
+      _compressPhotos = mediaSettings.compressPhotos;
+      _compressVideos = mediaSettings.compressVideos;
+      _mediaChunkSizeBytes = mediaSettings.mediaChunkSizeBytes;
+      _doubleTapDesktop =
+          prefs.getString('iprefs_doubletap_desktop') ?? 'react';
+      _swipeToReply = prefs.getBool('iprefs_swipe_to_reply') ?? true;
+      _longPressMenu = prefs.getBool('iprefs_longpress_menu') ?? true;
     });
     // Sync singleton
-    InteractionPrefs.doubleTapDesktop   = _doubleTapDesktop;
-    InteractionPrefs.swipeToReply       = _swipeToReply;
+    InteractionPrefs.doubleTapDesktop = _doubleTapDesktop;
+    InteractionPrefs.swipeToReply = _swipeToReply;
     InteractionPrefs.longPressShowsMenu = _longPressMenu;
   }
 
@@ -160,16 +170,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final result = await FilePicker.platform
           .pickFiles(type: FileType.any, withData: true, allowMultiple: false);
       if (result == null || result.files.isEmpty) return;
-      final file  = result.files.first;
+      final file = result.files.first;
       final bytes = file.bytes;
-      if (bytes == null) { _setError('Could not read key file'); return; }
+      if (bytes == null) {
+        _setError('Could not read key file');
+        return;
+      }
       final parsed = parseOpenSshPrivateKey(bytes);
       await _settings.savePrivateKey(bytes, file.name);
       setState(() {
         _privateKeyBytes = bytes;
-        _privateKeyPath  = file.name;
-        _myPublicKey     = parsed.publicKey;
-        _error           = null;
+        _privateKeyPath = file.name;
+        _myPublicKey = parsed.publicKey;
+        _error = null;
       });
       _tryApplyConfig();
     } catch (e) {
@@ -185,10 +198,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Generate New Key?'),
         content: const Text(
-          'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
-          'Your old key will be replaced. Peers that trusted your old key will need to add the new one to their whitelist.'),
+            'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
+            'Your old key will be replaced. Peers that trusted your old key will need to add the new one to their whitelist.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: Colors.orange),
@@ -203,22 +218,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       // Generate new Ed25519 key pair
       final algorithm = Ed25519();
-      final keyPair   = await algorithm.newKeyPair();
-      final pubKey    = await keyPair.extractPublicKey();
+      final keyPair = await algorithm.newKeyPair();
+      final pubKey = await keyPair.extractPublicKey();
       final privBytes = await keyPair.extractPrivateKeyBytes();
-      final pubBytes  = Uint8List.fromList(pubKey.bytes);
+      final pubBytes = Uint8List.fromList(pubKey.bytes);
 
       // Encode as OpenSSH private key
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      const name         = 'identity';
+      const name = 'identity';
       await _settings.savePrivateKey(opensshBytes, name);
 
       setState(() {
         _privateKeyBytes = opensshBytes;
-        _privateKeyPath  = name;
-        _myPublicKey     = pubBytes;
-        _error           = null;
-        _isGenerating    = false;
+        _privateKeyPath = name;
+        _myPublicKey = pubBytes;
+        _error = null;
+        _isGenerating = false;
       });
       _tryApplyConfig();
 
@@ -228,7 +243,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } catch (e) {
-      setState(() { _error = 'Key generation failed: $e'; _isGenerating = false; });
+      setState(() {
+        _error = 'Key generation failed: $e';
+        _isGenerating = false;
+      });
     }
   }
 
@@ -239,17 +257,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // auth_magic + null byte
     const magic = 'openssh-key-v1\x00';
     // cipher "none", kdf "none", kdf options "", number of keys = 1
-    final header = _sshString('none') +  // cipher name
-        _sshString('none') +              // kdf name
-        _sshString('') +                  // kdf options
-        _uint32(1);                        // number of keys
+    final header = _sshString('none') + // cipher name
+        _sshString('none') + // kdf name
+        _sshString('') + // kdf options
+        _uint32(1); // number of keys
 
     // Public key block: type + pub key
     final pubKeyBlock = _sshString('ssh-ed25519') + _sshString(pubKey);
     final pubKeyWrapped = _sshString(pubKeyBlock);
 
     // Private key block: checkint x2 + type + pubkey + full privkey (seed+pub) + comment
-    final rng   = Random.secure();
+    final rng = Random.secure();
     final check = rng.nextInt(0xFFFFFFFF);
     final fullPriv = Uint8List(64)
       ..setAll(0, seed)
@@ -267,11 +285,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final privWrapped = _sshString(padded);
 
     final body = magic.codeUnits + header + pubKeyWrapped + privWrapped;
-    final b64  = base64Encode(body);
+    final b64 = base64Encode(body);
     // Wrap at 70 chars
     final lines = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');
     for (var i = 0; i < b64.length; i += 70) {
-      lines.writeln(b64.substring(i, i + 70 > b64.length ? b64.length : i + 70));
+      lines
+          .writeln(b64.substring(i, i + 70 > b64.length ? b64.length : i + 70));
     }
     lines.write('-----END OPENSSH PRIVATE KEY-----');
     return Uint8List.fromList(lines.toString().codeUnits);
@@ -282,9 +301,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return _uint32(bytes.length) + bytes;
   }
 
-  List<int> _uint32(int v) => [
-        (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF
-      ];
+  List<int> _uint32(int v) =>
+      [(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
 
   // ── Whitelist: load folder ────────────────────────────────────────────────
 
@@ -292,12 +310,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final dirPath = await FilePicker.platform.getDirectoryPath();
       if (dirPath == null) return;
-      final dir     = Directory(dirPath);
+      final dir = Directory(dirPath);
       final entries = <WhitelistEntry>[];
       await for (final entity in dir.list(recursive: false)) {
         if (entity is File) {
           try {
-            final bytes  = await entity.readAsBytes();
+            final bytes = await entity.readAsBytes();
             final pubKey = tryParsePublicKeyFile(bytes);
             if (pubKey != null) {
               var name = entity.path.split(Platform.pathSeparator).last;
@@ -309,11 +327,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           } catch (_) {}
         }
       }
-      if (entries.isEmpty) { _setError('No valid ed25519 keys found in folder'); return; }
+      if (entries.isEmpty) {
+        _setError('No valid ed25519 keys found in folder');
+        return;
+      }
       await _settings.saveWhitelistEntries(entries);
-      setState(() { _wlEntries = entries; _nicknames = _buildNicknames(entries); _error = null; });
+      setState(() {
+        _wlEntries = entries;
+        _nicknames = _buildNicknames(entries);
+        _error = null;
+      });
       _tryApplyConfig();
-    } catch (e) { _setError('Failed to load whitelist: $e'); }
+    } catch (e) {
+      _setError('Failed to load whitelist: $e');
+    }
   }
 
   // ── Whitelist: load files ─────────────────────────────────────────────────
@@ -330,19 +357,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final pubKey = tryParsePublicKeyFile(bytes);
         if (pubKey != null) {
           var name = file.name;
-          if (name.toLowerCase().endsWith('.pub')) name = name.substring(0, name.length - 4);
+          if (name.toLowerCase().endsWith('.pub'))
+            name = name.substring(0, name.length - 4);
           entries.add(WhitelistEntry(bytes: pubKey, name: name));
         }
       }
-      if (entries.isEmpty) { _setError('No valid ed25519 keys found'); return; }
+      if (entries.isEmpty) {
+        _setError('No valid ed25519 keys found');
+        return;
+      }
       final combined = [..._wlEntries];
       for (final e in entries) {
         if (!combined.any((x) => x.hexKey == e.hexKey)) combined.add(e);
       }
       await _settings.saveWhitelistEntries(combined);
-      setState(() { _wlEntries = combined; _nicknames = _buildNicknames(combined); _error = null; });
+      setState(() {
+        _wlEntries = combined;
+        _nicknames = _buildNicknames(combined);
+        _error = null;
+      });
       _tryApplyConfig();
-    } catch (e) { _setError('Failed to load whitelist files: $e'); }
+    } catch (e) {
+      _setError('Failed to load whitelist files: $e');
+    }
   }
 
   // ── Whitelist: paste from clipboard ──────────────────────────────────────
@@ -351,28 +388,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       final text = data?.text?.trim() ?? '';
-      if (text.isEmpty) { _setError('Clipboard is empty'); return; }
-      final bytes    = Uint8List.fromList(text.codeUnits);
-      final pubKey   = tryParsePublicKeyFile(bytes);
+      if (text.isEmpty) {
+        _setError('Clipboard is empty');
+        return;
+      }
+      final bytes = Uint8List.fromList(text.codeUnits);
+      final pubKey = tryParsePublicKeyFile(bytes);
       if (pubKey == null) {
         // Try hex decode
         final hexEntry = _tryHexKey(text);
-        if (hexEntry == null) { _setError('Not a valid Ed25519 public key'); return; }
+        if (hexEntry == null) {
+          _setError('Not a valid Ed25519 public key');
+          return;
+        }
         await _addWhitelistEntry(hexEntry);
       } else {
         final name = 'peer_${_wlEntries.length + 1}';
         await _addWhitelistEntry(WhitelistEntry(bytes: pubKey, name: name));
       }
-    } catch (e) { _setError('Paste failed: $e'); }
+    } catch (e) {
+      _setError('Paste failed: $e');
+    }
   }
 
   WhitelistEntry? _tryHexKey(String hex) {
     hex = hex.replaceAll(RegExp(r'\s'), '');
     if (hex.length != 64) return null;
     try {
-      final bytes = Uint8List.fromList(
-          List.generate(32, (i) => int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16)));
-      return WhitelistEntry(bytes: bytes, name: 'peer_${_wlEntries.length + 1}');
+      final bytes = Uint8List.fromList(List.generate(
+          32, (i) => int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16)));
+      return WhitelistEntry(
+          bytes: bytes, name: 'peer_${_wlEntries.length + 1}');
     } catch (_) {
       return null;
     }
@@ -385,7 +431,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     final combined = [..._wlEntries, entry];
     await _settings.saveWhitelistEntries(combined);
-    setState(() { _wlEntries = combined; _nicknames = _buildNicknames(combined); _error = null; });
+    setState(() {
+      _wlEntries = combined;
+      _nicknames = _buildNicknames(combined);
+      _error = null;
+    });
     _tryApplyConfig();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -397,8 +447,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Whitelist: rename ─────────────────────────────────────────────────────
 
   Future<void> _renameEntry(int index) async {
-    final entry   = _wlEntries[index];
-    final ctrl    = TextEditingController(text: entry.name);
+    final entry = _wlEntries[index];
+    final ctrl = TextEditingController(text: entry.name);
     final newName = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
@@ -409,7 +459,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           decoration: const InputDecoration(labelText: 'Display name'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(context, ctrl.text.trim()),
             child: const Text('Save'),
@@ -422,7 +474,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final updated = List<WhitelistEntry>.from(_wlEntries);
     updated[index] = entry.copyWithName(newName);
     await _settings.saveWhitelistEntries(updated);
-    setState(() { _wlEntries = updated; _nicknames = _buildNicknames(updated); });
+    setState(() {
+      _wlEntries = updated;
+      _nicknames = _buildNicknames(updated);
+    });
     _tryApplyConfig();
   }
 
@@ -431,7 +486,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _removeEntry(int index) async {
     final newList = List<WhitelistEntry>.from(_wlEntries)..removeAt(index);
     await _settings.saveWhitelistEntries(newList);
-    setState(() { _wlEntries = newList; _nicknames = _buildNicknames(newList); });
+    setState(() {
+      _wlEntries = newList;
+      _nicknames = _buildNicknames(newList);
+    });
     _tryApplyConfig();
   }
 
@@ -439,13 +497,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _pickUserAvatar() async {
     final picker = ImagePicker();
-    final file   = await picker.pickImage(
-      source: ImageSource.gallery, maxWidth: 512, maxHeight: 512, imageQuality: 80,
+    final file = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 80,
     );
     if (file == null) return;
     final bytes = await file.readAsBytes();
     await _settings.saveUserAvatar(bytes);
-    setState(() { _userAvatar = bytes; _error = null; });
+    setState(() {
+      _userAvatar = bytes;
+      _error = null;
+    });
     widget.onUserAvatarChanged?.call(bytes);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -478,19 +542,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     }
     try {
-      final parsed   = parseOpenSshPrivateKey(_privateKeyBytes!);
-      final keyPair  = makeKeyPair(parsed.seed, parsed.publicKey);
+      final parsed = parseOpenSshPrivateKey(_privateKeyBytes!);
+      final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
       final newConfig = SgtpConfig(
-        serverAddr:          server.isEmpty ? 'localhost:7777' : server,
-        roomUUID:            Uint8List(16),
-        identityKeyPair:     keyPair,
-        myPublicKey:         parsed.publicKey,
-        whitelist:           whitelist,
+        serverAddr: server.isEmpty ? 'localhost:7777' : server,
+        roomUUID: Uint8List(16),
+        identityKeyPair: keyPair,
+        myPublicKey: parsed.publicKey,
+        whitelist: whitelist,
         pingIntervalSeconds: _pingIntervalSeconds,
+        mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
       widget.onConfigChanged?.call(newConfig, _nicknames, server);
-    } catch (e) { _setError('Config error: $e'); }
+    } catch (e) {
+      _setError('Config error: $e');
+    }
   }
 
   void _setError(String msg) => setState(() => _error = msg);
@@ -506,13 +573,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.only(bottom: 100),
         children: [
           _buildProfileSection(),
-          _SettingsGroup(title: 'Connection',          child: _buildConnectionCard()),
-          _SettingsGroup(title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
-          _SettingsGroup(title: 'Network',             child: _buildNetworkCard()),
-          _SettingsGroup(title: 'Interaction',         child: _buildInteractionCard()),
+          _SettingsGroup(title: 'Connection', child: _buildConnectionCard()),
+          _SettingsGroup(
+              title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
+          _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
+          _SettingsGroup(title: 'Media', child: _buildMediaCard()),
+          _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
           _buildGettingStarted(),
           _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
-          _SettingsGroup(title: 'About',               child: _buildAboutCard()),
+          _SettingsGroup(title: 'About', child: _buildAboutCard()),
           const SizedBox(height: 16),
         ],
       ),
@@ -534,19 +603,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       return;
     }
-    final hexKey = _myPublicKey!
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
+    final hexKey =
+        _myPublicKey!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     final shareData = QrShareData(
       type: 'profile',
       publicKeyHex: hexKey,
       nickname: _nickname.isEmpty ? null : _nickname,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
-    final base64Str = shareData.toBase64();
-    final isMobile = !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
 
     showModalBottomSheet<void>(
       context: context,
@@ -556,121 +620,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _nickname.isEmpty ? 'My Profile' : _nickname,
-                          style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${hexKey.substring(0, 8)}…${hexKey.substring(hexKey.length - 8)}',
-                          style: const TextStyle(
-                              fontSize: 12,
-                              fontFamily: 'monospace',
-                              color: AppColors.textSecondary),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close,
-                        color: AppColors.textSecondary),
-                    onPressed: () => Navigator.pop(ctx),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Share this so others can add you as a contact without typing your key manually.',
-                style: TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textSecondary,
-                    height: 1.4),
-              ),
-              const SizedBox(height: 20),
-              // QR code — shown on all platforms
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: QrImageView(
-                    data: base64Str,
-                    version: QrVersions.auto,
-                    size: 240,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppColors.bgSurfaceActive,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: SelectableText(
-                  base64Str,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: AppColors.textSecondary,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              GestureDetector(
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: base64Str));
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Profile copied as base64')),
-                  );
-                },
-                child: Container(
-                  width: double.infinity,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: AppColors.bgSurfaceActive,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.copy_outlined,
-                          size: 18, color: AppColors.textPrimary),
-                      SizedBox(width: 8),
-                      Text('Copy Base64',
-                          style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+        child: PrettyQrSharePanel(
+          data: shareData,
+          title: _nickname.isEmpty ? 'My Profile' : _nickname,
+          subtitle:
+              '${hexKey.substring(0, 8)}…${hexKey.substring(hexKey.length - 8)}',
+          description:
+              'Share this so others can add you as a contact without typing your key manually.',
+          copyMessage: 'Profile hex copied',
+          exportName: _nickname.isEmpty
+              ? 'my-profile'
+              : 'profile-${_nickname.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
         ),
       ),
     );
@@ -678,7 +638,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildProfileSection() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 8),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -690,39 +650,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
               clipBehavior: Clip.none,
               children: [
                 Container(
-                  width: 72, height: 72,
+                  width: 64,
+                  height: 64,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.bgSurface,
                     border: Border.all(color: AppColors.border),
                     image: _userAvatar != null
                         ? DecorationImage(
-                            image: MemoryImage(_userAvatar!),
-                            fit: BoxFit.cover)
+                            image: MemoryImage(_userAvatar!), fit: BoxFit.cover)
                         : null,
                   ),
                   child: _userAvatar == null
                       ? const Icon(Icons.person,
-                          size: 32, color: AppColors.textSecondary)
+                          size: 28, color: AppColors.textSecondary)
                       : null,
                 ),
                 Positioned(
-                  bottom: -2, right: -2,
+                  bottom: -2,
+                  right: -2,
                   child: Container(
-                    width: 26, height: 26,
+                    width: 24,
+                    height: 24,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: AppColors.bgSurfaceActive,
                       border: Border.all(color: AppColors.bgMain, width: 2),
                     ),
                     child: const Icon(Icons.photo_camera,
-                        size: 14, color: AppColors.textPrimary),
+                        size: 13, color: AppColors.textPrimary),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 14),
 
           // Nickname field + share button
           Expanded(
@@ -731,35 +693,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 // Nickname text field
                 Container(
-                  height: 44,
+                  height: 32,
                   decoration: BoxDecoration(
                     color: AppColors.bgSurface,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: AppColors.border),
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
                   child: TextField(
                     controller: _nicknameCtrl,
+                    minLines: 1,
+                    maxLines: 1,
                     onChanged: _saveNickname,
                     onSubmitted: _saveNickname,
+                    textAlignVertical: TextAlignVertical.center,
                     style: const TextStyle(
                         color: AppColors.textPrimary,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        height: 1),
+                    strutStyle: const StrutStyle(
+                      fontSize: 14,
+                      height: 1,
+                      forceStrutHeight: true,
+                    ),
                     decoration: const InputDecoration(
                       hintText: 'Your nickname…',
                       hintStyle: TextStyle(
-                          color: AppColors.textSecondary, fontSize: 15),
+                          color: AppColors.textSecondary,
+                          fontSize: 14,
+                          height: 1),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
                       filled: false,
                       isDense: true,
                       contentPadding: EdgeInsets.zero,
-                      prefixIcon: Icon(Icons.badge_outlined,
-                          size: 16, color: AppColors.textSecondary),
+                      prefixIcon: Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.badge_outlined,
+                            size: 15, color: AppColors.textSecondary),
+                      ),
                       prefixIconConstraints:
-                          BoxConstraints(minWidth: 28, minHeight: 0),
+                          BoxConstraints(minWidth: 24, minHeight: 0),
                     ),
                   ),
                 ),
@@ -768,7 +744,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 GestureDetector(
                   onTap: _showMyProfileShare,
                   child: Container(
-                    height: 36,
+                    height: 32,
                     decoration: BoxDecoration(
                       color: AppColors.bgSurface,
                       borderRadius: BorderRadius.circular(10),
@@ -778,11 +754,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.ios_share_outlined,
-                            size: 15, color: AppColors.textSecondary),
-                        SizedBox(width: 6),
+                            size: 14, color: AppColors.textSecondary),
+                        SizedBox(width: 5),
                         Text('Share My Profile',
                             style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 12,
                                 fontWeight: FontWeight.w500,
                                 color: AppColors.textSecondary)),
                       ],
@@ -825,9 +801,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Private key card ──────────────────────────────────────────────────────
 
   Widget _buildPrivateKeyCard() {
-    final pubHex = _myPublicKey
-        ?.map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
+    final pubHex =
+        _myPublicKey?.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -853,7 +828,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.key_outlined,
               label: 'Generate',
               loading: _isGenerating,
-              onPressed: (_isLoading || _isGenerating) ? null : _generatePrivateKey,
+              onPressed:
+                  (_isLoading || _isGenerating) ? null : _generatePrivateKey,
             ),
           ],
         ),
@@ -864,46 +840,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 8),
-          Stack(
-            children: [
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: AppColors.bgMain,
-                  border: Border.all(color: AppColors.border),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                padding: const EdgeInsets.fromLTRB(12, 12, 48, 32),
-                child: SelectableText(
-                  pubHex,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    color: AppColors.textPrimary,
-                    height: 1.4,
+          Container(
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppColors.bgMain,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(
+                        pubHex,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          color: AppColors.textPrimary,
+                          height: 1.1,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              Positioned(
-                bottom: 8, right: 8,
-                child: GestureDetector(
+                const SizedBox(width: 8),
+                GestureDetector(
                   onTap: () {
                     Clipboard.setData(ClipboardData(text: pubHex));
                     ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Public key copied')));
                   },
                   child: Container(
-                    width: 28, height: 28,
+                    width: 32,
+                    height: 32,
                     decoration: BoxDecoration(
                       color: AppColors.bgSurfaceActive,
                       border: Border.all(color: AppColors.border),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Icon(Icons.content_copy, size: 16, color: AppColors.textPrimary),
+                    child: const Icon(Icons.content_copy,
+                        size: 16, color: AppColors.textPrimary),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ],
@@ -955,7 +940,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   border: Border.all(color: AppColors.border),
                   borderRadius: BorderRadius.circular(16),
                 ),
-                padding: const EdgeInsets.only(left: 12, right: 10, top: 6, bottom: 6),
+                padding: const EdgeInsets.only(
+                    left: 12, right: 10, top: 6, bottom: 6),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -972,7 +958,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(width: 6),
                     GestureDetector(
                       onTap: () => _showDeleteConfirm(i),
-                      child: const Icon(Icons.close, size: 16, color: AppColors.statusRed),
+                      child: const Icon(Icons.close,
+                          size: 16, color: AppColors.statusRed),
                     ),
                   ],
                 ),
@@ -982,7 +969,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
         if (_error != null) ...[
           const SizedBox(height: 12),
-          Text(_error!, style: const TextStyle(fontSize: 13, color: AppColors.statusRed)),
+          Text(_error!,
+              style: const TextStyle(fontSize: 13, color: AppColors.statusRed)),
         ],
       ],
     );
@@ -1005,8 +993,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
                   trackHeight: 4,
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 10),
+                  overlayShape:
+                      const RoundSliderOverlayShape(overlayRadius: 18),
                   activeTrackColor: AppColors.border,
                   inactiveTrackColor: AppColors.border,
                   thumbColor: Colors.white,
@@ -1014,11 +1004,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 child: Slider(
                   value: _pingIntervalSeconds.toDouble(),
-                  min: 5, max: 120,
+                  min: 5,
+                  max: 120,
                   onChanged: (v) {
                     setState(() => _pingIntervalSeconds = v.round());
                     SharedPreferences.getInstance().then(
-                      (p) => p.setInt('sgtp_ping_interval', _pingIntervalSeconds),
+                      (p) =>
+                          p.setInt('sgtp_ping_interval', _pingIntervalSeconds),
                     );
                     _tryApplyConfig();
                   },
@@ -1039,6 +1031,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMediaCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SwitchRow(
+          label: 'Compress my files',
+          value: _compressFiles,
+          onChanged: (v) async {
+            final updated = MediaTransferSettings(
+              compressFiles: v,
+              compressPhotos: _compressPhotos,
+              compressVideos: _compressVideos,
+              mediaChunkSizeBytes: _mediaChunkSizeBytes,
+            );
+            await _settings.saveMediaTransferSettings(updated);
+            setState(() => _compressFiles = v);
+          },
+        ),
+        if (_compressFiles) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Compress selected file types before upload.',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _ChoiceChip(
+                label: 'Photos',
+                selected: _compressPhotos,
+                onTap: () async {
+                  final next = !_compressPhotos;
+                  final updated = MediaTransferSettings(
+                    compressFiles: _compressFiles,
+                    compressPhotos: next,
+                    compressVideos: _compressVideos,
+                    mediaChunkSizeBytes: _mediaChunkSizeBytes,
+                  );
+                  await _settings.saveMediaTransferSettings(updated);
+                  setState(() => _compressPhotos = next);
+                },
+              ),
+              const SizedBox(width: 8),
+              _ChoiceChip(
+                label: 'Videos',
+                selected: _compressVideos,
+                onTap: () async {
+                  final next = !_compressVideos;
+                  final updated = MediaTransferSettings(
+                    compressFiles: _compressFiles,
+                    compressPhotos: _compressPhotos,
+                    compressVideos: next,
+                    mediaChunkSizeBytes: _mediaChunkSizeBytes,
+                  );
+                  await _settings.saveMediaTransferSettings(updated);
+                  setState(() => _compressVideos = next);
+                },
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 16),
+        const Text(
+          'Outgoing media chunk size',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: SgtpConstants.allowedMediaChunkSizes.map((size) {
+            final selected = _mediaChunkSizeBytes == size;
+            final kb = size ~/ 1024;
+            return _ChoiceChip(
+              label: '$kb KB',
+              selected: selected,
+              onTap: () async {
+                final updated = MediaTransferSettings(
+                  compressFiles: _compressFiles,
+                  compressPhotos: _compressPhotos,
+                  compressVideos: _compressVideos,
+                  mediaChunkSizeBytes: size,
+                );
+                await _settings.saveMediaTransferSettings(updated);
+                setState(() => _mediaChunkSizeBytes = size);
+                _tryApplyConfig();
+              },
+            );
+          }).toList(),
         ),
       ],
     );
@@ -1106,10 +1192,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildGettingStarted() {
     const steps = [
       ('Generate key:', 'Create or load an Ed25519 private key.'),
-      ('Add peers:',    'Whitelist public keys of your friends.'),
-      ('Server:',       'Enter a valid SGTP relay address.'),
-      ('Rooms:',        'Create a new room or join by UUID.'),
-      ('Chat:',         'Send messages (End-to-End Encrypted).'),
+      ('Add peers:', 'Whitelist public keys of your friends.'),
+      ('Server:', 'Enter a valid SGTP relay address.'),
+      ('Rooms:', 'Create a new room or join by UUID.'),
+      ('Chat:', 'Send messages (End-to-End Encrypted).'),
     ];
     return Container(
       margin: const EdgeInsets.only(bottom: 24),
@@ -1138,7 +1224,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const Text(
               'Follow these steps to start chatting securely:',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary, height: 1.6),
+              style: TextStyle(
+                  fontSize: 14, color: AppColors.textSecondary, height: 1.6),
             ),
             const SizedBox(height: 8),
             ...List.generate(steps.length, (i) {
@@ -1149,7 +1236,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('${i + 1}. ',
-                        style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                        style: const TextStyle(
+                            fontSize: 14, color: AppColors.textSecondary)),
                     Expanded(
                       child: Text.rich(TextSpan(children: [
                         TextSpan(
@@ -1194,15 +1282,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    count == 0 ? 'No log entries yet' : '$count entries in memory',
+                    count == 0
+                        ? 'No log entries yet'
+                        : '$count entries in memory',
                     style: const TextStyle(
                         fontSize: 14, color: AppColors.textSecondary),
                   ),
                   const SizedBox(height: 2),
                   const Text(
                     'Tap to view live logs, filter by level, or copy.',
-                    style: TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary),
+                    style:
+                        TextStyle(fontSize: 12, color: AppColors.textSecondary),
                   ),
                 ],
               ),
@@ -1233,7 +1323,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         _AboutRow(label: 'App Version', value: '1.0.0-beta'),
         const SizedBox(height: 4),
-        _AboutRow(label: 'Protocol',    value: 'SGTP v1'),
+        _AboutRow(label: 'Protocol', value: 'SGTP v1'),
         const SizedBox(height: 12),
         GestureDetector(
           onTap: _launchGitHub,
@@ -1262,9 +1352,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Remove "${entry.name}" from whitelist?\n\nThis applies to new rooms immediately.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           TextButton(
-            onPressed: () { Navigator.pop(context); _removeEntry(index); },
+            onPressed: () {
+              Navigator.pop(context);
+              _removeEntry(index);
+            },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Remove'),
           ),
@@ -1402,7 +1496,8 @@ class _ActionButton extends StatelessWidget {
             children: [
               if (loading)
                 const SizedBox(
-                  width: 18, height: 18,
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: AppColors.textPrimary),
                 )
@@ -1435,8 +1530,11 @@ class _AboutRow extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-        Text(value,  style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+        Text(label,
+            style:
+                const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+        Text(value,
+            style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
       ],
     );
   }
@@ -1464,7 +1562,8 @@ class _SwitchRow extends StatelessWidget {
   final String label;
   final bool value;
   final ValueChanged<bool> onChanged;
-  const _SwitchRow({required this.label, required this.value, required this.onChanged});
+  const _SwitchRow(
+      {required this.label, required this.value, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -1472,7 +1571,8 @@ class _SwitchRow extends StatelessWidget {
       children: [
         Expanded(
           child: Text(label,
-              style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+              style:
+                  const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
         ),
         Switch(
           value: value,
@@ -1489,7 +1589,8 @@ class _ChoiceChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _ChoiceChip({required this.label, required this.selected, required this.onTap});
+  const _ChoiceChip(
+      {required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1498,7 +1599,9 @@ class _ChoiceChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppColors.accentBlue.withAlpha(40) : AppColors.bgSurfaceActive,
+          color: selected
+              ? AppColors.accentBlue.withAlpha(40)
+              : AppColors.bgSurfaceActive,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: selected ? AppColors.accentBlue : AppColors.border,

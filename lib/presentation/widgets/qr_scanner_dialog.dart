@@ -54,7 +54,7 @@ class _QrScannerDialogState extends State<QrScannerDialog>
 
   void _onScan(Code code) {
     if (_handled || !code.isValid || code.text == null) return;
-    final data = QrShareData.fromBase64(code.text!);
+    final data = QrShareData.parse(code.text!);
     if (data != null) {
       _handled = true;
       Navigator.pop(context, data);
@@ -99,7 +99,7 @@ class _QrScannerDialogState extends State<QrScannerDialog>
       return;
     }
 
-    final data = QrShareData.fromBase64(code.text!);
+    final data = QrShareData.parse(code.text!);
     if (data != null && !_handled) {
       _handled = true;
       Navigator.pop(context, data);
@@ -168,13 +168,17 @@ class _QrScannerDialogState extends State<QrScannerDialog>
 
           // ── Floating AppBar ──────────────────────────────────────────────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: _buildAppBar(context),
           ),
 
           // ── Gallery button ───────────────────────────────────────────────
           Positioned(
-            bottom: 40, left: 0, right: 0,
+            bottom: 40,
+            left: 0,
+            right: 0,
             child: Center(child: _buildGalleryButton()),
           ),
         ],
@@ -279,8 +283,8 @@ class _QrScannerDialogState extends State<QrScannerDialog>
                 child: Text(
                   _cameraErrorMsg!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 13, color: Color(0xFF8E8E93)),
+                  style:
+                      const TextStyle(fontSize: 13, color: Color(0xFF8E8E93)),
                 ),
               ),
             ],
@@ -334,7 +338,10 @@ class _WindowsScannerState extends State<_WindowsScanner> {
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await ctrl.initialize();
-      if (_disposed) { ctrl.dispose(); return; }
+      if (_disposed) {
+        ctrl.dispose();
+        return;
+      }
       if (mounted) setState(() => _ctrl = ctrl);
       _scheduleNextScan();
     } catch (_) {}
@@ -415,18 +422,36 @@ class _ScannerOverlay extends StatelessWidget {
     final top = (screen.height - size) / 2;
 
     return Stack(children: [
-      Positioned(left: 0, top: 0, right: 0, height: top,
-          child: const ColoredBox(color: Color(0xA6000000))),
-      Positioned(left: 0, top: top + size, right: 0, bottom: 0,
-          child: const ColoredBox(color: Color(0xA6000000))),
-      Positioned(left: 0, top: top, width: left, height: size,
-          child: const ColoredBox(color: Color(0xA6000000))),
-      Positioned(left: left + size, top: top, right: 0, height: size,
+      Positioned(
+          left: 0,
+          top: 0,
+          right: 0,
+          height: top,
           child: const ColoredBox(color: Color(0xA6000000))),
       Positioned(
-        left: left, top: top,
+          left: 0,
+          top: top + size,
+          right: 0,
+          bottom: 0,
+          child: const ColoredBox(color: Color(0xA6000000))),
+      Positioned(
+          left: 0,
+          top: top,
+          width: left,
+          height: size,
+          child: const ColoredBox(color: Color(0xA6000000))),
+      Positioned(
+          left: left + size,
+          top: top,
+          right: 0,
+          height: size,
+          child: const ColoredBox(color: Color(0xA6000000))),
+      Positioned(
+        left: left,
+        top: top,
         child: SizedBox(
-          width: size, height: size,
+          width: size,
+          height: size,
           child: CustomPaint(painter: _CornerPainter()),
         ),
       ),
@@ -470,22 +495,34 @@ class _CornerPainter extends CustomPainter {
     final h = size.height;
     final radius = const Radius.circular(r);
 
-    canvas.drawPath(Path()
-      ..moveTo(0, arm)..lineTo(0, r)
-      ..arcToPoint(Offset(r, 0), radius: radius, clockwise: true)
-      ..lineTo(arm, 0), paint);
-    canvas.drawPath(Path()
-      ..moveTo(w - arm, 0)..lineTo(w - r, 0)
-      ..arcToPoint(Offset(w, r), radius: radius, clockwise: false)
-      ..lineTo(w, arm), paint);
-    canvas.drawPath(Path()
-      ..moveTo(0, h - arm)..lineTo(0, h - r)
-      ..arcToPoint(Offset(r, h), radius: radius, clockwise: false)
-      ..lineTo(arm, h), paint);
-    canvas.drawPath(Path()
-      ..moveTo(w - arm, h)..lineTo(w - r, h)
-      ..arcToPoint(Offset(w, h - r), radius: radius, clockwise: true)
-      ..lineTo(w, h - arm), paint);
+    canvas.drawPath(
+        Path()
+          ..moveTo(0, arm)
+          ..lineTo(0, r)
+          ..arcToPoint(Offset(r, 0), radius: radius, clockwise: true)
+          ..lineTo(arm, 0),
+        paint);
+    canvas.drawPath(
+        Path()
+          ..moveTo(w - arm, 0)
+          ..lineTo(w - r, 0)
+          ..arcToPoint(Offset(w, r), radius: radius, clockwise: false)
+          ..lineTo(w, arm),
+        paint);
+    canvas.drawPath(
+        Path()
+          ..moveTo(0, h - arm)
+          ..lineTo(0, h - r)
+          ..arcToPoint(Offset(r, h), radius: radius, clockwise: false)
+          ..lineTo(arm, h),
+        paint);
+    canvas.drawPath(
+        Path()
+          ..moveTo(w - arm, h)
+          ..lineTo(w - r, h)
+          ..arcToPoint(Offset(w, h - r), radius: radius, clockwise: true)
+          ..lineTo(w, h - arm),
+        paint);
   }
 
   @override
@@ -495,7 +532,8 @@ class _CornerPainter extends CustomPainter {
 // ── Floating icon button ──────────────────────────────────────────────────────
 
 class _IconBtn extends StatelessWidget {
-  const _IconBtn({required this.icon, required this.onTap, this.iconColor = Colors.white});
+  const _IconBtn(
+      {required this.icon, required this.onTap, this.iconColor = Colors.white});
   final IconData icon;
   final VoidCallback? onTap;
   final Color iconColor;

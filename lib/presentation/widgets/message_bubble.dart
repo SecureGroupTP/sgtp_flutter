@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:audioplayers/audioplayers.dart' hide PlayerState;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -11,6 +12,39 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/app_theme.dart';
 import '../../core/interaction_prefs.dart';
 import '../../domain/entities/message.dart';
+
+Size _fitSizeForAspectRatio({
+  required double aspectRatio,
+  required double maxWidth,
+  required double maxHeight,
+}) {
+  final safeAspectRatio =
+      aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 16 / 9;
+  final fitted = applyBoxFit(
+    BoxFit.contain,
+    Size(safeAspectRatio, 1),
+    Size(maxWidth, maxHeight),
+  ).destination;
+  return Size(
+    math.max(1, fitted.width),
+    math.max(1, fitted.height),
+  );
+}
+
+Future<void> _waitForVideoMetadata(Player player) async {
+  final stopwatch = Stopwatch()..start();
+  while (stopwatch.elapsed < const Duration(seconds: 3)) {
+    final hasSize =
+        (player.state.videoParams.dw ?? player.state.width ?? 0) > 0 &&
+            (player.state.videoParams.dh ?? player.state.height ?? 0) > 0;
+    final hasDuration = player.state.duration > Duration.zero;
+    if (hasSize || hasDuration) {
+      break;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  await Future<void>.delayed(const Duration(milliseconds: 200));
+}
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
@@ -41,14 +75,25 @@ class MessageBubble extends StatelessWidget {
     this.peerCount = 0,
     this.onReply,
     this.onReact,
-    this.quickEmojis = const ['👍','❤️','😂','😮','😢','🔥','👏','🎉','🤔','💯'],
+    this.quickEmojis = const [
+      '👍',
+      '❤️',
+      '😂',
+      '😮',
+      '😢',
+      '🔥',
+      '👏',
+      '🎉',
+      '🤔',
+      '💯'
+    ],
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme   = Theme.of(context);
-    final cs      = theme.colorScheme;
-    final isMe    = message.isFromMe;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isMe = message.isFromMe;
     final timeStr = _formatTime(message.receivedAt);
     final senderLabel = _buildSenderLabel();
 
@@ -68,7 +113,7 @@ class MessageBubble extends StatelessWidget {
     // Voice messages: no bubble frame but need reactions row — fall through to
     // the main Column below. Only skip if it's truly invisible.
     if (message.type == MessageType.voice) {
-      const ownBubbleBg   = Color(0xFF0A84FF);
+      const ownBubbleBg = Color(0xFF0A84FF);
       const otherBubbleBg = Color(0xFF1F1F24);
       final bgColor = isMe ? ownBubbleBg : otherBubbleBg;
 
@@ -86,22 +131,24 @@ class MessageBubble extends StatelessWidget {
               decoration: BoxDecoration(
                 color: bgColor,
                 borderRadius: BorderRadius.only(
-                  topLeft:     const Radius.circular(16),
-                  topRight:    const Radius.circular(16),
-                  bottomLeft:  Radius.circular(isMe ? 16 : 4),
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isMe ? 16 : 4),
                   bottomRight: Radius.circular(isMe ? 4 : 16),
                 ),
-                border: isMe ? null : Border.all(color: const Color(0xFF2C2C30)),
+                border:
+                    isMe ? null : Border.all(color: const Color(0xFF2C2C30)),
               ),
-              child: _buildVoiceContent(
-                  context, theme, cs.onSurfaceVariant, senderLabel, timeStr, isMe),
+              child: _buildVoiceContent(context, theme, cs.onSurfaceVariant,
+                  senderLabel, timeStr, isMe),
             ),
           ),
         ),
       );
       final reactionsRow = _buildReactionsRow(theme, cs);
       return Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe)
@@ -135,8 +182,10 @@ class MessageBubble extends StatelessWidget {
           alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
             margin: const EdgeInsets.only(
-              left: 8, right: 8,
-              top: 4, bottom: 4,
+              left: 8,
+              right: 8,
+              top: 4,
+              bottom: 4,
             ),
             child: _buildVideoNoteContent(
                 context, theme, Colors.white, senderLabel, timeStr, isMe),
@@ -145,7 +194,8 @@ class MessageBubble extends StatelessWidget {
       );
       final reactionsRow = _buildReactionsRow(theme, cs);
       return Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe)
@@ -178,8 +228,10 @@ class MessageBubble extends StatelessWidget {
           alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
             margin: const EdgeInsets.only(
-              left: 8, right: 8,
-              top: 4, bottom: 4,
+              left: 8,
+              right: 8,
+              top: 4,
+              bottom: 4,
             ),
             child: _buildVideoContent(
               context,
@@ -194,7 +246,8 @@ class MessageBubble extends StatelessWidget {
       );
       final reactionsRow = _buildReactionsRow(theme, cs);
       return Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isMe)
@@ -221,12 +274,12 @@ class MessageBubble extends StatelessWidget {
 
     // Own bubbles: #0A84FF fill, white text
     // Other bubbles: #1F1F24 fill, #8E8E93 text, #2C2C30 border
-    const ownBubbleBg    = Color(0xFF0A84FF);
-    const otherBubbleBg  = Color(0xFF1F1F24);
-    const ownTextColor   = Colors.white;
+    const ownBubbleBg = Color(0xFF0A84FF);
+    const otherBubbleBg = Color(0xFF1F1F24);
+    const ownTextColor = Colors.white;
     const otherTextColor = Color(0xFFF5F5F5);
-    final bgColor   = isMe ? ownBubbleBg   : otherBubbleBg;
-    final textColor = isMe ? ownTextColor  : otherTextColor;
+    final bgColor = isMe ? ownBubbleBg : otherBubbleBg;
+    final textColor = isMe ? ownTextColor : otherTextColor;
 
     // Reply strip rendered INSIDE the bubble (matches design: quote block
     // sits on top of the coloured bubble background).
@@ -236,9 +289,7 @@ class MessageBubble extends StatelessWidget {
         margin: const EdgeInsets.only(left: 8, right: 8, top: 8),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: isMe
-              ? Colors.white.withAlpha(38)
-              : Colors.black.withAlpha(51),
+          color: isMe ? Colors.white.withAlpha(38) : Colors.black.withAlpha(51),
           borderRadius: BorderRadius.circular(6),
           border: Border(
             left: BorderSide(
@@ -259,7 +310,8 @@ class MessageBubble extends StatelessWidget {
                     color: isMe ? Colors.white : const Color(0xFF0A84FF),
                   )),
             Text(message.replyToContent ?? '…',
-                maxLines: 1, overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 13,
                   color: isMe
@@ -276,14 +328,12 @@ class MessageBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.only(
-          topLeft:     const Radius.circular(16),
-          topRight:    const Radius.circular(16),
-          bottomLeft:  Radius.circular(isMe ? 16 : 4),
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: Radius.circular(isMe ? 16 : 4),
           bottomRight: Radius.circular(isMe ? 4 : 16),
         ),
-        border: isMe
-            ? null
-            : Border.all(color: const Color(0xFF2C2C30)),
+        border: isMe ? null : Border.all(color: const Color(0xFF2C2C30)),
       ),
       child: IntrinsicWidth(
         child: Column(
@@ -291,7 +341,8 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (replyStrip != null) replyStrip,
-            _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
+            _buildContent(
+                context, theme, textColor, senderLabel, timeStr, isMe),
           ],
         ),
       ),
@@ -300,8 +351,8 @@ class MessageBubble extends StatelessWidget {
     Widget bubbleWithReply;
     {
       bubbleWithReply = ConstrainedBox(
-        constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         child: innerBubble,
       );
     }
@@ -310,8 +361,12 @@ class MessageBubble extends StatelessWidget {
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onDoubleTap: _doubleTapAction(context),
-        onLongPress: onReact == null ? null : () => _showContextMenu(context, Theme.of(context)),
-        onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, Theme.of(context)),
+        onLongPress: onReact == null
+            ? null
+            : () => _showContextMenu(context, Theme.of(context)),
+        onSecondaryTap: onReact == null
+            ? null
+            : () => _showContextMenu(context, Theme.of(context)),
         behavior: HitTestBehavior.translucent,
         child: Stack(
           clipBehavior: Clip.none,
@@ -331,9 +386,12 @@ class MessageBubble extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       LinearProgressIndicator(
-                        value: message.sendProgress > 0 ? message.sendProgress : null,
+                        value: message.sendProgress > 0
+                            ? message.sendProgress
+                            : null,
                         minHeight: 3,
-                        backgroundColor: Theme.of(context).colorScheme.primary.withAlpha(40),
+                        backgroundColor:
+                            Theme.of(context).colorScheme.primary.withAlpha(40),
                         valueColor: AlwaysStoppedAnimation<Color>(
                             Theme.of(context).colorScheme.primary),
                       ),
@@ -350,7 +408,8 @@ class MessageBubble extends StatelessWidget {
     final reactionsRow = _buildReactionsRow(theme, cs);
 
     return Column(
-      crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         if (!isMe)
@@ -379,8 +438,8 @@ class MessageBubble extends StatelessWidget {
 
   /// Returns the double-tap callback based on platform and user prefs.
   VoidCallback? _doubleTapAction(BuildContext context) {
-    final isDesktop = !kIsWeb &&
-        (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+    final isDesktop =
+        !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
     if (isDesktop) {
       if (InteractionPrefs.doubleTapDesktop == 'reply') return onReply;
       return onReact == null
@@ -395,8 +454,8 @@ class MessageBubble extends StatelessWidget {
 
   /// Shows a context menu with both React and Reply options.
   void _showContextMenu(BuildContext context, ThemeData theme) {
-    final isDesktop = !kIsWeb &&
-        (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+    final isDesktop =
+        !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
     // On mobile, longPress directly opens react picker unless longPressShowsMenu is on.
     if (!isDesktop && !InteractionPrefs.longPressShowsMenu) {
       _showReactionPicker(context, theme);
@@ -416,26 +475,36 @@ class MessageBubble extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(12, 16, 12, 4),
               child: Wrap(
                 spacing: 8,
-                children: quickEmojis.map((e) => GestureDetector(
-                  onTap: () { Navigator.pop(context); onReact?.call(e); },
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(e, style: const TextStyle(fontSize: 24)),
-                  ),
-                )).toList(),
+                children: quickEmojis
+                    .map((e) => GestureDetector(
+                          onTap: () {
+                            Navigator.pop(context);
+                            onReact?.call(e);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child:
+                                Text(e, style: const TextStyle(fontSize: 24)),
+                          ),
+                        ))
+                    .toList(),
               ),
             ),
             const Divider(color: Color(0xFF2C2C30)),
             if (onReply != null)
               ListTile(
-                leading: const Icon(Icons.reply_rounded, color: Color(0xFF8E8E93)),
+                leading:
+                    const Icon(Icons.reply_rounded, color: Color(0xFF8E8E93)),
                 title: const Text('Reply',
                     style: TextStyle(color: Color(0xFFF5F5F5))),
-                onTap: () { Navigator.pop(context); onReply?.call(); },
+                onTap: () {
+                  Navigator.pop(context);
+                  onReply?.call();
+                },
               ),
             ListTile(
               leading: const Icon(Icons.emoji_emotions_outlined,
@@ -462,17 +531,22 @@ class MessageBubble extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: Wrap(
             spacing: 8,
-            children: quickEmojis.map((e) => GestureDetector(
-              onTap: () { Navigator.pop(context); onReact?.call(e); },
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(e, style: const TextStyle(fontSize: 24)),
-              ),
-            )).toList(),
+            children: quickEmojis
+                .map((e) => GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context);
+                        onReact?.call(e);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(e, style: const TextStyle(fontSize: 24)),
+                      ),
+                    ))
+                .toList(),
           ),
         ),
       ),
@@ -527,7 +601,7 @@ class MessageBubble extends StatelessWidget {
     if (isMe) return child;
 
     final avatarBytes = _senderAvatarBytes();
-    final initial     = _senderInitial();
+    final initial = _senderInitial();
 
     final avatar = Container(
       width: 32,
@@ -573,16 +647,16 @@ class MessageBubble extends StatelessWidget {
   /// Read receipts indicator widget (content only, no layout wrapper).
   Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
-    final isMedia = message.type == MessageType.video ||
-        message.type == MessageType.voice;
+    final isMedia =
+        message.type == MessageType.video || message.type == MessageType.voice;
 
     if (message.isSending) {
       return Row(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
-          width: 12, height: 12,
+          width: 12,
+          height: 12,
           child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: const Color(0xFF8E8E93).withAlpha(120)),
+              strokeWidth: 1.5, color: const Color(0xFF8E8E93).withAlpha(120)),
         ),
         const SizedBox(width: 4),
         const Text('Sending…',
@@ -597,7 +671,7 @@ class MessageBubble extends StatelessWidget {
     final readByAll = peerCount > 0 && readers.length >= peerCount;
     final avatarCount = readers.length.clamp(0, 5);
     final avatarCircles = SizedBox(
-      width:  avatarCount * 10.0 + 4,
+      width: avatarCount * 10.0 + 4,
       height: 14,
       child: Stack(
         clipBehavior: Clip.none,
@@ -606,7 +680,8 @@ class MessageBubble extends StatelessWidget {
             Positioned(
               left: i * 10.0,
               child: Container(
-                width: 14, height: 14,
+                width: 14,
+                height: 14,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFF1F1F24),
@@ -629,9 +704,7 @@ class MessageBubble extends StatelessWidget {
 
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(
-        readByAll
-            ? (isMedia ? Icons.visibility : Icons.done_all)
-            : Icons.done,
+        readByAll ? (isMedia ? Icons.visibility : Icons.done_all) : Icons.done,
         size: 14,
         color: readByAll
             ? const Color(0xFF0A84FF)
@@ -644,7 +717,8 @@ class MessageBubble extends StatelessWidget {
 
   /// Meta row shown below every bubble: timestamp + read receipts (own) or
   /// timestamp (other). Mirrors the `.msg-meta` element in the HTML design.
-  Widget _buildMetaRow(ThemeData theme, ColorScheme cs, String timeStr, bool isMe) {
+  Widget _buildMetaRow(
+      ThemeData theme, ColorScheme cs, String timeStr, bool isMe) {
     final timeText = Text(
       '${message.isFromHistory ? '~ ' : ''}$timeStr',
       style: const TextStyle(fontSize: 11, color: Color(0xFF8E8E93)),
@@ -696,7 +770,8 @@ class MessageBubble extends StatelessWidget {
         ? message.senderUUID.substring(0, 8)
         : message.senderUUID;
     // If we have a public key, use a shorter fingerprint
-    if (message.senderPublicKeyHex != null && message.senderPublicKeyHex!.length >= 8) {
+    if (message.senderPublicKeyHex != null &&
+        message.senderPublicKeyHex!.length >= 8) {
       return '~${message.senderPublicKeyHex!.substring(0, 8)}';
     }
     return short;
@@ -708,24 +783,24 @@ class MessageBubble extends StatelessWidget {
       case MessageType.system:
         return _buildSystemContent(context, theme);
       case MessageType.image:
-        return _buildImageContent(context, theme, textColor, senderLabel,
-            timeStr, isMe,
+        return _buildImageContent(
+            context, theme, textColor, senderLabel, timeStr, isMe,
             animated: false);
       case MessageType.gif:
-        return _buildImageContent(context, theme, textColor, senderLabel,
-            timeStr, isMe,
+        return _buildImageContent(
+            context, theme, textColor, senderLabel, timeStr, isMe,
             animated: true);
       case MessageType.video:
         return _buildVideoContent(
             context, theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.videoNote:
-        return _buildVideoNoteContent(context, theme, textColor, senderLabel, timeStr, isMe);
+        return _buildVideoNoteContent(
+            context, theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.voice:
         return _buildVoiceContent(
             context, theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.text:
-        return _buildTextContent(
-            theme, textColor, senderLabel, timeStr, isMe);
+        return _buildTextContent(theme, textColor, senderLabel, timeStr, isMe);
       case MessageType.messageRead:
       case MessageType.reaction:
       case MessageType.viewed:
@@ -800,8 +875,10 @@ class MessageBubble extends StatelessWidget {
   }) {
     return GestureDetector(
       onDoubleTap: _doubleTapAction(context),
-      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
+      onLongPress:
+          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap:
+          onReact == null ? null : () => _showContextMenu(context, theme),
       behavior: HitTestBehavior.translucent,
       child: ClipRRect(
         borderRadius: BorderRadius.only(
@@ -880,11 +957,14 @@ class MessageBubble extends StatelessWidget {
       Color textColor, String senderLabel, String timeStr, bool isMe) {
     return GestureDetector(
       onDoubleTap: _doubleTapAction(context),
-      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
+      onLongPress:
+          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap:
+          onReact == null ? null : () => _showContextMenu(context, theme),
       behavior: HitTestBehavior.translucent,
       child: Column(
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
@@ -911,8 +991,10 @@ class MessageBubble extends StatelessWidget {
       Color textColor, String senderLabel, String timeStr, bool isMe) {
     return GestureDetector(
       onDoubleTap: _doubleTapAction(context),
-      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
+      onLongPress:
+          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap:
+          onReact == null ? null : () => _showContextMenu(context, theme),
       // translucent so video play-button tap still works
       behavior: HitTestBehavior.translucent,
       child: Column(
@@ -936,8 +1018,10 @@ class MessageBubble extends StatelessWidget {
       Color textColor, String senderLabel, String timeStr, bool isMe) {
     return GestureDetector(
       onDoubleTap: _doubleTapAction(context),
-      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
+      onLongPress:
+          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap:
+          onReact == null ? null : () => _showContextMenu(context, theme),
       behavior: HitTestBehavior.translucent,
       child: Column(
         crossAxisAlignment:
@@ -983,11 +1067,11 @@ class _VideoNotePlayer extends StatefulWidget {
 }
 
 class _VideoNotePlayerState extends State<_VideoNotePlayer> {
-  Player?          _player;
+  Player? _player;
   VideoController? _controller;
-  bool _loading     = false;
+  bool _loading = false;
   bool _initialized = false;
-  bool _playing     = false;
+  bool _playing = false;
   String? _tmpPath;
 
   @override
@@ -1010,11 +1094,12 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     setState(() => _loading = true);
     try {
       final tmpDir = await getTemporaryDirectory();
-      final file = File('${tmpDir.path}/vnote_${widget.videoBytes.hashCode}.mp4');
+      final file =
+          File('${tmpDir.path}/vnote_${widget.videoBytes.hashCode}.mp4');
       if (!file.existsSync()) await file.writeAsBytes(widget.videoBytes);
       _tmpPath = file.path;
 
-      final player     = Player();
+      final player = Player();
       final controller = VideoController(player);
       await player.open(Media('file://${file.path}'), play: true);
 
@@ -1025,11 +1110,11 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
 
       if (mounted) {
         setState(() {
-          _player      = player;
-          _controller  = controller;
+          _player = player;
+          _controller = controller;
           _initialized = true;
-          _loading     = false;
-          _playing     = true;
+          _loading = false;
+          _playing = true;
         });
       }
     } catch (e) {
@@ -1157,8 +1242,8 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
     setState(() => _loading = true);
     try {
       final tmpDir = await getTemporaryDirectory();
-      final ext    = widget.mediaName.split('.').last;
-      final file   = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
+      final ext = widget.mediaName.split('.').last;
+      final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
       if (!file.existsSync()) {
         await file.writeAsBytes(widget.videoBytes);
       }
@@ -1168,10 +1253,9 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
       final controller = VideoController(player);
       await player.open(Media('file://${file.path}'), play: true);
       await player.setVolume(0);
-      await _waitForPreviewReady(player);
+      await _waitForVideoMetadata(player);
       final params = player.state.videoParams;
-      final aspectRatio =
-          params.aspect ??
+      final aspectRatio = params.aspect ??
           ((params.dw != null && params.dh != null && params.dh! > 0)
               ? params.dw! / params.dh!
               : null) ??
@@ -1185,9 +1269,8 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
 
       if (mounted) {
         setState(() {
-          _aspectRatio = aspectRatio.isFinite && aspectRatio > 0
-              ? aspectRatio
-              : 16 / 9;
+          _aspectRatio =
+              aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 16 / 9;
           _duration = player.state.duration;
           _player = player;
           _controller = controller;
@@ -1209,29 +1292,20 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
     }
   }
 
-  Future<void> _waitForPreviewReady(Player player) async {
-    final stopwatch = Stopwatch()..start();
-    while (stopwatch.elapsed < const Duration(seconds: 3)) {
-      final hasSize = (player.state.videoParams.dw ?? player.state.width ?? 0) > 0 &&
-          (player.state.videoParams.dh ?? player.state.height ?? 0) > 0;
-      final hasDuration = player.state.duration > Duration.zero;
-      if (hasSize || hasDuration) {
-        break;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-  }
-
   @override
   Widget build(BuildContext context) {
     final sourceAspectRatio = _aspectRatio ?? 16 / 9;
     final isPortraitVideo = sourceAspectRatio < 0.8;
-    final displayAspectRatio = isPortraitVideo ? 4 / 5 : sourceAspectRatio;
-    final maxWidth = isPortraitVideo ? 360.0 : 300.0;
+    final previewFrameAspectRatio = isPortraitVideo ? 4 / 5 : sourceAspectRatio;
+    final previewSize = _fitSizeForAspectRatio(
+      aspectRatio: previewFrameAspectRatio,
+      maxWidth: 300,
+      maxHeight: 360,
+    );
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxWidth),
+    return SizedBox(
+      width: previewSize.width,
+      height: previewSize.height,
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(
@@ -1250,98 +1324,111 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
             bottomLeft: Radius.circular(widget.isMe ? 16 : 4),
             bottomRight: Radius.circular(widget.isMe ? 4 : 16),
           ),
-          child: AspectRatio(
-            aspectRatio: displayAspectRatio,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (_initialized && _controller != null)
-                  FittedBox(
-                    fit: BoxFit.cover,
-                    child: SizedBox(
-                      width: sourceAspectRatio * 220,
-                      height: 220,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (_initialized && _controller != null)
+                Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Opacity(
+                      opacity: 0.35,
                       child: Video(
                         controller: _controller!,
                         controls: NoVideoControls,
+                        fit: BoxFit.cover,
+                        aspectRatio: sourceAspectRatio,
                       ),
                     ),
-                  )
-                else
-                  Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xFF1F1F24), Color(0xFF2C2C30)],
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha(70),
                       ),
                     ),
-                  ),
-                Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withAlpha(26),
-                          Colors.black.withAlpha(90),
-                        ],
+                    Center(
+                      child: Video(
+                        controller: _controller!,
+                        controls: NoVideoControls,
+                        fit: BoxFit.contain,
+                        aspectRatio: sourceAspectRatio,
                       ),
+                    ),
+                  ],
+                )
+              else
+                Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF1F1F24), Color(0xFF2C2C30)],
                     ),
                   ),
                 ),
-                Center(
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withAlpha(26),
+                        Colors.black.withAlpha(90),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Center(
+                child: Container(
+                  width: 58,
+                  height: 58,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withAlpha(150),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withAlpha(50),
+                    ),
+                  ),
+                  child: _loading
+                      ? const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 34,
+                        ),
+                ),
+              ),
+              if (_duration > Duration.zero)
+                Positioned(
+                  right: 10,
+                  bottom: 10,
                   child: Container(
-                    width: 58,
-                    height: 58,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withAlpha(150),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withAlpha(50),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      _fmt(_duration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    child: _loading
-                        ? const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(
-                            Icons.play_arrow_rounded,
-                            color: Colors.white,
-                            size: 34,
-                          ),
                   ),
                 ),
-                if (_duration > Duration.zero)
-                  Positioned(
-                    right: 10,
-                    bottom: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withAlpha(150),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        _fmt(_duration),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -1412,6 +1499,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
       final player = Player();
       final controller = VideoController(player);
       await player.open(Media('file://${file.path}'), play: true);
+      await _waitForVideoMetadata(player);
       final aspectRatio = _resolveAspectRatio(player);
 
       if (!mounted) {
@@ -1444,8 +1532,6 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
     final controller = _controller;
     final isMobile = !_isDesktop;
     final isPortraitVideo = _aspectRatio < 0.8;
-    final viewportAspectRatio =
-        isPortraitVideo && _preferPortraitZoom ? 4 / 5 : _aspectRatio;
 
     return Scaffold(
       backgroundColor: AppColors.bgMain,
@@ -1468,53 +1554,98 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                     children: [
                       Positioned.fill(
                         child: Center(
-                          child: StreamBuilder<bool>(
-                            stream: player.stream.playing,
-                            initialData: player.state.playing,
-                            builder: (context, snapshot) {
-                              final playing = snapshot.data ?? false;
-                              return Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  ColoredBox(
-                                    color: Colors.black,
-                                    child: AspectRatio(
-                                      aspectRatio: viewportAspectRatio,
-                                      child: ClipRect(
-                                        child: FittedBox(
-                                          fit: BoxFit.cover,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final viewportSize = constraints.biggest;
+                              final fittedSize = _fitSizeForAspectRatio(
+                                aspectRatio: _aspectRatio,
+                                maxWidth: viewportSize.width,
+                                maxHeight: viewportSize.height,
+                              );
+                              final shouldFillViewport =
+                                  isPortraitVideo && _preferPortraitZoom;
+                              final playerBoxSize = shouldFillViewport
+                                  ? viewportSize
+                                  : fittedSize;
+
+                              return StreamBuilder<bool>(
+                                stream: player.stream.playing,
+                                initialData: player.state.playing,
+                                builder: (context, snapshot) {
+                                  final playing = snapshot.data ?? false;
+                                  return Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      Positioned.fill(
+                                        child: Stack(
+                                          fit: StackFit.expand,
+                                          children: [
+                                            Opacity(
+                                              opacity:
+                                                  shouldFillViewport ? 1 : 0.28,
+                                              child: Video(
+                                                controller: controller,
+                                                controls: NoVideoControls,
+                                                fit: BoxFit.cover,
+                                                aspectRatio: _aspectRatio,
+                                              ),
+                                            ),
+                                            if (!shouldFillViewport)
+                                              DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black
+                                                      .withAlpha(90),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (!shouldFillViewport)
+                                        Center(
                                           child: SizedBox(
-                                            width: _aspectRatio * 1000,
-                                            height: 1000,
+                                            width: playerBoxSize.width,
+                                            height: playerBoxSize.height,
                                             child: Video(
                                               controller: controller,
                                               controls: NoVideoControls,
+                                              fit: BoxFit.contain,
+                                              aspectRatio: _aspectRatio,
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    ),
-                                  ),
-                                  if (isMobile && !playing)
-                                    IgnorePointer(
-                                      child: Container(
-                                        width: 60,
-                                        height: 60,
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withAlpha(150),
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: Colors.white.withAlpha(50),
+                                      if (shouldFillViewport)
+                                        Positioned.fill(
+                                          child: Video(
+                                            controller: controller,
+                                            controls: NoVideoControls,
+                                            fit: BoxFit.cover,
+                                            aspectRatio: _aspectRatio,
                                           ),
                                         ),
-                                        child: const Icon(
-                                          Icons.play_arrow_rounded,
-                                          color: Colors.white,
-                                          size: 34,
+                                      if (isMobile && !playing)
+                                        IgnorePointer(
+                                          child: Container(
+                                            width: 60,
+                                            height: 60,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  Colors.black.withAlpha(150),
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color:
+                                                    Colors.white.withAlpha(50),
+                                              ),
+                                            ),
+                                            child: const Icon(
+                                              Icons.play_arrow_rounded,
+                                              color: Colors.white,
+                                              size: 34,
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                ],
+                                    ],
+                                  );
+                                },
                               );
                             },
                           ),
@@ -1529,12 +1660,15 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                             child: Column(
                               children: [
                                 Padding(
-                                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                                  padding:
+                                      const EdgeInsets.fromLTRB(8, 8, 8, 0),
                                   child: Row(
                                     children: [
                                       IconButton(
-                                        onPressed: () => Navigator.of(context).pop(),
-                                        icon: const Icon(Icons.arrow_back_rounded),
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(),
+                                        icon: const Icon(
+                                            Icons.arrow_back_rounded),
                                       ),
                                       const Spacer(),
                                       if (isPortraitVideo) ...[
@@ -1542,7 +1676,8 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                           onTap: () {
                                             _onUserActivity();
                                             setState(() {
-                                              _preferPortraitZoom = !_preferPortraitZoom;
+                                              _preferPortraitZoom =
+                                                  !_preferPortraitZoom;
                                             });
                                           },
                                           child: Container(
@@ -1552,11 +1687,15 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                             ),
                                             decoration: BoxDecoration(
                                               color: AppColors.bgSurface,
-                                              borderRadius: BorderRadius.circular(999),
-                                              border: Border.all(color: AppColors.border),
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                              border: Border.all(
+                                                  color: AppColors.border),
                                             ),
                                             child: Text(
-                                              _preferPortraitZoom ? 'Zoom' : 'Fit',
+                                              _preferPortraitZoom
+                                                  ? 'Fill'
+                                                  : 'Fit',
                                               style: const TextStyle(
                                                 color: AppColors.textPrimary,
                                                 fontWeight: FontWeight.w600,
@@ -1580,21 +1719,34 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                               player.setRate(value);
                                             },
                                             itemBuilder: (context) => const [
-                                              PopupMenuItem(value: 0.5, child: Text('0.5x')),
-                                              PopupMenuItem(value: 1.0, child: Text('1.0x')),
-                                              PopupMenuItem(value: 1.25, child: Text('1.25x')),
-                                              PopupMenuItem(value: 1.5, child: Text('1.5x')),
-                                              PopupMenuItem(value: 2.0, child: Text('2.0x')),
+                                              PopupMenuItem(
+                                                  value: 0.5,
+                                                  child: Text('0.5x')),
+                                              PopupMenuItem(
+                                                  value: 1.0,
+                                                  child: Text('1.0x')),
+                                              PopupMenuItem(
+                                                  value: 1.25,
+                                                  child: Text('1.25x')),
+                                              PopupMenuItem(
+                                                  value: 1.5,
+                                                  child: Text('1.5x')),
+                                              PopupMenuItem(
+                                                  value: 2.0,
+                                                  child: Text('2.0x')),
                                             ],
                                             child: Container(
-                                              padding: const EdgeInsets.symmetric(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
                                                 horizontal: 12,
                                                 vertical: 8,
                                               ),
                                               decoration: BoxDecoration(
                                                 color: AppColors.bgSurface,
-                                                borderRadius: BorderRadius.circular(999),
-                                                border: Border.all(color: AppColors.border),
+                                                borderRadius:
+                                                    BorderRadius.circular(999),
+                                                border: Border.all(
+                                                    color: AppColors.border),
                                               ),
                                               child: Text(
                                                 '${rate.toStringAsFixed(rate == rate.roundToDouble() ? 0 : 2)}x',
@@ -1612,7 +1764,8 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                 ),
                                 const Spacer(),
                                 Padding(
-                                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                                  padding:
+                                      const EdgeInsets.fromLTRB(20, 12, 20, 20),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -1620,16 +1773,23 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                         stream: player.stream.position,
                                         initialData: player.state.position,
                                         builder: (context, posSnap) {
-                                          final position = posSnap.data ?? Duration.zero;
+                                          final position =
+                                              posSnap.data ?? Duration.zero;
                                           return StreamBuilder<Duration>(
                                             stream: player.stream.duration,
                                             initialData: player.state.duration,
                                             builder: (context, durSnap) {
-                                              final duration = durSnap.data ?? Duration.zero;
-                                              final maxMs = duration.inMilliseconds.toDouble();
+                                              final duration =
+                                                  durSnap.data ?? Duration.zero;
+                                              final maxMs = duration
+                                                  .inMilliseconds
+                                                  .toDouble();
                                               final value = maxMs > 0
                                                   ? position.inMilliseconds
-                                                      .clamp(0, duration.inMilliseconds)
+                                                      .clamp(
+                                                          0,
+                                                          duration
+                                                              .inMilliseconds)
                                                       .toDouble()
                                                   : 0.0;
                                               return Column(
@@ -1637,7 +1797,9 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                                   _PlayerSliderTheme(
                                                     child: Slider(
                                                       min: 0,
-                                                      max: maxMs <= 0 ? 1 : maxMs,
+                                                      max: maxMs <= 0
+                                                          ? 1
+                                                          : maxMs,
                                                       value: value,
                                                       onChanged: maxMs <= 0
                                                           ? null
@@ -1645,7 +1807,8 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                                               _onUserActivity();
                                                               player.seek(
                                                                 Duration(
-                                                                  milliseconds: v.round(),
+                                                                  milliseconds:
+                                                                      v.round(),
                                                                 ),
                                                               );
                                                             },
@@ -1653,19 +1816,22 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                                   ),
                                                   Row(
                                                     mainAxisAlignment:
-                                                        MainAxisAlignment.spaceBetween,
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
                                                     children: [
                                                       Text(
                                                         _fmt(position),
                                                         style: const TextStyle(
-                                                          color: AppColors.textSecondary,
+                                                          color: AppColors
+                                                              .textSecondary,
                                                           fontSize: 12,
                                                         ),
                                                       ),
                                                       Text(
                                                         _fmt(duration),
                                                         style: const TextStyle(
-                                                          color: AppColors.textSecondary,
+                                                          color: AppColors
+                                                              .textSecondary,
                                                           fontSize: 12,
                                                         ),
                                                       ),
@@ -1685,11 +1851,14 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                               stream: player.stream.playing,
                                               initialData: player.state.playing,
                                               builder: (context, snapshot) {
-                                                final playing = snapshot.data ?? false;
+                                                final playing =
+                                                    snapshot.data ?? false;
                                                 return IconButton.filled(
                                                   style: IconButton.styleFrom(
-                                                    backgroundColor: AppColors.bgSurface,
-                                                    foregroundColor: AppColors.textPrimary,
+                                                    backgroundColor:
+                                                        AppColors.bgSurface,
+                                                    foregroundColor:
+                                                        AppColors.textPrimary,
                                                   ),
                                                   onPressed: () {
                                                     _onUserActivity();
@@ -1698,7 +1867,8 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                                   icon: Icon(
                                                     playing
                                                         ? Icons.pause_rounded
-                                                        : Icons.play_arrow_rounded,
+                                                        : Icons
+                                                            .play_arrow_rounded,
                                                   ),
                                                 );
                                               },
@@ -1709,7 +1879,8 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                               initialData: player.state.volume,
                                               builder: (context, snapshot) {
                                                 final volume =
-                                                    (snapshot.data ?? 100).clamp(0, 100);
+                                                    (snapshot.data ?? 100)
+                                                        .clamp(0, 100);
                                                 return Expanded(
                                                   child: Row(
                                                     children: [
@@ -1717,25 +1888,33 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
                                                         onPressed: () {
                                                           _onUserActivity();
                                                           player.setVolume(
-                                                            volume == 0 ? 100 : 0,
+                                                            volume == 0
+                                                                ? 100
+                                                                : 0,
                                                           );
                                                         },
                                                         icon: Icon(
                                                           volume == 0
-                                                              ? Icons.volume_off_rounded
-                                                              : Icons.volume_up_rounded,
-                                                          color: AppColors.textPrimary,
+                                                              ? Icons
+                                                                  .volume_off_rounded
+                                                              : Icons
+                                                                  .volume_up_rounded,
+                                                          color: AppColors
+                                                              .textPrimary,
                                                         ),
                                                       ),
                                                       Expanded(
-                                                        child: _PlayerSliderTheme(
+                                                        child:
+                                                            _PlayerSliderTheme(
                                                           child: Slider(
                                                             min: 0,
                                                             max: 100,
-                                                            value: volume.toDouble(),
+                                                            value: volume
+                                                                .toDouble(),
                                                             onChanged: (value) {
                                                               _onUserActivity();
-                                                              player.setVolume(value);
+                                                              player.setVolume(
+                                                                  value);
                                                             },
                                                           ),
                                                         ),
@@ -1771,8 +1950,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
 
   double _resolveAspectRatio(Player player) {
     final params = player.state.videoParams;
-    final aspect =
-        params.aspect ??
+    final aspect = params.aspect ??
         ((params.dw != null && params.dh != null && params.dh! > 0)
             ? params.dw! / params.dh!
             : null) ??
@@ -1906,17 +2084,17 @@ class _VoicePlayer extends StatefulWidget {
 }
 
 class _VoicePlayerState extends State<_VoicePlayer> {
-  final _player   = AudioPlayer();
-  bool _playing   = false;
-  bool _loading   = false;
+  final _player = AudioPlayer();
+  bool _playing = false;
+  bool _loading = false;
   bool _metaReady = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   String? _tmpPath;
   late final List<double> _waveform;
 
-  static const _barCount   = 10;
-  static const _waveWidth  = 120.0;
+  static const _barCount = 10;
+  static const _waveWidth = 120.0;
   static const _waveHeight = 20.0;
 
   @override
@@ -1927,7 +2105,12 @@ class _VoicePlayerState extends State<_VoicePlayer> {
       if (mounted) setState(() => _playing = s.name == 'playing');
     });
     _player.onDurationChanged.listen((d) {
-      if (mounted) setState(() { _duration = d; _metaReady = true; });
+      if (mounted) {
+        setState(() {
+          _duration = d;
+          _metaReady = true;
+        });
+      }
     });
     _player.onPositionChanged.listen((p) {
       if (mounted) setState(() => _position = p);
@@ -1955,7 +2138,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     // Compute raw average deviation per bar
     final raw = List.generate(count, (i) {
       final start = (i * step).round();
-      final end   = ((i + 1) * step).round().clamp(0, bytes.length);
+      final end = ((i + 1) * step).round().clamp(0, bytes.length);
       if (start >= bytes.length) return 0.0;
       double sum = 0;
       for (int j = start; j < end; j++) {
@@ -1966,7 +2149,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     // Normalize to [0.08, 1.0] using actual min/max for full dynamic range
     final minVal = raw.reduce((a, b) => a < b ? a : b);
     final maxVal = raw.reduce((a, b) => a > b ? a : b);
-    final range  = maxVal - minVal;
+    final range = maxVal - minVal;
     if (range < 1.0) return List.filled(count, 0.4);
     return raw.map((v) => (v - minVal) / range * 0.92 + 0.08).toList();
   }
@@ -1981,23 +2164,27 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   Future<void> _prepareTmp() async {
     if (_tmpPath != null) return;
     final tmpDir = await getTemporaryDirectory();
-    final ext    = _mimeToExt(widget.mediaMime);
-    final file   = File('${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
+    final ext = _mimeToExt(widget.mediaMime);
+    final file =
+        File('${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
     if (!file.existsSync()) await file.writeAsBytes(widget.audioBytes);
     _tmpPath = file.path;
   }
 
   String _mimeToExt(String mime) => switch (mime) {
-    'audio/m4a'  => 'm4a',
-    'audio/aac'  => 'aac',
-    'audio/opus' => 'opus',
-    'audio/mpeg' => 'mp3',
-    _            => 'audio',
-  };
+        'audio/m4a' => 'm4a',
+        'audio/aac' => 'aac',
+        'audio/opus' => 'opus',
+        'audio/mpeg' => 'mp3',
+        _ => 'audio',
+      };
 
   Future<void> _togglePlay() async {
     if (_loading) return;
-    if (_playing) { await _player.pause(); return; }
+    if (_playing) {
+      await _player.pause();
+      return;
+    }
     setState(() => _loading = true);
     try {
       await _prepareTmp();
@@ -2018,7 +2205,8 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   void _seekFromTap(double tapX) {
     if (_duration.inMilliseconds == 0) return;
     final ratio = (tapX / _waveWidth).clamp(0.0, 1.0);
-    _player.seek(Duration(milliseconds: (ratio * _duration.inMilliseconds).round()));
+    _player.seek(
+        Duration(milliseconds: (ratio * _duration.inMilliseconds).round()));
   }
 
   @override
@@ -2030,15 +2218,13 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     final durLabel = _metaReady ? _fmt(_duration) : '--:--';
 
     // HTML: own bubble → white play button + blue icon; other → dark blue button + white icon
-    final btnBg    = widget.isMe ? Colors.white : const Color(0xFF0056B3);
-    final btnFg    = widget.isMe ? const Color(0xFF0A84FF) : Colors.white;
-    final activeWave   = widget.isMe ? Colors.white : const Color(0xFF0A84FF);
-    final inactiveWave = widget.isMe
-        ? Colors.white.withAlpha(100)
-        : const Color(0xFF8E8E93);
-    final timeColor = widget.isMe
-        ? Colors.white.withAlpha(180)
-        : const Color(0xFF8E8E93);
+    final btnBg = widget.isMe ? Colors.white : const Color(0xFF0056B3);
+    final btnFg = widget.isMe ? const Color(0xFF0A84FF) : Colors.white;
+    final activeWave = widget.isMe ? Colors.white : const Color(0xFF0A84FF);
+    final inactiveWave =
+        widget.isMe ? Colors.white.withAlpha(100) : const Color(0xFF8E8E93);
+    final timeColor =
+        widget.isMe ? Colors.white.withAlpha(180) : const Color(0xFF8E8E93);
 
     // Design: [▶] [waveform] [time] — all on one row
     final displayTime = _playing ? posLabel : durLabel;
@@ -2056,8 +2242,8 @@ class _VoicePlayerState extends State<_VoicePlayer> {
             child: _loading
                 ? Padding(
                     padding: const EdgeInsets.all(9),
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: btnFg),
+                    child:
+                        CircularProgressIndicator(strokeWidth: 2, color: btnFg),
                   )
                 : Icon(_playing ? Icons.pause : Icons.play_arrow,
                     color: btnFg, size: 20),
@@ -2113,24 +2299,27 @@ class _WaveformPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (bars.isEmpty) return;
-    const gap      = 2.0;
-    final barW     = (size.width - gap * (bars.length - 1)) / bars.length;
+    const gap = 2.0;
+    final barW = (size.width - gap * (bars.length - 1)) / bars.length;
     final progressX = size.width * progress;
 
     for (int i = 0; i < bars.length; i++) {
-      final x    = i * (barW + gap);
+      final x = i * (barW + gap);
       final barH = (bars[i] * size.height).clamp(2.0, size.height);
-      final top  = (size.height - barH) / 2;
+      final top = (size.height - barH) / 2;
       final rect = RRect.fromRectAndRadius(
         Rect.fromLTWH(x, top, barW, barH),
         const Radius.circular(2),
       );
       final isActive = (x + barW / 2) < progressX;
-      canvas.drawRRect(rect, Paint()..color = isActive ? activeColor : inactiveColor);
+      canvas.drawRRect(
+          rect, Paint()..color = isActive ? activeColor : inactiveColor);
     }
   }
 
   @override
   bool shouldRepaint(_WaveformPainter old) =>
-      old.progress != progress || old.bars != bars || old.activeColor != activeColor;
+      old.progress != progress ||
+      old.bars != bars ||
+      old.activeColor != activeColor;
 }

@@ -28,22 +28,23 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
 
   // ── Load saved state on startup ──────────────────────────────────────────
 
-  Future<void> _onLoadData(SetupLoadData event, Emitter<SetupState> emit) async {
+  Future<void> _onLoadData(
+      SetupLoadData event, Emitter<SetupState> emit) async {
     final addresses = await _settings.getSavedAddresses();
-    final last      = await _settings.getLastAddress();
+    final last = await _settings.getLastAddress();
 
     // Restore private key
     final savedKey = await _settings.loadPrivateKey();
     Uint8List? privKeyBytes;
-    String?    privKeyPath;
+    String? privKeyPath;
     Uint8List? myPubKey;
 
     if (savedKey != null) {
       try {
         final parsed = parseOpenSshPrivateKey(savedKey.bytes);
         privKeyBytes = savedKey.bytes;
-        privKeyPath  = savedKey.name;
-        myPubKey     = parsed.publicKey;
+        privKeyPath = savedKey.name;
+        myPubKey = parsed.publicKey;
       } catch (_) {
         await _settings.clearPrivateKey();
       }
@@ -52,24 +53,24 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     // Restore whitelist
     final savedWl = await _settings.loadWhitelist();
     List<Uint8List> wlBytes = [];
-    List<String>    wlPaths = [];
+    List<String> wlPaths = [];
     Map<String, String> nicknames = {};
 
     if (savedWl != null) {
-      wlBytes    = savedWl.bytesList;
-      wlPaths    = savedWl.paths;
-      nicknames  = _buildNicknames(wlBytes, wlPaths);
+      wlBytes = savedWl.bytesList;
+      wlPaths = savedWl.paths;
+      nicknames = _buildNicknames(wlBytes, wlPaths);
     }
 
     emit(state.copyWith(
       savedAddresses: addresses,
-      serverAddress:  last ?? '',
+      serverAddress: last ?? '',
       privateKeyBytes: privKeyBytes,
-      privateKeyPath:  privKeyPath,
-      myPublicKey:     myPubKey,
-      whitelistBytes:  wlBytes,
-      whitelistPaths:  wlPaths,
-      nicknames:       nicknames,
+      privateKeyPath: privKeyPath,
+      myPublicKey: myPubKey,
+      whitelistBytes: wlBytes,
+      whitelistPaths: wlPaths,
+      nicknames: nicknames,
       clearError: true,
     ));
   }
@@ -103,9 +104,9 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       await _settings.savePrivateKey(bytes, file.name);
 
       emit(state.copyWith(
-        privateKeyPath:  file.name,
+        privateKeyPath: file.name,
         privateKeyBytes: bytes,
-        myPublicKey:     parsed.publicKey,
+        myPublicKey: parsed.publicKey,
         clearError: true,
       ));
     } catch (e) {
@@ -121,14 +122,14 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       final dirPath = await FilePicker.platform.getDirectoryPath();
       if (dirPath == null) return;
 
-      final dir      = Directory(dirPath);
-      final paths    = <String>[];
+      final dir = Directory(dirPath);
+      final paths = <String>[];
       final bytesList = <Uint8List>[];
 
       await for (final entity in dir.list(recursive: false)) {
         if (entity is File) {
           try {
-            final bytes  = await entity.readAsBytes();
+            final bytes = await entity.readAsBytes();
             final pubKey = tryParsePublicKeyFile(bytes);
             if (pubKey != null) {
               paths.add(entity.path.split(Platform.pathSeparator).last);
@@ -149,9 +150,9 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       final nicknames = _buildNicknames(bytesList, paths);
 
       emit(state.copyWith(
-        whitelistPaths:  paths,
-        whitelistBytes:  bytesList,
-        nicknames:       nicknames,
+        whitelistPaths: paths,
+        whitelistBytes: bytesList,
+        nicknames: nicknames,
         clearError: true,
       ));
     } catch (e) {
@@ -171,7 +172,7 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       );
       if (result == null || result.files.isEmpty) return;
 
-      final paths    = <String>[];
+      final paths = <String>[];
       final bytesList = <Uint8List>[];
 
       for (final file in result.files) {
@@ -195,9 +196,9 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       final nicknames = _buildNicknames(bytesList, paths);
 
       emit(state.copyWith(
-        whitelistPaths:  paths,
-        whitelistBytes:  bytesList,
-        nicknames:       nicknames,
+        whitelistPaths: paths,
+        whitelistBytes: bytesList,
+        nicknames: nicknames,
         clearError: true,
       ));
     } catch (e) {
@@ -209,7 +210,8 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
 
   Future<void> _onConnect(SetupConnect event, Emitter<SetupState> emit) async {
     if (!state.isReadyToConnect) {
-      emit(state.copyWith(error: 'Server address and private key are required'));
+      emit(
+          state.copyWith(error: 'Server address and private key are required'));
       return;
     }
 
@@ -219,25 +221,27 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       final privKeyBytes = state.privateKeyBytes!;
       final parsed = parseOpenSshPrivateKey(privKeyBytes);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
+      final mediaSettings = await _settings.loadMediaTransferSettings();
 
       final whitelist = state.whitelistBytes
           .map((b) => b.map((x) => x.toRadixString(16).padLeft(2, '0')).join())
           .toSet();
 
       final config = SgtpConfig(
-        serverAddr:      state.serverAddress.trim(),
-        roomUUID:        Uint8List(16),
+        serverAddr: state.serverAddress.trim(),
+        roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
-        myPublicKey:     parsed.publicKey,
-        whitelist:       whitelist,
+        myPublicKey: parsed.publicKey,
+        whitelist: whitelist,
+        mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
       );
 
       await _settings.saveAddress(state.serverAddress.trim());
       final updated = await _settings.getSavedAddresses();
 
       emit(state.copyWith(
-        isLoading:       false,
-        savedAddresses:  updated,
+        isLoading: false,
+        savedAddresses: updated,
         connectionConfig: config,
         clearError: true,
       ));
@@ -261,9 +265,8 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       List<Uint8List> bytesList, List<String> paths) {
     final result = <String, String>{};
     for (var i = 0; i < bytesList.length; i++) {
-      final hex = bytesList[i]
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
+      final hex =
+          bytesList[i].map((b) => b.toRadixString(16).padLeft(2, '0')).join();
       var name = paths[i];
       if (name.toLowerCase().endsWith('.pub')) {
         name = name.substring(0, name.length - 4);
@@ -272,5 +275,4 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     }
     return result;
   }
-
 }

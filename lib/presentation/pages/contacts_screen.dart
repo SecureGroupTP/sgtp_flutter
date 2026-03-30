@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../widgets/pretty_qr_share_panel.dart';
 import '../widgets/qr_scanner_dialog.dart';
 
 /// Contacts screen — shows the trusted-peer whitelist.
-/// Users can add peers by public key hex/base64, rename them, delete them.
+/// Users can add peers by public key hex/share-hex, rename them, delete them.
 class ContactsScreen extends StatefulWidget {
   final List<WhitelistEntry> initialEntries;
 
@@ -53,8 +53,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final scored = <({WhitelistEntry entry, int score})>[];
     for (final e in _entries) {
       final name = e.name.toLowerCase();
-      final key  = e.hexKey.toLowerCase();
-      int score  = -1;
+      final key = e.hexKey.toLowerCase();
+      int score = -1;
 
       if (name.startsWith(q) || key.startsWith(q)) {
         score = 0; // prefix match — highest rank
@@ -75,10 +75,72 @@ class _ContactsScreenState extends State<ContactsScreen> {
     widget.onEntriesChanged(_entries);
   }
 
-  // ── Import (QR or base64 paste) ───────────────────────────────────────────
+  // ── Import (QR or hex paste) ──────────────────────────────────────────────
 
   void _openImport() {
-    _openQrScanner();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Import Contact',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  IconButton(
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Choose how you want to add a trusted contact.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 20),
+              _SheetButton(
+                icon: Icons.qr_code_scanner_outlined,
+                label: 'Scan QR Code',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openQrScanner();
+                },
+              ),
+              const SizedBox(height: 12),
+              _SheetButton(
+                icon: Icons.paste_outlined,
+                label: 'Paste Hex',
+                secondary: true,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showBase64ImportSheet();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _openQrScanner() async {
@@ -118,22 +180,22 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           fontWeight: FontWeight.w600,
                           color: AppColors.textPrimary)),
                   IconButton(
-                    icon: const Icon(Icons.close,
-                        color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                     onPressed: () => Navigator.pop(ctx),
                   ),
                 ],
               ),
               const SizedBox(height: 4),
               const Text(
-                  'Paste a base64 contact string or raw 64-char hex key.',
-                  style: TextStyle(
-                      fontSize: 13, color: AppColors.textSecondary)),
+                'Paste a contact share hex string or a raw 64-char public key.',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
               const SizedBox(height: 20),
               _StyledInput(
                 controller: inputCtrl,
                 icon: Icons.key_outlined,
-                hint: 'Base64 or Hex key…',
+                hint: 'Contact hex or public key…',
                 maxLines: 3,
                 monospace: true,
                 error: errorMsg,
@@ -145,8 +207,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 label: 'Import',
                 onTap: () {
                   final raw = inputCtrl.text.trim();
-                  // Try as base64 QrShareData first
-                  final qrData = QrShareData.fromBase64(raw);
+                  // Try as structured share payload first.
+                  final qrData = QrShareData.parse(raw);
                   if (qrData != null) {
                     Navigator.pop(ctx);
                     _handleImportData(qrData);
@@ -160,8 +222,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     _showAddSheetWithKey(hex);
                     return;
                   }
-                  setS(() =>
-                      errorMsg = 'Invalid format: expected base64 or 64-char hex');
+                  setS(() => errorMsg =
+                      'Invalid format: expected contact hex or 64-char public key');
                 },
               ),
             ],
@@ -190,7 +252,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   void _showAddSheetWithKey(String prefilledKey, {String? suggestedName}) {
     final nameCtrl = TextEditingController(text: suggestedName ?? '');
-    final keyCtrl  = TextEditingController(text: prefilledKey);
+    final keyCtrl = TextEditingController(text: prefilledKey);
     String? keyError;
 
     showModalBottomSheet<void>(
@@ -217,8 +279,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           fontWeight: FontWeight.w600,
                           color: AppColors.textPrimary)),
                   IconButton(
-                    icon: const Icon(Icons.close,
-                        color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                     onPressed: () => Navigator.pop(ctx),
                   ),
                 ],
@@ -245,7 +307,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 label: 'Add to Whitelist',
                 onTap: () {
                   final name = nameCtrl.text.trim();
-                  final hex  = keyCtrl.text.trim().replaceAll(RegExp(r'\s+'), '');
+                  final hex =
+                      keyCtrl.text.trim().replaceAll(RegExp(r'\s+'), '');
 
                   if (hex.length != 64 ||
                       !RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
@@ -260,7 +323,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
                   final bytes = Uint8List.fromList(List.generate(
                     32,
-                    (i) => int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16),
+                    (i) =>
+                        int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16),
                   ));
                   setState(() {
                     _entries.add(WhitelistEntry(
@@ -283,7 +347,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   void _editContact(WhitelistEntry entry) {
     final nameCtrl = TextEditingController(text: entry.name);
-    final keyCtrl  = TextEditingController(text: entry.hexKey);
+    final keyCtrl = TextEditingController(text: entry.hexKey);
     String? keyError;
 
     showModalBottomSheet<void>(
@@ -310,8 +374,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           fontWeight: FontWeight.w600,
                           color: AppColors.textPrimary)),
                   IconButton(
-                    icon: const Icon(Icons.close,
-                        color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                     onPressed: () => Navigator.pop(ctx),
                   ),
                 ],
@@ -337,7 +401,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 padding: EdgeInsets.only(left: 4),
                 child: Text(
                   'You can update the key if your contact regenerated their identity.',
-                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  style:
+                      TextStyle(fontSize: 11, color: AppColors.textSecondary),
                 ),
               ),
               const SizedBox(height: 20),
@@ -346,9 +411,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 label: 'Save Changes',
                 onTap: () {
                   final name = nameCtrl.text.trim();
-                  final newHex = keyCtrl.text
-                      .trim()
-                      .replaceAll(RegExp(r'\s+'), '');
+                  final newHex =
+                      keyCtrl.text.trim().replaceAll(RegExp(r'\s+'), '');
 
                   // Validate new key
                   if (newHex.length != 64 ||
@@ -363,21 +427,20 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   if (keyChanged &&
                       _entries.any((e) =>
                           e.hexKey.toLowerCase() == newHex.toLowerCase())) {
-                    setS(() => keyError = 'This key already exists in contacts');
+                    setS(
+                        () => keyError = 'This key already exists in contacts');
                     return;
                   }
 
-                  final idx = _entries
-                      .indexWhere((e) => e.hexKey == entry.hexKey);
+                  final idx =
+                      _entries.indexWhere((e) => e.hexKey == entry.hexKey);
                   if (idx != -1) {
-                    final finalName =
-                        name.isEmpty ? entry.name : name;
+                    final finalName = name.isEmpty ? entry.name : name;
                     if (keyChanged) {
                       // Rebuild entry with new key bytes
                       final bytes = Uint8List.fromList(List.generate(
                         32,
-                        (i) => int.parse(
-                            newHex.substring(i * 2, i * 2 + 2),
+                        (i) => int.parse(newHex.substring(i * 2, i * 2 + 2),
                             radix: 16),
                       ));
                       setState(() {
@@ -458,8 +521,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       label: 'Remove',
                       danger: true,
                       onTap: () {
-                        setState(() => _entries.removeWhere(
-                            (e) => e.hexKey == entry.hexKey));
+                        setState(() => _entries
+                            .removeWhere((e) => e.hexKey == entry.hexKey));
                         _save();
                         Navigator.pop(ctx);
                       },
@@ -483,7 +546,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
       nickname: entry.name,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
-    final base64Str = shareData.toBase64();
 
     showModalBottomSheet<void>(
       context: context,
@@ -493,87 +555,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(entry.name,
-                            style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary)),
-                        const SizedBox(height: 2),
-                        Text(
-                          _shortKey(entry.hexKey),
-                          style: const TextStyle(
-                              fontSize: 12,
-                              fontFamily: 'monospace',
-                              color: AppColors.textSecondary),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close,
-                        color: AppColors.textSecondary),
-                    onPressed: () => Navigator.pop(ctx),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              // QR code — shown on all platforms
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: QrImageView(
-                  data: base64Str,
-                  version: QrVersions.auto,
-                  size: 240,
-                ),
-              ),
-              const SizedBox(height: 20),
-              // Base64 display (always shown)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppColors.bgSurfaceActive,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: SelectableText(
-                  base64Str,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: AppColors.textSecondary,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _SheetButton(
-                icon: Icons.copy_outlined,
-                label: 'Copy Base64',
-                secondary: true,
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: base64Str));
-                  Navigator.pop(ctx);
-                  _showSnack('Contact copied as base64');
-                },
-              ),
-            ],
-          ),
+        child: PrettyQrSharePanel(
+          data: shareData,
+          title: entry.name,
+          subtitle: _shortKey(entry.hexKey),
+          copyMessage: 'Contact hex copied',
+          exportName:
+              'contact-${entry.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
         ),
       ),
     );
@@ -627,9 +615,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   // Import button
                   IconButton(
                     onPressed: _openImport,
-                    tooltip: 'Scan QR Code',
+                    tooltip: 'Import Contact',
                     icon: const Icon(
-                      Icons.qr_code_scanner_outlined,
+                      Icons.person_add_alt_1_outlined,
                       color: AppColors.textPrimary,
                     ),
                   ),
@@ -665,8 +653,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                             decoration: const InputDecoration(
                               hintText: 'Search contacts…',
                               hintStyle: TextStyle(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 14),
+                                  color: AppColors.textSecondary, fontSize: 14),
                               border: InputBorder.none,
                               enabledBorder: InputBorder.none,
                               focusedBorder: InputBorder.none,
@@ -698,13 +685,34 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     label: 'Add Contact',
                     onTap: _addContact,
                   ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _SheetButton(
+                          icon: Icons.qr_code_scanner_outlined,
+                          label: 'Scan QR',
+                          secondary: true,
+                          onTap: _openQrScanner,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _SheetButton(
+                          icon: Icons.paste_outlined,
+                          label: 'Paste Hex',
+                          secondary: true,
+                          onTap: _showBase64ImportSheet,
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
 
             // ── Section Divider ──────────────────────────────────────────
-            _SectionDivider(
-                label: 'Trusted Peers', count: _entries.length),
+            _SectionDivider(label: 'Trusted Peers', count: _entries.length),
 
             // ── List ─────────────────────────────────────────────────────
             Expanded(
@@ -791,8 +799,7 @@ class _ContactTile extends StatelessWidget {
       highlightColor: AppColors.bgSurfaceActive.withAlpha(80),
       child: Container(
         decoration: const BoxDecoration(
-          border: Border(
-              bottom: BorderSide(color: AppColors.border)),
+          border: Border(bottom: BorderSide(color: AppColors.border)),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Row(
@@ -900,8 +907,7 @@ class _ActionBtn extends StatelessWidget {
         ),
         child: Icon(icon,
             size: 20,
-            color:
-                danger ? AppColors.statusRed : AppColors.textSecondary),
+            color: danger ? AppColors.statusRed : AppColors.textSecondary),
       ),
     );
   }
@@ -985,9 +991,7 @@ class _SheetButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(12),
-          border: secondary
-              ? Border.all(color: AppColors.border)
-              : null,
+          border: secondary ? Border.all(color: AppColors.border) : null,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1035,9 +1039,7 @@ class _StyledInput extends StatelessWidget {
             color: AppColors.bgSurfaceActive,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-                color: error != null
-                    ? AppColors.statusRed
-                    : AppColors.border),
+                color: error != null ? AppColors.statusRed : AppColors.border),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
@@ -1046,10 +1048,8 @@ class _StyledInput extends StatelessWidget {
                 : CrossAxisAlignment.center,
             children: [
               Padding(
-                padding: EdgeInsets.only(
-                    top: maxLines > 1 ? 14 : 0),
-                child: Icon(icon,
-                    size: 22, color: AppColors.textSecondary),
+                padding: EdgeInsets.only(top: maxLines > 1 ? 14 : 0),
+                child: Icon(icon, size: 22, color: AppColors.textSecondary),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1071,8 +1071,7 @@ class _StyledInput extends StatelessWidget {
                     focusedBorder: InputBorder.none,
                     filled: false,
                     isDense: true,
-                    contentPadding:
-                        const EdgeInsets.symmetric(vertical: 14),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
               ),
@@ -1084,8 +1083,8 @@ class _StyledInput extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(left: 4),
             child: Text(error!,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.statusRed)),
+                style:
+                    const TextStyle(fontSize: 12, color: AppColors.statusRed)),
           ),
         ],
       ],
@@ -1114,8 +1113,7 @@ class _SectionDivider extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          const Expanded(
-              child: Divider(color: AppColors.border, height: 1)),
+          const Expanded(child: Divider(color: AppColors.border, height: 1)),
         ],
       ),
     );
@@ -1151,8 +1149,8 @@ class _EmptyState extends StatelessWidget {
                   ? 'Try a different search'
                   : 'Add trusted peers by their\npublic key to allow connections.',
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 14, color: AppColors.textSecondary),
+              style:
+                  const TextStyle(fontSize: 14, color: AppColors.textSecondary),
             ),
           ],
         ),

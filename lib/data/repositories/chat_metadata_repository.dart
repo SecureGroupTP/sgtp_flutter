@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
@@ -39,7 +40,7 @@ class ChatMetadataRepository {
 
       for (final entry in dirs) {
         if (entry is Directory) {
-          final uuid = entry.path.split('/').last;
+          final uuid = p.basename(entry.path);
           final chat = await loadChat(uuid);
           if (chat != null) {
             chats.add(chat);
@@ -153,8 +154,10 @@ class ChatMetadataRepository {
       uuid: uuid,
       name: json['name'] as String? ?? 'Chat',
       avatarBytes: avatarBytes,
-      createdAt: DateTime.parse(json['createdAt'] as String? ?? DateTime.now().toIso8601String()),
-      updatedAt: DateTime.parse(json['updatedAt'] as String? ?? DateTime.now().toIso8601String()),
+      createdAt: DateTime.parse(
+          json['createdAt'] as String? ?? DateTime.now().toIso8601String()),
+      updatedAt: DateTime.parse(
+          json['updatedAt'] as String? ?? DateTime.now().toIso8601String()),
       windowWidth: json['windowWidth'] as int?,
       windowHeight: json['windowHeight'] as int?,
     );

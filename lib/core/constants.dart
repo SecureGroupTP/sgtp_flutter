@@ -68,5 +68,13 @@ class SgtpConstants {
   static const int finPayloadLength = 24;
 
   /// Chunk size for large media files (8 MiB raw)
-  static const int mediaChunkSize = 8 * 1024 * 1024;
+  static const int defaultMediaChunkSize = 100 * 1024;
+
+  static const List<int> allowedMediaChunkSizes = [
+    50 * 1024,
+    100 * 1024,
+    250 * 1024,
+    512 * 1024,
+    1024 * 1024,
+  ];
 }
