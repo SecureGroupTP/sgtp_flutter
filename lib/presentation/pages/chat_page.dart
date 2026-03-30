@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui';
 
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
@@ -833,14 +834,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   PreferredSizeWidget _buildAppBar(BuildContext context, ChatState state) {
     return PreferredSize(
       preferredSize: const Size.fromHeight(62),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xD80A0A0C),
-          border: Border(
-            bottom: BorderSide(color: Color(0xFF2C2C30)),
-          ),
-        ),
-        child: SafeArea(
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Color(0xD80A0A0C),
+              border: Border(
+                bottom: BorderSide(color: Color(0xFF2C2C30)),
+              ),
+            ),
+            child: SafeArea(
           bottom: false,
           child: SizedBox(
             height: 62,
@@ -986,7 +990,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           ),
         ),
       ),
-    );
+    ),
+  ),
+  );
   }
 
   Widget _buildStatusBanner(BuildContext context, ChatState state) {

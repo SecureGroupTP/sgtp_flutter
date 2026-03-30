@@ -68,8 +68,10 @@ class MessageBubble extends StatelessWidget {
     // Voice messages: no bubble frame but need reactions row — fall through to
     // the main Column below. Only skip if it's truly invisible.
     if (message.type == MessageType.voice) {
-      // Wrap with Align + ConstrainedBox identical to regular text bubbles so
-      // own messages are flush-right and peer messages are flush-left.
+      const ownBubbleBg   = Color(0xFF0A84FF);
+      const otherBubbleBg = Color(0xFF1F1F24);
+      final bgColor = isMe ? ownBubbleBg : otherBubbleBg;
+
       final voiceWidget = _withAvatar(
         context: context,
         isMe: isMe,
@@ -79,9 +81,17 @@ class MessageBubble extends StatelessWidget {
             constraints: BoxConstraints(
                 maxWidth: MediaQuery.of(context).size.width * 0.78),
             child: Container(
-              margin: const EdgeInsets.only(
-                left: 8, right: 8,
-                top: 4, bottom: 4,
+              margin: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: bgColor,
+                borderRadius: BorderRadius.only(
+                  topLeft:     const Radius.circular(16),
+                  topRight:    const Radius.circular(16),
+                  bottomLeft:  Radius.circular(isMe ? 16 : 4),
+                  bottomRight: Radius.circular(isMe ? 4 : 16),
+                ),
+                border: isMe ? null : Border.all(color: const Color(0xFF2C2C30)),
               ),
               child: _buildVoiceContent(
                   context, theme, cs.onSurfaceVariant, senderLabel, timeStr, isMe),
@@ -94,6 +104,11 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (!isMe)
+            Padding(
+              padding: const EdgeInsets.only(left: 42, bottom: 2),
+              child: _senderLabel(theme, senderLabel),
+            ),
           voiceWidget,
           if (reactionsRow != null)
             Padding(
@@ -133,6 +148,11 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (!isMe)
+            Padding(
+              padding: const EdgeInsets.only(left: 42, bottom: 2),
+              child: _senderLabel(theme, senderLabel),
+            ),
           noteWidget,
           if (reactionsRow != null)
             Padding(
@@ -159,15 +179,12 @@ class MessageBubble extends StatelessWidget {
     final bgColor   = isMe ? ownBubbleBg   : otherBubbleBg;
     final textColor = isMe ? ownTextColor  : otherTextColor;
 
-    // Reply preview strip — embedded INSIDE the same width-constrained block
-    // as the bubble so it never grows wider than the message itself.
-    Widget? replyPreview;
+    // Reply strip rendered INSIDE the bubble (matches design: quote block
+    // sits on top of the coloured bubble background).
+    Widget? replyStrip;
     if (message.replyToId != null) {
-      replyPreview = Container(
-        margin: const EdgeInsets.only(
-          left: 8, right: 8,
-          top: 4, bottom: 2,
-        ),
+      replyStrip = Container(
+        margin: const EdgeInsets.only(left: 8, right: 8, top: 8),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: isMe
@@ -206,17 +223,12 @@ class MessageBubble extends StatelessWidget {
     }
 
     final innerBubble = Container(
-      margin: EdgeInsets.only(
-        left: 8,
-        right: 8,
-        top: replyPreview != null ? 1 : 4,
-        bottom: 4,
-      ),
+      margin: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 4),
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.only(
-          topLeft:     Radius.circular(replyPreview != null ? 4 : 16),
-          topRight:    Radius.circular(replyPreview != null ? 4 : 16),
+          topLeft:     const Radius.circular(16),
+          topRight:    const Radius.circular(16),
           bottomLeft:  Radius.circular(isMe ? 16 : 4),
           bottomRight: Radius.circular(isMe ? 4 : 16),
         ),
@@ -224,31 +236,20 @@ class MessageBubble extends StatelessWidget {
             ? null
             : Border.all(color: const Color(0xFF2C2C30)),
       ),
-      child: _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
+      child: IntrinsicWidth(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (replyStrip != null) replyStrip,
+            _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
+          ],
+        ),
+      ),
     );
 
-    // Build bubble widget. When there's a reply preview, wrap both reply strip
-    // and bubble in IntrinsicWidth so the strip width follows the bubble content
-    // rather than stretching to the full 78% max-width.
     Widget bubbleWithReply;
-    if (replyPreview != null) {
-      // IntrinsicWidth sizes both children to the widest one's natural width.
-      // ConstrainedBox caps it at 78% so long messages don't overflow.
-      bubbleWithReply = ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.78,
-          // Minimum width: enough to show at least ~12 chars of reply text.
-          minWidth: MediaQuery.of(context).size.width * 0.28,
-        ),
-        child: IntrinsicWidth(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [replyPreview, innerBubble],
-          ),
-        ),
-      );
-    } else {
+    {
       bubbleWithReply = ConstrainedBox(
         constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.78),
@@ -272,8 +273,8 @@ class MessageBubble extends StatelessWidget {
               Positioned.fill(
                 child: ClipRRect(
                   borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(replyPreview != null ? 4 : 16),
-                    topRight: Radius.circular(replyPreview != null ? 4 : 16),
+                    topLeft: const Radius.circular(16),
+                    topRight: const Radius.circular(16),
                     bottomLeft: Radius.circular(isMe ? 16 : 4),
                     bottomRight: Radius.circular(isMe ? 4 : 16),
                   ),
@@ -303,6 +304,11 @@ class MessageBubble extends StatelessWidget {
       crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (!isMe)
+          Padding(
+            padding: const EdgeInsets.only(left: 42, bottom: 2),
+            child: _senderLabel(Theme.of(context), senderLabel),
+          ),
         _withAvatar(context: context, isMe: isMe, child: alignedBubble),
         if (reactionsRow != null)
           Padding(
@@ -436,14 +442,10 @@ class MessageBubble extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: mine
-                  ? const Color(0xFF0A84FF).withAlpha(40)
-                  : const Color(0xFF1F1F24),
+              color: const Color(0xFF1F1F24),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: mine
-                    ? const Color(0xFF0A84FF)
-                    : const Color(0xFF2C2C30),
+                color: const Color(0xFF2C2C30),
                 width: 1,
               ),
               boxShadow: const [
@@ -456,11 +458,9 @@ class MessageBubble extends StatelessWidget {
             ),
             child: Text(
               '${e.key} $count',
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 12,
-                color: mine
-                    ? const Color(0xFF0A84FF)
-                    : const Color(0xFFF5F5F5),
+                color: Color(0xFFF5F5F5),
               ),
             ),
           ),
@@ -506,7 +506,7 @@ class MessageBubble extends StatelessWidget {
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
-      children: [avatar, const SizedBox(width: 4), Expanded(child: child)],
+      children: [avatar, const SizedBox(width: 10), Expanded(child: child)],
     );
   }
 
@@ -599,7 +599,7 @@ class MessageBubble extends StatelessWidget {
   Widget _buildMetaRow(ThemeData theme, ColorScheme cs, String timeStr, bool isMe) {
     final timeText = Text(
       '${message.isFromHistory ? '~ ' : ''}$timeStr',
-      style: const TextStyle(fontSize: 11, color: Color(0xFF636366)),
+      style: const TextStyle(fontSize: 11, color: Color(0xFF8E8E93)),
     );
 
     if (!isMe) {
@@ -723,10 +723,6 @@ class MessageBubble extends StatelessWidget {
             isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isMe) ...[
-            _senderLabel(theme, senderLabel),
-            const SizedBox(height: 4),
-          ],
           // SelectableText allows cursor-select + copy.
           // contextMenuBuilder keeps the dark theme consistent.
           SelectableText(
@@ -771,11 +767,6 @@ class MessageBubble extends StatelessWidget {
               isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!isMe)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: _senderLabel(theme, senderLabel),
-              ),
             // Tap = fullscreen, double-tap = reply (handled by outer detector)
             GestureDetector(
               onTap: () => _showFullImage(context),
@@ -848,7 +839,6 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
           Container(
             width: 200,
             height: 200,
@@ -884,10 +874,6 @@ class MessageBubble extends StatelessWidget {
               isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!isMe) ...[
-              _senderLabel(theme, senderLabel),
-              const SizedBox(height: 4),
-            ],
             _VideoThumbnail(
               videoBytes: message.videoBytes!,
               mediaName: message.mediaName ?? 'video',
@@ -912,7 +898,6 @@ class MessageBubble extends StatelessWidget {
             isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isMe) ...[_senderLabel(theme, senderLabel), const SizedBox(height: 4)],
           _VoicePlayer(
             audioBytes: message.audioBytes!,
             mediaMime: message.mediaMime ?? 'audio/m4a',
@@ -1166,12 +1151,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                   if (_initialized && _controller != null)
                     Video(controller: _controller!)
                   else
-                    Container(
-                      color: cs.surfaceContainerHighest,
-                      child: Icon(Icons.videocam_outlined,
-                          size: 48,
-                          color: cs.onSurfaceVariant.withAlpha(120)),
-                    ),
+                    Container(color: const Color(0xFF1F1F24)),
                   GestureDetector(
                     onTap: _togglePlay,
                     child: Container(
@@ -1179,26 +1159,26 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
                       child: _loading
                           ? Container(
                               decoration: BoxDecoration(
-                                color: cs.primaryContainer.withAlpha(200),
+                                color: Colors.black.withAlpha(140),
                                 shape: BoxShape.circle,
                               ),
                               padding: const EdgeInsets.all(12),
-                              child: SizedBox(
+                              child: const SizedBox(
                                 width: 28,
                                 height: 28,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: cs.onPrimaryContainer),
+                                    strokeWidth: 2, color: Colors.white),
                               ),
                             )
                           : (!_initialized
                               ? Container(
                                   decoration: BoxDecoration(
-                                    color: cs.primaryContainer.withAlpha(200),
+                                    color: Colors.black.withAlpha(140),
                                     shape: BoxShape.circle,
                                   ),
                                   padding: const EdgeInsets.all(12),
-                                  child: Icon(Icons.play_arrow_rounded,
-                                      size: 28, color: cs.onPrimaryContainer),
+                                  child: const Icon(Icons.play_arrow_rounded,
+                                      size: 28, color: Colors.white),
                                 )
                               : const SizedBox.shrink()),
                     ),
@@ -1316,9 +1296,9 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   String? _tmpPath;
   late final List<double> _waveform;
 
-  static const _barCount   = 40;
-  static const _waveWidth  = 160.0;
-  static const _waveHeight = 36.0;
+  static const _barCount   = 10;
+  static const _waveWidth  = 120.0;
+  static const _waveHeight = 20.0;
 
   @override
   void initState() {
@@ -1437,6 +1417,9 @@ class _VoicePlayerState extends State<_VoicePlayer> {
         ? Colors.white.withAlpha(180)
         : const Color(0xFF8E8E93);
 
+    // Design: [▶] [waveform] [time] — all on one row
+    final displayTime = _playing ? posLabel : durLabel;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -1457,47 +1440,33 @@ class _VoicePlayerState extends State<_VoicePlayer> {
                     color: btnFg, size: 20),
           ),
         ),
-        const SizedBox(width: 10),
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            GestureDetector(
-              onTapDown: (d) => _seekFromTap(d.localPosition.dx),
-              child: SizedBox(
-                width: _waveWidth,
-                height: _waveHeight,
-                child: CustomPaint(
-                  painter: _WaveformPainter(
-                    bars: _waveform,
-                    progress: progress,
-                    activeColor: activeWave,
-                    inactiveColor: inactiveWave,
-                  ),
-                ),
+        const SizedBox(width: 12),
+        GestureDetector(
+          onTapDown: (d) => _seekFromTap(d.localPosition.dx),
+          child: SizedBox(
+            width: _waveWidth,
+            height: _waveHeight,
+            child: CustomPaint(
+              painter: _WaveformPainter(
+                bars: _waveform,
+                progress: progress,
+                activeColor: activeWave,
+                inactiveColor: inactiveWave,
               ),
             ),
-            const SizedBox(height: 2),
-            SizedBox(
-              width: _waveWidth,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(posLabel,
-                      style: TextStyle(fontSize: 11, color: timeColor)),
-                  Text(durLabel,
-                      style: TextStyle(fontSize: 11, color: timeColor)),
-                ],
-              ),
-            ),
-          ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          displayTime,
+          style: TextStyle(fontSize: 12, color: timeColor),
         ),
       ],
     );
   }
 
   String _fmt(Duration d) {
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final m = d.inMinutes.remainder(60).toString();
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
@@ -1521,28 +1490,20 @@ class _WaveformPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (bars.isEmpty) return;
-    final totalBarW  = size.width / bars.length;
-    final barW       = totalBarW * 0.55;
-    final progressX  = size.width * progress;
-
-    final activePaint = Paint()
-      ..color     = activeColor
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = barW;
-    final inactivePaint = Paint()
-      ..color     = inactiveColor
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = barW;
+    const gap      = 2.0;
+    final barW     = (size.width - gap * (bars.length - 1)) / bars.length;
+    final progressX = size.width * progress;
 
     for (int i = 0; i < bars.length; i++) {
-      final x      = i * totalBarW + totalBarW / 2;
-      final barH   = (bars[i] * size.height).clamp(2.0, size.height);
-      final top    = (size.height - barH) / 2;
-      final bottom = top + barH;
-      canvas.drawLine(
-        Offset(x, top), Offset(x, bottom),
-        x < progressX ? activePaint : inactivePaint,
+      final x    = i * (barW + gap);
+      final barH = (bars[i] * size.height).clamp(2.0, size.height);
+      final top  = (size.height - barH) / 2;
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, top, barW, barH),
+        const Radius.circular(2),
       );
+      final isActive = (x + barW / 2) < progressX;
+      canvas.drawRRect(rect, Paint()..color = isActive ? activeColor : inactiveColor);
     }
   }
 
