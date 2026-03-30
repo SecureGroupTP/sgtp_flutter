@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import '../../core/app_logger.dart';
+import '../../core/interaction_prefs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -618,6 +619,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final imageBytes = await Pasteboard.image;
       if (imageBytes == null) { _showSnack(context, 'No image in clipboard'); return; }
       if (!context.mounted) return;
+
+      // Show preview dialog — let user confirm or cancel before sending.
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => _PastePreviewDialog(imageBytes: imageBytes),
+      );
+      if (confirmed != true || !context.mounted) return;
+
       context.read<ChatBloc>().add(ChatSendImage(
         bytes: imageBytes,
         name: 'clipboard_${DateTime.now().millisecondsSinceEpoch}.png',
@@ -792,7 +801,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             onKey: (event) {
               if (event.isKeyPressed(LogicalKeyboardKey.keyV) &&
                   (event.isControlPressed || event.isMetaPressed)) {
-                _pasteImageFromClipboard(context);
+                // Check what's in the clipboard first.
+                // If it's an image → show paste preview (regardless of focus).
+                // If it's text → let the focused TextField handle it natively.
+                Pasteboard.image.then((imageBytes) {
+                  if (imageBytes != null && context.mounted) {
+                    _pasteImageFromClipboard(context);
+                  }
+                  // If no image, do nothing — TextField already handled the
+                  // text paste via its own keyboard shortcut processing.
+                });
               }
             },
             child: Scaffold(
@@ -1144,8 +1162,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           quickEmojis: _quickEmojis,
         );
 
-        // Swipe right to reply
-        if (isInteractable) {
+        // Swipe right to reply (respects user interaction pref)
+        if (isInteractable && InteractionPrefs.swipeToReply) {
           bubble = Dismissible(
             key: ValueKey('swipe_${msg.id}'),
             direction: DismissDirection.startToEnd,
@@ -1806,6 +1824,83 @@ class _MobileModeButton extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Paste preview dialog (Fix 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PastePreviewDialog extends StatelessWidget {
+  final Uint8List imageBytes;
+  const _PastePreviewDialog({required this.imageBytes});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1F1F24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Send image?',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFF5F5F5),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 280),
+                child: Image.memory(
+                  imageBytes,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF8E8E93),
+                      side: const BorderSide(color: Color(0xFF2C2C30)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0A84FF),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text('Send'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

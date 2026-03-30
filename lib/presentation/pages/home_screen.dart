@@ -100,6 +100,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _roomsBloc.add(RoomsUpdateWhitelist(
       entries.map((e) => e.hexKey).toSet(),
     ));
+    _roomsBloc.add(RoomsUpdateNicknames(
+      {for (final e in entries) e.hexKey: e.name},
+    ));
   }
 
   void _showAddSheet() {

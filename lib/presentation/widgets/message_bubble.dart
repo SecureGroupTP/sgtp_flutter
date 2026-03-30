@@ -2,11 +2,14 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart' hide PlayerState;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/interaction_prefs.dart';
 import '../../domain/entities/message.dart';
 
 class MessageBubble extends StatelessWidget {
@@ -156,13 +159,14 @@ class MessageBubble extends StatelessWidget {
     final bgColor   = isMe ? ownBubbleBg   : otherBubbleBg;
     final textColor = isMe ? ownTextColor  : otherTextColor;
 
-    // Reply preview strip
+    // Reply preview strip — embedded INSIDE the same width-constrained block
+    // as the bubble so it never grows wider than the message itself.
     Widget? replyPreview;
     if (message.replyToId != null) {
       replyPreview = Container(
         margin: const EdgeInsets.only(
           left: 8, right: 8,
-          top: 4,
+          top: 4, bottom: 2,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -177,28 +181,27 @@ class MessageBubble extends StatelessWidget {
             ),
           ),
         ),
-        child: Row(children: [
-          Expanded(child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (message.replyToSender != null)
-                Text(message.replyToSender!,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isMe ? Colors.white : const Color(0xFF0A84FF),
-                    )),
-              Text(message.replyToContent ?? '…',
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (message.replyToSender != null)
+              Text(message.replyToSender!,
                   style: TextStyle(
                     fontSize: 13,
-                    color: isMe
-                        ? Colors.white.withAlpha(180)
-                        : const Color(0xFF8E8E93),
+                    fontWeight: FontWeight.w600,
+                    color: isMe ? Colors.white : const Color(0xFF0A84FF),
                   )),
-            ],
-          )),
-        ]),
+            Text(message.replyToContent ?? '…',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isMe
+                      ? Colors.white.withAlpha(180)
+                      : const Color(0xFF8E8E93),
+                )),
+          ],
+        ),
       );
     }
 
@@ -224,50 +227,71 @@ class MessageBubble extends StatelessWidget {
       child: _buildContent(context, theme, textColor, senderLabel, timeStr, isMe),
     );
 
-    final bubble = Align(
+    // Build bubble widget. When there's a reply preview, wrap both reply strip
+    // and bubble in IntrinsicWidth so the strip width follows the bubble content
+    // rather than stretching to the full 78% max-width.
+    Widget bubbleWithReply;
+    if (replyPreview != null) {
+      // IntrinsicWidth sizes both children to the widest one's natural width.
+      // ConstrainedBox caps it at 78% so long messages don't overflow.
+      bubbleWithReply = ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+          // Minimum width: enough to show at least ~12 chars of reply text.
+          minWidth: MediaQuery.of(context).size.width * 0.28,
+        ),
+        child: IntrinsicWidth(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [replyPreview, innerBubble],
+          ),
+        ),
+      );
+    } else {
+      bubbleWithReply = ConstrainedBox(
+        constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78),
+        child: innerBubble,
+      );
+    }
+
+    final alignedBubble = Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-        child: GestureDetector(
-          // Double-tap → reply
-          onDoubleTap: onReply,
-          // Long-press / right-click → reaction picker
-          onLongPress: onReact == null ? null : () =>
-              _showReactionPicker(context, theme),
-          onSecondaryTap: onReact == null ? null : () =>
-              _showReactionPicker(context, theme),
-          // translucent so child GestureDetectors (e.g. video play button)
-          // receive taps but long-press/double-tap still reach this detector
-          behavior: HitTestBehavior.translucent,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              innerBubble,
-              // Sending progress overlay
-              if (message.isSending)
-                Positioned.fill(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(replyPreview != null ? 4 : 16),
-                      topRight: Radius.circular(replyPreview != null ? 4 : 16),
-                      bottomLeft: Radius.circular(isMe ? 16 : 4),
-                      bottomRight: Radius.circular(isMe ? 4 : 16),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        LinearProgressIndicator(
-                          value: message.sendProgress > 0 ? message.sendProgress : null,
-                          minHeight: 3,
-                          backgroundColor: cs.primary.withAlpha(40),
-                          valueColor: AlwaysStoppedAnimation<Color>(cs.primary),
-                        ),
-                      ],
-                    ),
+      child: GestureDetector(
+        onDoubleTap: _doubleTapAction(context),
+        onLongPress: onReact == null ? null : () => _showContextMenu(context, Theme.of(context)),
+        onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, Theme.of(context)),
+        behavior: HitTestBehavior.translucent,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            bubbleWithReply,
+            // Sending progress overlay on innerBubble only
+            if (message.isSending)
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(replyPreview != null ? 4 : 16),
+                    topRight: Radius.circular(replyPreview != null ? 4 : 16),
+                    bottomLeft: Radius.circular(isMe ? 16 : 4),
+                    bottomRight: Radius.circular(isMe ? 4 : 16),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      LinearProgressIndicator(
+                        value: message.sendProgress > 0 ? message.sendProgress : null,
+                        minHeight: 3,
+                        backgroundColor: Theme.of(context).colorScheme.primary.withAlpha(40),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                            Theme.of(context).colorScheme.primary),
+                      ),
+                    ],
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -279,12 +303,7 @@ class MessageBubble extends StatelessWidget {
       crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (replyPreview != null)
-          Align(
-            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-            child: replyPreview,
-          ),
-        _withAvatar(context: context, isMe: isMe, child: bubble),
+        _withAvatar(context: context, isMe: isMe, child: alignedBubble),
         if (reactionsRow != null)
           Padding(
             padding: EdgeInsets.only(
@@ -300,6 +319,83 @@ class MessageBubble extends StatelessWidget {
           ),
         _buildMetaRow(theme, cs, timeStr, isMe),
       ],
+    );
+  }
+
+  /// Returns the double-tap callback based on platform and user prefs.
+  VoidCallback? _doubleTapAction(BuildContext context) {
+    final isDesktop = !kIsWeb &&
+        (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+    if (isDesktop) {
+      if (InteractionPrefs.doubleTapDesktop == 'reply') return onReply;
+      return onReact == null
+          ? null
+          : () => _showReactionPicker(context, Theme.of(context));
+    }
+    // Mobile: double-tap opens react picker (swipe handles reply)
+    return onReact == null
+        ? null
+        : () => _showReactionPicker(context, Theme.of(context));
+  }
+
+  /// Shows a context menu with both React and Reply options.
+  void _showContextMenu(BuildContext context, ThemeData theme) {
+    final isDesktop = !kIsWeb &&
+        (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+    // On mobile, longPress directly opens react picker unless longPressShowsMenu is on.
+    if (!isDesktop && !InteractionPrefs.longPressShowsMenu) {
+      _showReactionPicker(context, theme);
+      return;
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1F1F24),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Emoji row
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 16, 12, 4),
+              child: Wrap(
+                spacing: 8,
+                children: quickEmojis.map((e) => GestureDetector(
+                  onTap: () { Navigator.pop(context); onReact?.call(e); },
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(e, style: const TextStyle(fontSize: 24)),
+                  ),
+                )).toList(),
+              ),
+            ),
+            const Divider(color: Color(0xFF2C2C30)),
+            if (onReply != null)
+              ListTile(
+                leading: const Icon(Icons.reply_rounded, color: Color(0xFF8E8E93)),
+                title: const Text('Reply',
+                    style: TextStyle(color: Color(0xFFF5F5F5))),
+                onTap: () { Navigator.pop(context); onReply?.call(); },
+              ),
+            ListTile(
+              leading: const Icon(Icons.emoji_emotions_outlined,
+                  color: Color(0xFF8E8E93)),
+              title: const Text('React',
+                  style: TextStyle(color: Color(0xFFF5F5F5))),
+              onTap: () {
+                Navigator.pop(context);
+                _showReactionPicker(context, theme);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
   }
 
@@ -631,8 +727,17 @@ class MessageBubble extends StatelessWidget {
             _senderLabel(theme, senderLabel),
             const SizedBox(height: 4),
           ],
-          Text(message.content,
-              style: theme.textTheme.bodyMedium?.copyWith(color: textColor)),
+          // SelectableText allows cursor-select + copy.
+          // contextMenuBuilder keeps the dark theme consistent.
+          SelectableText(
+            message.content,
+            style: theme.textTheme.bodyMedium?.copyWith(color: textColor),
+            contextMenuBuilder: (ctx, editableTextState) {
+              return AdaptiveTextSelectionToolbar.editableText(
+                editableTextState: editableTextState,
+              );
+            },
+          ),
         ],
       ),
     );
@@ -650,9 +755,9 @@ class MessageBubble extends StatelessWidget {
     required bool animated,
   }) {
     return GestureDetector(
-      onDoubleTap: onReply,
-      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onDoubleTap: _doubleTapAction(context),
+      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
       behavior: HitTestBehavior.translucent,
       child: ClipRRect(
         borderRadius: BorderRadius.only(
@@ -735,9 +840,9 @@ class MessageBubble extends StatelessWidget {
   Widget _buildVideoNoteContent(BuildContext context, ThemeData theme,
       Color textColor, String senderLabel, String timeStr, bool isMe) {
     return GestureDetector(
-      onDoubleTap: onReply,
-      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onDoubleTap: _doubleTapAction(context),
+      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
       behavior: HitTestBehavior.translucent,
       child: Column(
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -767,9 +872,9 @@ class MessageBubble extends StatelessWidget {
   Widget _buildVideoContent(BuildContext context, ThemeData theme,
       Color textColor, String senderLabel, String timeStr, bool isMe) {
     return GestureDetector(
-      onDoubleTap: onReply,
-      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onDoubleTap: _doubleTapAction(context),
+      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
       // translucent so video play-button tap still works
       behavior: HitTestBehavior.translucent,
       child: Padding(
@@ -798,9 +903,9 @@ class MessageBubble extends StatelessWidget {
   Widget _buildVoiceContent(BuildContext context, ThemeData theme,
       Color textColor, String senderLabel, String timeStr, bool isMe) {
     return GestureDetector(
-      onDoubleTap: onReply,
-      onLongPress: onReact == null ? null : () => _showReactionPicker(context, theme),
-      onSecondaryTap: onReact == null ? null : () => _showReactionPicker(context, theme),
+      onDoubleTap: _doubleTapAction(context),
+      onLongPress: onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTap: onReact == null ? null : () => _showContextMenu(context, theme),
       behavior: HitTestBehavior.translucent,
       child: Column(
         crossAxisAlignment:

@@ -607,11 +607,24 @@ class SgtpClient {
       (DateTime.now().millisecondsSinceEpoch - ts).abs() <= SgtpConstants.timestampWindow;
 
   Future<void> _dispatch(ParsedFrame frame) async {
-    if (!_tsOk(frame.timestamp)) return;
+    if (!_tsOk(frame.timestamp)) {
+      AppLogger.w(
+        '← INBOUND ${_pktName(frame.packetType)} from ${uuidBytesToHex(frame.senderUUID).substring(0, 8)} '
+        'DROPPED (timestamp out of window: ${frame.timestamp})',
+        tag: 'PKT',
+      );
+      return;
+    }
     final frameSender = uuidBytesToHex(frame.senderUUID);
     if (_peers.containsKey(frameSender)) {
       _peerLastSeen[frameSender] = DateTime.now().millisecondsSinceEpoch;
     }
+    AppLogger.d(
+      '← INBOUND  ${_pktName(frame.packetType).padRight(14)} '
+      'from=${frameSender.substring(0, 8)}  '
+      'payload=${frame.payloadLength}B',
+      tag: 'PKT',
+    );
     switch (frame.packetType) {
       case PacketType.intent:      await _onIntent(frame);
       case PacketType.ping:        await _onPing(frame);
@@ -1198,6 +1211,17 @@ class SgtpClient {
   }
 
   Future<void> _sendFrame(Uint8List unsigned) async {
+    // Log outbound packet type (bytes 50–51 in header = packet type uint16BE).
+    if (unsigned.length >= 52) {
+      final pktType = (unsigned[50] << 8) | unsigned[51];
+      final payloadLen = unsigned.length - SgtpConstants.headerSize - SgtpConstants.signatureSize;
+      final recv = uuidBytesToHex(unsigned.sublist(16, 32)).substring(0, 8);
+      AppLogger.d(
+        '→ OUTBOUND ${_pktName(pktType).padRight(14)} '
+        'to=${recv}  payload=${payloadLen}B',
+        tag: 'PKT',
+      );
+    }
     // Sign first — this is CPU/async work, safe to do before entering the queue.
     final Uint8List signed;
     try {
@@ -1236,6 +1260,29 @@ class SgtpClient {
       mine.complete(); // release the next sender
     }
   }
+
+  /// Human-readable name for a packet type code (for logging).
+  static String _pktName(int type) => switch (type) {
+    PacketType.intent        => 'INTENT',
+    PacketType.ping          => 'PING',
+    PacketType.pong          => 'PONG',
+    PacketType.info          => 'INFO',
+    PacketType.chatRequest   => 'CHAT_REQUEST',
+    PacketType.chatKey       => 'CHAT_KEY',
+    PacketType.chatKeyAck    => 'CHAT_KEY_ACK',
+    PacketType.message       => 'MESSAGE',
+    PacketType.messageFailed => 'MSG_FAILED',
+    PacketType.messageFailedAck => 'MSG_FAILED_ACK',
+    PacketType.status        => 'STATUS',
+    PacketType.fin           => 'FIN',
+    PacketType.kickRequest   => 'KICK_REQ',
+    PacketType.kicked        => 'KICKED',
+    PacketType.hsir          => 'HSIR',
+    PacketType.hsi           => 'HSI',
+    PacketType.hsr           => 'HSR',
+    PacketType.hsra          => 'HSRA',
+    _                        => '0x${type.toRadixString(16).padLeft(4, '0')}',
+  };
 
   void _updateMaster() {
     _isMaster = _peers.values.every((p) => compareBytes(p.uuidBytes, _myUUID) > 0);

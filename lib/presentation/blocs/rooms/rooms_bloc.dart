@@ -36,6 +36,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     on<RoomsJoinRoom>(_onJoin);
     on<RoomsRemoveRoom>(_onRemove);
     on<RoomsUpdateWhitelist>(_onUpdateWhitelist);
+    on<RoomsUpdateNicknames>(_onUpdateNicknames);
     on<_RoomsRefresh>(_onRefresh);
   }
 
@@ -79,6 +80,17 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     // Hot-push to all already-running rooms — no reconnect needed.
     for (final room in state.rooms) {
       room.chatBloc.add(ChatUpdateWhitelist(event.whitelist));
+    }
+  }
+
+  void _onUpdateNicknames(RoomsUpdateNicknames event, Emitter<RoomsState> emit) {
+    // Store locally so new rooms created later get the latest nicknames.
+    _nicknames
+      ..clear()
+      ..addAll(event.nicknames);
+    // Hot-push to all already-running rooms so nick appears immediately.
+    for (final room in state.rooms) {
+      room.chatBloc.add(ChatUpdateNicknames(event.nicknames));
     }
   }
 

@@ -39,3 +39,12 @@ class RoomsUpdateWhitelist extends RoomsEvent {
   @override
   List<Object?> get props => [whitelist];
 }
+
+/// Hot-updates nicknames (ed25519PubHex → name) in all active rooms.
+/// Call this together with RoomsUpdateWhitelist when contacts change.
+class RoomsUpdateNicknames extends RoomsEvent {
+  final Map<String, String> nicknames;
+  const RoomsUpdateNicknames(this.nicknames);
+  @override
+  List<Object?> get props => [nicknames];
+}

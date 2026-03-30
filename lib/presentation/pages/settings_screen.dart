@@ -8,9 +8,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/crypto/ed25519_utils.dart';
+import '../../core/interaction_prefs.dart';
 import '../../core/openssh_parser.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
@@ -63,6 +65,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Ping interval in seconds. Saved via SettingsRepository.
   int _pingIntervalSeconds = 30;
 
+  // Interaction preferences (Fix 7)
+  String _doubleTapDesktop  = 'react';  // 'react' | 'reply'
+  bool   _swipeToReply      = true;
+  bool   _longPressMenu     = true;
+
   @override
   void initState() {
     super.initState();
@@ -108,6 +115,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final avatar = await _settings.loadUserAvatar();
     if (avatar != null) setState(() => _userAvatar = avatar);
+
+    // Load persisted interaction prefs (Fix 7)
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _pingIntervalSeconds = prefs.getInt('sgtp_ping_interval') ?? 30;
+      _doubleTapDesktop    = prefs.getString('iprefs_doubletap_desktop') ?? 'react';
+      _swipeToReply        = prefs.getBool('iprefs_swipe_to_reply')       ?? true;
+      _longPressMenu       = prefs.getBool('iprefs_longpress_menu')       ?? true;
+    });
+    // Sync singleton
+    InteractionPrefs.doubleTapDesktop   = _doubleTapDesktop;
+    InteractionPrefs.swipeToReply       = _swipeToReply;
+    InteractionPrefs.longPressShowsMenu = _longPressMenu;
   }
 
   @override
@@ -480,6 +500,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SettingsGroup(title: 'Connection',          child: _buildConnectionCard()),
           _SettingsGroup(title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
           _SettingsGroup(title: 'Network',             child: _buildNetworkCard()),
+          _SettingsGroup(title: 'Interaction',         child: _buildInteractionCard()),
           _buildGettingStarted(),
           _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
           _SettingsGroup(title: 'About',               child: _buildAboutCard()),
@@ -768,6 +789,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   min: 5, max: 120,
                   onChanged: (v) {
                     setState(() => _pingIntervalSeconds = v.round());
+                    SharedPreferences.getInstance().then(
+                      (p) => p.setInt('sgtp_ping_interval', _pingIntervalSeconds),
+                    );
                     _tryApplyConfig();
                   },
                 ),
@@ -785,6 +809,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 textAlign: TextAlign.right,
               ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ── Interaction card ──────────────────────────────────────────────────────
+
+  Widget _buildInteractionCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Swipe to reply (mobile) ─────────────────────────────────────
+        _SwitchRow(
+          label: 'Swipe right to reply (mobile)',
+          value: _swipeToReply,
+          onChanged: (v) {
+            setState(() => _swipeToReply = v);
+            InteractionPrefs.setSwipeToReply(v);
+          },
+        ),
+        const SizedBox(height: 8),
+        // ── Long-press shows full menu ──────────────────────────────────
+        _SwitchRow(
+          label: 'Long-press shows menu (react + reply)',
+          value: _longPressMenu,
+          onChanged: (v) {
+            setState(() => _longPressMenu = v);
+            InteractionPrefs.setLongPressShowsMenu(v);
+          },
+        ),
+        const SizedBox(height: 12),
+        // ── Desktop double-click action ─────────────────────────────────
+        const Text(
+          'Desktop double-click',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            _ChoiceChip(
+              label: 'Open react picker',
+              selected: _doubleTapDesktop == 'react',
+              onTap: () {
+                setState(() => _doubleTapDesktop = 'react');
+                InteractionPrefs.setDoubleTapDesktop('react');
+              },
+            ),
+            const SizedBox(width: 8),
+            _ChoiceChip(
+              label: 'Set reply',
+              selected: _doubleTapDesktop == 'reply',
+              onTap: () {
+                setState(() => _doubleTapDesktop = 'reply');
+                InteractionPrefs.setDoubleTapDesktop('reply');
+              },
             ),
           ],
         ),
@@ -1146,5 +1227,64 @@ class _LogsCountNotifier extends ChangeNotifier {
   void dispose() {
     AppLogger.removeListener(_update);
     super.dispose();
+  }
+}
+
+// ─── Interaction settings helpers ─────────────────────────────────────────────
+
+class _SwitchRow extends StatelessWidget {
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _SwitchRow({required this.label, required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(label,
+              style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+        ),
+        Switch(
+          value: value,
+          onChanged: onChanged,
+          activeColor: AppColors.accentBlue,
+          trackColor: WidgetStatePropertyAll(AppColors.border),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChoiceChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ChoiceChip({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.accentBlue.withAlpha(40) : AppColors.bgSurfaceActive,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? AppColors.accentBlue : AppColors.border,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            color: selected ? AppColors.accentBlue : AppColors.textSecondary,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
   }
 }

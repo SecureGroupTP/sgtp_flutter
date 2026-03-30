@@ -42,6 +42,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatSetReply>(_onSetReply);
     on<ChatClearReply>(_onClearReply);
     on<ChatToggleReaction>(_onToggleReaction);
+    on<ChatUpdateNicknames>(_onUpdateNicknames);
     on<ChatUpdateWhitelist>((event, emit) {
       _client?.updateWhitelist(event.whitelist);
     });
@@ -113,7 +114,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     emit(state.copyWith(
       status:          ChatStatus.connecting,
-      messages:        [],
+      // Preserve existing messages and reactions — they live in RAM until app close.
+      // Only clear messages on a *fresh* connect (different room UUID).
+      messages:        (isRealRoom && state.roomUUID.isNotEmpty && state.roomUUID != roomUUIDHex)
+                           ? [] : state.messages,
       peerUUIDs:       [],
       peerNicknames:   {},
       peerPublicKeys:  {},
@@ -145,6 +149,30 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     );
     // Clear reply after send
     if (event.replyToId != null) emit(state.copyWith(clearReply: true));
+  }
+
+  void _onUpdateNicknames(ChatUpdateNicknames event, Emitter<ChatState> emit) {
+    // Rebuild peerNicknames from current peerPublicKeys + new nickname map.
+    // This ensures peers who joined before the contact was added get their
+    // nickname shown immediately without requiring a reconnect.
+    final newNicknames = Map<String, String>.from(event.nicknames);
+    final updatedPeerNicks = Map<String, String>.from(state.peerNicknames);
+    final updatedHistory   = Map<String, String>.from(state.peerNicknamesHistory);
+
+    for (final entry in state.peerPublicKeys.entries) {
+      final sessionUUID = entry.key;
+      final pubHex      = entry.value;
+      final nick = newNicknames[pubHex];
+      if (nick != null) {
+        updatedPeerNicks[sessionUUID] = nick;
+        updatedHistory[sessionUUID]   = nick;
+      }
+    }
+    emit(state.copyWith(
+      nicknames:            newNicknames,
+      peerNicknames:        updatedPeerNicks,
+      peerNicknamesHistory: updatedHistory,
+    ));
   }
 
   void _onSetReply(ChatSetReply event, Emitter<ChatState> emit) {

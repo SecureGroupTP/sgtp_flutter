@@ -125,6 +125,15 @@ class ChatUpdateWhitelist extends ChatEvent {
   List<Object?> get props => [whitelist];
 }
 
+/// Hot-update nicknames (ed25519PubHex → name) without reconnect.
+/// Called when the user adds/edits/removes a contact while rooms are live.
+class ChatUpdateNicknames extends ChatEvent {
+  final Map<String, String> nicknames;
+  const ChatUpdateNicknames(this.nicknames);
+  @override
+  List<Object?> get props => [nicknames];
+}
+
 class ChatInternalSgtpEvent extends ChatEvent {
   final SgtpEvent sgtpEvent;
   /// The session generation counter at the time this event was dispatched.
