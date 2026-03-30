@@ -22,12 +22,13 @@ dependencies:
   media_kit_libs_video: ^1.0.5
   pasteboard: ^0.2.0
   qr_flutter: ^4.1.0
-  mobile_scanner: ^5.2.0
   image_picker: ^1.1.2
   window_manager: ^0.4.3
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3
   camera: ^0.11.0
+  flutter_zxing: ^2.2.1
+  camera_desktop: ^1.0.6
 
 dev_dependencies:
   flutter_test:

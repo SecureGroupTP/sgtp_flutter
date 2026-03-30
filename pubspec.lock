@@ -121,6 +121,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.9.23+2"
+  camera_desktop:
+    dependency: "direct main"
+    description:
+      name: camera_desktop
+      sha256: "3c3798641b6c48dd5d3973e1d5fb3e9dd05bf646c9324de991297e5b2ad694e6"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.6"
   camera_platform_interface:
     dependency: transitive
     description:
@@ -349,6 +357,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_zxing:
+    dependency: "direct main"
+    description:
+      name: flutter_zxing
+      sha256: dbcd89da2c9aa84f48d7d7e1ba436825f8656a69b142abb7bcdb7c2d9c22d48c
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.2.1"
   fuchsia_remote_debug_protocol:
     dependency: transitive
     description: flutter
@@ -610,14 +626,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
-  mobile_scanner:
-    dependency: "direct main"
-    description:
-      name: mobile_scanner
-      sha256: d234581c090526676fd8fab4ada92f35c6746e3fb4f05a399665d75a399fb760
-      url: "https://pub.dev"
-    source: hosted
-    version: "5.2.3"
   native_toolchain_c:
     dependency: transitive
     description:
@@ -1256,5 +1264,5 @@ packages:
     source: hosted
     version: "3.1.3"
 sdks:
-  dart: ">=3.10.3 <4.0.0"
+  dart: ">=3.11.0 <4.0.0"
   flutter: ">=3.38.4"

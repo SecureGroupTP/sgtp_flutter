@@ -1,6 +1,3 @@
-import 'dart:typed_data';
-
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -9,12 +6,6 @@ import '../../core/app_theme.dart';
 import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../widgets/qr_scanner_dialog.dart';
-
-/// Whether we're on a mobile device (QR scanner available).
-bool get _isMobile =>
-    !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS);
 
 /// Contacts screen — shows the trusted-peer whitelist.
 /// Users can add peers by public key hex/base64, rename them, delete them.
@@ -87,60 +78,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // ── Import (QR or base64 paste) ───────────────────────────────────────────
 
   void _openImport() {
-    if (_isMobile) {
-      _showImportChoiceSheet();
-    } else {
-      _showBase64ImportSheet();
-    }
-  }
-
-  void _showImportChoiceSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Import Contact',
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary)),
-              const SizedBox(height: 8),
-              const Text('Choose how to import a contact',
-                  style: TextStyle(
-                      fontSize: 14, color: AppColors.textSecondary)),
-              const SizedBox(height: 24),
-              _SheetButton(
-                icon: Icons.qr_code_scanner_outlined,
-                label: 'Scan QR Code',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _openQrScanner();
-                },
-              ),
-              const SizedBox(height: 12),
-              _SheetButton(
-                icon: Icons.text_fields_outlined,
-                label: 'Paste Base64 / Hex',
-                secondary: true,
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _showBase64ImportSheet();
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    _openQrScanner();
   }
 
   void _openQrScanner() async {
@@ -689,7 +627,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   // Import button
                   IconButton(
                     onPressed: _openImport,
-                    tooltip: _isMobile ? 'Import via QR / Base64' : 'Import via Base64',
+                    tooltip: 'Scan QR Code',
                     icon: const Icon(
                       Icons.qr_code_scanner_outlined,
                       color: AppColors.textPrimary,
