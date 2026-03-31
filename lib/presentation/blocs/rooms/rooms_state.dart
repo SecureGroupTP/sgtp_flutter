@@ -2,9 +2,14 @@ import '../chat/chat_bloc.dart';
 
 class RoomEntry {
   final String roomUUID; // hex, 32 chars
+  final String serverAddress; // host:port (chat)
   final ChatBloc chatBloc;
 
-  RoomEntry({required this.roomUUID, required this.chatBloc});
+  RoomEntry({
+    required this.roomUUID,
+    required this.serverAddress,
+    required this.chatBloc,
+  });
 
   /// Short label shown in the rooms list.
   String get label => roomUUID.substring(0, 8);

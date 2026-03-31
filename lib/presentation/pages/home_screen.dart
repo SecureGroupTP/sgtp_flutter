@@ -209,6 +209,9 @@ class _AppStartScreenState extends State<AppStartScreen> {
     final settings = SettingsRepository();
     var savedKey = await settings.loadPrivateKey();
     final lastAddr = await settings.getLastAddress() ?? '';
+    final preferredNode = await settings.loadPreferredNode();
+    final chatServer =
+        preferredNode?.chatAddress ?? (lastAddr.isEmpty ? 'localhost:7777' : lastAddr);
 
     // First launch: auto-generate an Ed25519 identity key silently.
     if (savedKey == null) {
@@ -230,7 +233,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
       final userAvatar = await settings.loadUserAvatar();
 
       final config = SgtpConfig(
-        serverAddr: lastAddr.isEmpty ? 'localhost:7777' : lastAddr,
+        serverAddr: chatServer,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
@@ -243,7 +246,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
           builder: (_) => HomeScreen(
             initialConfig: config,
             nicknames: nicknames,
-            serverAddress: lastAddr,
+            serverAddress: chatServer,
             userAvatar: userAvatar,
             initialWhitelist: entries,
           ),

@@ -11,6 +11,7 @@ import '../../core/qr_data.dart';
 import '../../data/repositories/chat_metadata_repository.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../domain/entities/chat_metadata.dart';
+import '../../domain/entities/node.dart';
 import '../blocs/chat/chat_bloc.dart';
 import '../blocs/chat/chat_event.dart';
 import '../blocs/chat/chat_state.dart';
@@ -40,7 +41,7 @@ class RoomsPage extends StatefulWidget {
 class RoomsPageState extends State<RoomsPage> {
   final _settingsRepo = SettingsRepository();
   final _chatMetadataRepo = ChatMetadataRepository();
-  List<String> _savedUUIDs = [];
+  List<SavedChatRef> _savedChats = [];
   Map<String, ChatMetadata> _savedChatMetadata = const {};
   String _savedRoomsSignature = '';
 
@@ -51,16 +52,16 @@ class RoomsPageState extends State<RoomsPage> {
   }
 
   Future<void> _loadSavedChats() async {
-    final uuids = await _settingsRepo.loadSavedChatUUIDs();
+    final refs = await _settingsRepo.loadSavedChats();
     final allMetadata = await _chatMetadataRepo.loadAllChats();
     final metadataByUuid = <String, ChatMetadata>{
       for (final chat in allMetadata) chat.uuid: chat,
     };
     if (!mounted) return;
     setState(() {
-      _savedUUIDs = uuids;
+      _savedChats = refs;
       _savedChatMetadata = {
-        for (final uuid in uuids)
+        for (final uuid in refs.map((r) => r.uuid))
           if (metadataByUuid.containsKey(uuid)) uuid: metadataByUuid[uuid]!,
       };
     });
@@ -68,6 +69,7 @@ class RoomsPageState extends State<RoomsPage> {
 
   Future<void> _saveChat(
     String uuid, {
+    String? serverAddress,
     String? name,
     Uint8List? avatarBytes,
   }) async {
@@ -86,7 +88,7 @@ class RoomsPageState extends State<RoomsPage> {
         windowHeight: existing?.windowHeight,
       ));
     }
-    await _settingsRepo.addSavedChat(uuid);
+    await _settingsRepo.addSavedChat(uuid, serverAddress: serverAddress);
     await _loadSavedChats();
   }
 
@@ -113,7 +115,6 @@ class RoomsPageState extends State<RoomsPage> {
         return Scaffold(
           backgroundColor: AppColors.bgMain,
           appBar: RoomsAppBar(
-            serverAddress: state.serverAddress,
             statuses: statuses,
           ),
           body: _buildBody(context, state),
@@ -125,7 +126,7 @@ class RoomsPageState extends State<RoomsPage> {
   Widget _buildBody(BuildContext context, RoomsState state) {
     final activeUUIDs = state.rooms.map((r) => r.roomUUID).toSet();
     final savedNotActive =
-        _savedUUIDs.where((u) => !activeUUIDs.contains(u)).toList();
+        _savedChats.where((r) => !activeUUIDs.contains(r.uuid)).toList();
     final hasAnything = state.rooms.isNotEmpty || savedNotActive.isNotEmpty;
 
     if (!hasAnything) return const _EmptyState();
@@ -137,20 +138,20 @@ class RoomsPageState extends State<RoomsPage> {
         // ── Active rooms ─────────────────────────────────────────────────
         ...state.rooms.map((entry) => ActiveRoomTile(
               entry: entry,
-              serverAddress: state.serverAddress,
-              isSaved: _savedUUIDs.contains(entry.roomUUID),
+              isSaved: _savedChats.any((r) => r.uuid == entry.roomUUID),
               onTap: () => _openRoom(context, entry),
               onReconnect: () => entry.chatBloc.add(const ChatReconnect()),
               onRemove: () => context
                   .read<RoomsBloc>()
                   .add(RoomsRemoveRoom(entry.roomUUID)),
               onToggleSave: () async {
-                if (_savedUUIDs.contains(entry.roomUUID)) {
+                if (_savedChats.any((r) => r.uuid == entry.roomUUID)) {
                   await _unsaveChat(entry.roomUUID);
                 } else {
                   final currentState = entry.chatBloc.state;
                   await _saveChat(
                     entry.roomUUID,
+                    serverAddress: entry.serverAddress,
                     name: currentState.chatName,
                     avatarBytes: currentState.chatAvatarBytes,
                   );
@@ -161,12 +162,15 @@ class RoomsPageState extends State<RoomsPage> {
         // ── Saved chats (not currently joined) ───────────────────────────
         if (savedNotActive.isNotEmpty) ...[
           const _SectionHeader(title: 'Saved Chats'),
-          ...savedNotActive.map((uuid) => SavedChatTile(
-                uuid: uuid,
-                metadata: _savedChatMetadata[uuid],
+          ...savedNotActive.map((ref) => SavedChatTile(
+                uuid: ref.uuid,
+                metadata: _savedChatMetadata[ref.uuid],
                 onConnect: () =>
-                    context.read<RoomsBloc>().add(RoomsJoinRoom(uuid)),
-                onRemove: () => _unsaveChat(uuid),
+                    context.read<RoomsBloc>().add(RoomsJoinRoom(
+                          ref.uuid,
+                          serverAddress: ref.serverAddress,
+                        )),
+                onRemove: () => _unsaveChat(ref.uuid),
               )),
         ],
       ],
@@ -204,12 +208,24 @@ class RoomsPageState extends State<RoomsPage> {
   }
 
   Future<void> _syncSavedChatsFromActiveRooms(RoomsState state) async {
-    final savedUuids = _savedUUIDs.toSet();
+    final savedUuids = _savedChats.map((r) => r.uuid).toSet();
     if (savedUuids.isEmpty) return;
 
+    final savedByUuid = {for (final r in _savedChats) r.uuid: r};
     var changed = false;
     for (final room in state.rooms) {
       if (!savedUuids.contains(room.roomUUID)) continue;
+
+      // Backfill server address for legacy saved chats (uuid-only).
+      final savedRef = savedByUuid[room.roomUUID];
+      if ((savedRef?.serverAddress == null || savedRef!.serverAddress!.isEmpty) &&
+          room.serverAddress.trim().isNotEmpty) {
+        await _settingsRepo.addSavedChat(
+          room.roomUUID,
+          serverAddress: room.serverAddress.trim(),
+        );
+        changed = true;
+      }
 
       final chatState = room.chatBloc.state;
       final existing = await _chatMetadataRepo.loadChat(room.roomUUID);
@@ -249,11 +265,12 @@ class RoomsPageState extends State<RoomsPage> {
 
   String _buildSavedRoomsSignature(RoomsState state) {
     final activeSaved = state.rooms
-        .where((room) => _savedUUIDs.contains(room.roomUUID))
+        .where((room) => _savedChats.any((r) => r.uuid == room.roomUUID))
         .map((room) {
       final chatState = room.chatBloc.state;
       return [
         room.roomUUID,
+        room.serverAddress,
         chatState.chatName,
         '${chatState.chatAvatarBytes?.length ?? 0}',
         chatState.status.name,
@@ -262,7 +279,8 @@ class RoomsPageState extends State<RoomsPage> {
       ].join(':');
     }).toList()
       ..sort();
-    final saved = [..._savedUUIDs]..sort();
+    final saved = _savedChats.map((r) => '${r.uuid}@${r.serverAddress ?? ''}').toList()
+      ..sort();
     return [...saved, ...activeSaved].join('|');
   }
 }
@@ -273,12 +291,10 @@ class RoomsPageState extends State<RoomsPage> {
 
 /// Custom AppBar with title + server address + global status dot.
 class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
-  final String serverAddress;
   final List<ChatStatus> statuses;
 
   const RoomsAppBar({
     super.key,
-    required this.serverAddress,
     required this.statuses,
   });
 
@@ -314,18 +330,6 @@ class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
                           color: AppColors.textPrimary,
                         ),
                       ),
-                      if (serverAddress.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          serverAddress,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 11,
-                            color: AppColors.textSecondary,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -345,7 +349,6 @@ class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
 
 class ActiveRoomTile extends StatelessWidget {
   final RoomEntry entry;
-  final String serverAddress;
   final bool isSaved;
   final VoidCallback onTap;
   final VoidCallback onReconnect;
@@ -355,7 +358,6 @@ class ActiveRoomTile extends StatelessWidget {
   const ActiveRoomTile({
     super.key,
     required this.entry,
-    required this.serverAddress,
     required this.isSaved,
     required this.onTap,
     required this.onReconnect,
@@ -405,7 +407,6 @@ class ActiveRoomTile extends StatelessWidget {
               if (isOffline) _ReconnectButton(onPressed: onReconnect),
               _ActiveRoomMoreButton(
                 entry: entry,
-                serverAddress: serverAddress,
                 isSaved: isSaved,
                 chatState: chatState,
                 onTap: onTap,
@@ -432,7 +433,6 @@ class ActiveRoomTile extends StatelessWidget {
 // stateless wrapper that has access to the needed callbacks.
 class _ActiveRoomMoreButton extends StatelessWidget {
   final RoomEntry entry;
-  final String serverAddress;
   final bool isSaved;
   final ChatState chatState;
   final VoidCallback onTap;
@@ -441,7 +441,6 @@ class _ActiveRoomMoreButton extends StatelessWidget {
 
   const _ActiveRoomMoreButton({
     required this.entry,
-    required this.serverAddress,
     required this.isSaved,
     required this.chatState,
     required this.onTap,
@@ -502,7 +501,6 @@ class _ActiveRoomMoreButton extends StatelessWidget {
         final qrData = QrShareData(
           type: 'room',
           roomUUID: entry.roomUUID,
-          serverAddress: serverAddress,
           timestamp: DateTime.now().millisecondsSinceEpoch,
         );
         showDialog<void>(
@@ -871,7 +869,7 @@ class _EmptyState extends StatelessWidget {
 
 class _AddRoomSheet extends StatefulWidget {
   final RoomsBloc roomsBloc;
-  final Future<void> Function(String uuid)? onSaveChat;
+  final Future<void> Function(String uuid, {String? serverAddress})? onSaveChat;
   const _AddRoomSheet({required this.roomsBloc, this.onSaveChat});
 
   @override
@@ -886,6 +884,11 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   bool _saveAfterJoin = false;
   String? _decodeError;
 
+  final _settingsRepo = SettingsRepository();
+  List<NodeConfig> _nodes = const [];
+  String? _selectedNodeId;
+  bool _nodesLoading = true;
+
   @override
   void dispose() {
     _uuidCtrl.dispose();
@@ -893,11 +896,35 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
     super.dispose();
   }
 
+  @override
+  void initState() {
+    super.initState();
+    _loadNodes();
+  }
+
+  Future<void> _loadNodes() async {
+    final nodes = await _settingsRepo.loadNodes();
+    final preferredNode = await _settingsRepo.loadPreferredNode();
+    if (!mounted) return;
+    setState(() {
+      _nodes = nodes;
+      _selectedNodeId =
+          preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
+      _nodesLoading = false;
+    });
+  }
+
+  String? get _selectedChatServer {
+    if (_selectedNodeId == null) return null;
+    final node = _nodes.where((n) => n.id == _selectedNodeId).firstOrNull;
+    return node?.chatAddress;
+  }
+
   void _handleQrScanned(QrShareData data) {
     if (data.type == 'room' && data.roomUUID != null) {
       widget.roomsBloc.add(RoomsJoinRoom(
         data.roomUUID!,
-        serverAddress: data.serverAddress,
+        serverAddress: data.serverAddress ?? _selectedChatServer,
       ));
       Navigator.of(context).pop();
     } else {
@@ -908,14 +935,14 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
 
   void _joinFromInput() async {
     String? uuid;
-    String? serverAddress;
+    String? serverAddress = _selectedChatServer;
     if (_showBase64Input) {
       final raw = _shareHexCtrl.text.trim();
       if (raw.isEmpty) return;
       final data = QrShareData.parse(raw);
       if (data != null && data.type == 'room' && data.roomUUID != null) {
         uuid = data.roomUUID;
-        serverAddress = data.serverAddress; // use server from QR if present
+        serverAddress = data.serverAddress ?? serverAddress;
       } else {
         final hex = raw.replaceAll('-', '');
         if (hex.length == 32) uuid = hex;
@@ -930,7 +957,9 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       if (uuid.isEmpty) return;
     }
     widget.roomsBloc.add(RoomsJoinRoom(uuid, serverAddress: serverAddress));
-    if (_saveAfterJoin) await widget.onSaveChat?.call(uuid);
+    if (_saveAfterJoin) {
+      await widget.onSaveChat?.call(uuid, serverAddress: serverAddress);
+    }
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -953,13 +982,29 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
             ),
             const SizedBox(height: 24),
 
+            // Node picker
+            _NodePicker(
+              isLoading: _nodesLoading,
+              nodes: _nodes,
+              selectedId: _selectedNodeId,
+              onChanged: (id) async {
+                setState(() => _selectedNodeId = id);
+                if (id != null) {
+                  await _settingsRepo.setLastNodeId(id);
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+
             // Create new
             _SheetButton(
               label: 'Create new room',
               icon: Icons.add_circle_outline,
               filled: true,
               onPressed: () {
-                widget.roomsBloc.add(const RoomsCreateRoom());
+                widget.roomsBloc.add(
+                  RoomsCreateRoom(serverAddress: _selectedChatServer),
+                );
                 Navigator.of(context).pop();
               },
             ),
@@ -1101,6 +1146,102 @@ class _SheetButton extends StatelessWidget {
       icon: Icon(icon),
       label: Text(label),
       style: style,
+    );
+  }
+}
+
+class _NodePicker extends StatelessWidget {
+  final bool isLoading;
+  final List<NodeConfig> nodes;
+  final String? selectedId;
+  final ValueChanged<String?> onChanged;
+
+  const _NodePicker({
+    required this.isLoading,
+    required this.nodes,
+    required this.selectedId,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Container(
+        height: 52,
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(14),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withAlpha(18)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: const Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 10),
+            Text(
+              'Loading nodes…',
+              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (nodes.isEmpty) {
+      return Container(
+        height: 52,
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(14),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withAlpha(18)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.centerLeft,
+        child: const Text(
+          'No nodes configured',
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    final value = (selectedId != null && nodes.any((n) => n.id == selectedId))
+        ? selectedId
+        : nodes.first.id;
+
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        color: Colors.white.withAlpha(14),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withAlpha(18)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          isExpanded: true,
+          dropdownColor: AppColors.bgSurface,
+          iconEnabledColor: AppColors.textSecondary,
+          onChanged: onChanged,
+          items: nodes
+              .map(
+                (n) => DropdownMenuItem(
+                  value: n.id,
+                  child: Text(
+                    n.name,
+                    style: const TextStyle(
+                        fontSize: 14, color: AppColors.textPrimary),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+      ),
     );
   }
 }

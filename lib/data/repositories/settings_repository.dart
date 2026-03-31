@@ -5,10 +5,15 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/uuid_v7.dart';
+import '../../domain/entities/node.dart';
+
 /// Repository for persisting user settings between sessions.
 class SettingsRepository {
   static const _savedAddressesKey = 'sgtp_saved_addresses';
   static const _lastAddressKey = 'sgtp_last_address';
+  static const _nodesJsonKey = 'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort,usersPort}]
+  static const _lastNodeIdKey = 'sgtp_last_node_id';
   static const _privKeyB64Key = 'sgtp_private_key_b64';
   static const _privKeyNameKey = 'sgtp_private_key_name';
   static const _whitelistJsonKey = 'sgtp_whitelist_json'; // [{b64, name, nick}]
@@ -58,6 +63,127 @@ class SettingsRepository {
   Future<String?> getLastAddress() async {
     final p = await SharedPreferences.getInstance();
     return p.getString(_lastAddressKey);
+  }
+
+  // ── Nodes (servers) ───────────────────────────────────────────────────────
+
+  /// Loads all configured nodes. If none exist yet, tries to migrate from the
+  /// legacy `host:port` storage (`getLastAddress`), otherwise creates a sane
+  /// default (`localhost:7777`).
+  Future<List<NodeConfig>> loadNodes() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getStringList(_nodesJsonKey) ?? [];
+    final parsed = <NodeConfig>[];
+    for (final s in raw) {
+      try {
+        final m = json.decode(s) as Map<String, dynamic>;
+        final node = NodeConfig.fromJson(m);
+        if (node.host.isEmpty) continue;
+        parsed.add(node);
+      } catch (_) {}
+    }
+
+    if (parsed.isNotEmpty) return parsed;
+
+    // Legacy migration: use lastAddress or first saved address.
+    final legacy = (p.getString(_lastAddressKey) ??
+            (p.getStringList(_savedAddressesKey)?.firstOrNull)) ??
+        '';
+    final migrated = _nodeFromLegacyAddress(legacy);
+    final nodes = [migrated];
+    await saveNodes(nodes);
+    await setLastNodeId(migrated.id);
+    return nodes;
+  }
+
+  Future<void> saveNodes(List<NodeConfig> nodes) async {
+    final p = await SharedPreferences.getInstance();
+    final jsonList = nodes.map((n) => json.encode(n.toJson())).toList();
+    await p.setStringList(_nodesJsonKey, jsonList);
+  }
+
+  Future<String?> loadLastNodeId() async {
+    final p = await SharedPreferences.getInstance();
+    final id = p.getString(_lastNodeIdKey);
+    if (id != null && id.isNotEmpty) return id;
+    final nodes = await loadNodes();
+    if (nodes.isEmpty) return null;
+    await setLastNodeId(nodes.first.id);
+    return nodes.first.id;
+  }
+
+  Future<void> setLastNodeId(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_lastNodeIdKey, nodeId);
+  }
+
+  Future<NodeConfig?> loadPreferredNode() async {
+    final nodes = await loadNodes();
+    if (nodes.isEmpty) return null;
+    final id = await loadLastNodeId();
+    final match = nodes.where((n) => n.id == id).firstOrNull;
+    return match ?? nodes.first;
+  }
+
+  Future<NodeConfig> upsertNode(NodeConfig node) async {
+    final nodes = await loadNodes();
+    final idx = nodes.indexWhere((n) => n.id == node.id);
+    final next = [...nodes];
+    if (idx >= 0) {
+      next[idx] = node;
+    } else {
+      next.add(node);
+    }
+    await saveNodes(next);
+    final lastId = await loadLastNodeId();
+    if (lastId == null || lastId.isEmpty) {
+      await setLastNodeId(node.id);
+    }
+    return node;
+  }
+
+  Future<void> deleteNode(String nodeId) async {
+    final nodes = await loadNodes();
+    final next = nodes.where((n) => n.id != nodeId).toList();
+    await saveNodes(next);
+    final currentLast = await loadLastNodeId();
+    if (currentLast == nodeId) {
+      if (next.isNotEmpty) {
+        await setLastNodeId(next.first.id);
+      } else {
+        final fallback = _nodeFromLegacyAddress('');
+        await saveNodes([fallback]);
+        await setLastNodeId(fallback.id);
+      }
+    }
+  }
+
+  NodeConfig _nodeFromLegacyAddress(String address) {
+    final cleaned = address
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    var host = 'localhost';
+    var port = 7777;
+    if (cleaned.isNotEmpty) {
+      final parts = cleaned.split(':');
+      if (parts.length >= 2) {
+        host = parts.sublist(0, parts.length - 1).join(':').trim();
+        port = int.tryParse(parts.last.trim()) ?? 7777;
+      } else {
+        host = cleaned;
+      }
+    }
+    final id = uuidBytesToHex(generateUUIDv7());
+    return NodeConfig(
+      id: id,
+      name: 'Connection',
+      host: host.isEmpty ? 'localhost' : host,
+      chatPort: port,
+      voicePort: port,
+      usersPort: port,
+    );
   }
 
   // ── Private key ───────────────────────────────────────────────────────────
@@ -172,26 +298,67 @@ class SettingsRepository {
   // ── Saved chats (UUIDs) ───────────────────────────────────────────────────
 
   static const _savedChatsKey = 'sgtp_saved_chat_uuids';
+  static const _savedChatsV2Key = 'sgtp_saved_chats_v2'; // [{uuid, server}]
 
-  Future<List<String>> loadSavedChatUUIDs() async {
+  Future<List<SavedChatRef>> loadSavedChats() async {
     final p = await SharedPreferences.getInstance();
-    return p.getStringList(_savedChatsKey) ?? [];
+    final raw = p.getStringList(_savedChatsV2Key) ?? [];
+    final result = <SavedChatRef>[];
+    for (final s in raw) {
+      try {
+        final m = json.decode(s) as Map<String, dynamic>;
+        final ref = SavedChatRef.fromJson(m);
+        if (ref.uuid.isEmpty) continue;
+        result.add(ref);
+      } catch (_) {}
+    }
+
+    // Legacy migration (uuid-only list).
+    if (result.isEmpty) {
+      final legacy = p.getStringList(_savedChatsKey) ?? [];
+      if (legacy.isNotEmpty) {
+        final migrated = legacy
+            .where((u) => u.trim().isNotEmpty)
+            .map((u) => SavedChatRef(uuid: u.trim()))
+            .toList();
+        await saveSavedChats(migrated);
+        return migrated;
+      }
+    }
+
+    return result;
   }
 
-  Future<void> addSavedChat(String uuid) async {
+  Future<void> saveSavedChats(List<SavedChatRef> refs) async {
     final p = await SharedPreferences.getInstance();
-    final list = p.getStringList(_savedChatsKey) ?? [];
-    if (!list.contains(uuid)) {
-      list.add(uuid);
-      await p.setStringList(_savedChatsKey, list);
+    final jsonList = refs.map((r) => json.encode(r.toJson())).toList();
+    await p.setStringList(_savedChatsV2Key, jsonList);
+    // Keep legacy key in sync (uuid-only) for older code paths.
+    await p.setStringList(_savedChatsKey, refs.map((r) => r.uuid).toList());
+  }
+
+  Future<List<String>> loadSavedChatUUIDs() async {
+    final refs = await loadSavedChats();
+    return refs.map((r) => r.uuid).toList();
+  }
+
+  Future<void> addSavedChat(String uuid, {String? serverAddress}) async {
+    final refs = await loadSavedChats();
+    final next = [...refs];
+    final idx = next.indexWhere((r) => r.uuid == uuid);
+    final ref = SavedChatRef(uuid: uuid, serverAddress: serverAddress);
+    if (idx >= 0) {
+      next[idx] = ref;
+    } else {
+      next.add(ref);
     }
+    await saveSavedChats(next);
   }
 
   Future<void> removeSavedChat(String uuid) async {
-    final p = await SharedPreferences.getInstance();
-    final list = p.getStringList(_savedChatsKey) ?? [];
-    list.remove(uuid);
-    await p.setStringList(_savedChatsKey, list);
+    final refs = await loadSavedChats();
+    final next = refs.where((r) => r.uuid != uuid).toList();
+    await saveSavedChats(next);
   }
 
   // ── Media transfer ───────────────────────────────────────────────────────

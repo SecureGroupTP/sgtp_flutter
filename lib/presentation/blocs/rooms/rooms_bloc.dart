@@ -52,7 +52,11 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
   void _onCreate(RoomsCreateRoom event, Emitter<RoomsState> emit) {
     final roomUUID = generateUUIDv7();
-    _addRoom(roomUUID, emit);
+    final configOverride = (event.serverAddress != null &&
+            event.serverAddress!.trim().isNotEmpty)
+        ? _baseConfig.copyWith(serverAddr: event.serverAddress!.trim())
+        : null;
+    _addRoom(roomUUID, emit, configOverride: configOverride);
   }
 
   void _onJoin(RoomsJoinRoom event, Emitter<RoomsState> emit) {
@@ -114,7 +118,11 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       add(const _RoomsRefresh());
     });
 
-    final entry = RoomEntry(roomUUID: hexUUID, chatBloc: chatBloc);
+    final entry = RoomEntry(
+      roomUUID: hexUUID,
+      serverAddress: config.serverAddr,
+      chatBloc: chatBloc,
+    );
     emit(state.copyWith(
       rooms: [...state.rooms, entry],
       clearError: true,

@@ -15,8 +15,10 @@ import '../../core/crypto/ed25519_utils.dart';
 import '../../core/interaction_prefs.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/qr_data.dart';
+import '../../core/uuid_v7.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
+import '../../domain/entities/node.dart';
 import '../../core/app_logger.dart';
 import '../../core/constants.dart';
 import '../widgets/pretty_qr_share_panel.dart';
@@ -79,6 +81,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _swipeToReply = true;
   bool _longPressMenu = true;
 
+  // Nodes
+  List<NodeConfig> _nodes = const [];
+  bool _nodesLoading = true;
+
   @override
   void initState() {
     super.initState();
@@ -120,6 +126,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final lastAddr = await _settings.getLastAddress();
     if (lastAddr != null && _serverCtrl.text.isEmpty) {
       setState(() => _serverCtrl.text = lastAddr);
+    }
+
+    // Load nodes (no node details shown outside Settings).
+    final nodes = await _settings.loadNodes();
+    final preferredNode = await _settings.loadPreferredNode();
+    if (mounted) {
+      setState(() {
+        _nodes = nodes;
+        _nodesLoading = false;
+        if (preferredNode != null) {
+          _serverCtrl.text = preferredNode.chatAddress;
+        }
+      });
     }
 
     final avatar = await _settings.loadUserAvatar();
@@ -562,6 +581,225 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setError(String msg) => setState(() => _error = msg);
 
+  // ── Nodes ────────────────────────────────────────────────────────────────
+
+  Future<void> _reloadNodes() async {
+    final nodes = await _settings.loadNodes();
+    if (!mounted) return;
+    setState(() {
+      _nodes = nodes;
+      _nodesLoading = false;
+    });
+  }
+
+  Future<NodeConfig?> _openNodeEditor({NodeConfig? existing}) async {
+    final base = existing ??
+        NodeConfig(
+          id: uuidBytesToHex(generateUUIDv7()),
+          name: 'Node',
+          host: 'localhost',
+          chatPort: 7777,
+          voicePort: 7777,
+          usersPort: 7777,
+        );
+
+    final nameCtrl = TextEditingController(text: base.name);
+    final hostCtrl = TextEditingController(text: base.host);
+    final chatCtrl = TextEditingController(text: base.chatPort.toString());
+    final voiceCtrl = TextEditingController(text: base.voicePort.toString());
+    final usersCtrl = TextEditingController(text: base.usersPort.toString());
+
+    NodeConfig? result;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  existing == null ? 'Add Node' : 'Edit Node',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: hostCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Domain or IP',
+                    border: OutlineInputBorder(),
+                  ),
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  textCapitalization: TextCapitalization.none,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: chatCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Chat port',
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: voiceCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Voice port',
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: usersCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Users port',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () {
+                          final name = nameCtrl.text.trim().isEmpty
+                              ? 'Node'
+                              : nameCtrl.text.trim();
+                          final host = hostCtrl.text
+                              .trim()
+                              .replaceAll(
+                                  RegExp(r'^https?://', caseSensitive: false),
+                                  '')
+                              .replaceAll(
+                                  RegExp(r'^wss?://', caseSensitive: false), '')
+                              .trim();
+                          int? parsePort(String s) => int.tryParse(s.trim());
+
+                          final chatPort = parsePort(chatCtrl.text);
+                          final voicePort = parsePort(voiceCtrl.text);
+                          final usersPort = parsePort(usersCtrl.text);
+
+                          bool validPort(int? p) =>
+                              p != null && p > 0 && p <= 65535;
+                          if (host.isEmpty ||
+                              !validPort(chatPort) ||
+                              !validPort(voicePort) ||
+                              !validPort(usersPort)) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                    'Please enter a host and valid ports (1–65535)'),
+                              ),
+                            );
+                            return;
+                          }
+
+                          result = base.copyWith(
+                            name: name,
+                            host: host,
+                            chatPort: chatPort!,
+                            voicePort: voicePort!,
+                            usersPort: usersPort!,
+                          );
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text('Save'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    nameCtrl.dispose();
+    hostCtrl.dispose();
+    chatCtrl.dispose();
+    voiceCtrl.dispose();
+    usersCtrl.dispose();
+    return result;
+  }
+
+  Future<void> _addNode() async {
+    final node = await _openNodeEditor();
+    if (node == null) return;
+    await _settings.upsertNode(node);
+    await _reloadNodes();
+  }
+
+  Future<void> _editNode(NodeConfig node) async {
+    final updated = await _openNodeEditor(existing: node);
+    if (updated == null) return;
+    await _settings.upsertNode(updated);
+    await _reloadNodes();
+  }
+
+  Future<void> _deleteNode(NodeConfig node) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Node?'),
+        content: Text('Delete "${node.name}" (${node.chatAddress})?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _settings.deleteNode(node.id);
+    await _reloadNodes();
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -573,7 +811,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.only(bottom: 100),
         children: [
           _buildProfileSection(),
-          _SettingsGroup(title: 'Connection', child: _buildConnectionCard()),
+          _SettingsGroup(title: 'Nodes', child: _buildNodesCard()),
           _SettingsGroup(
               title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
           _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
@@ -773,28 +1011,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Connection card ───────────────────────────────────────────────────────
+  // ── Nodes card ───────────────────────────────────────────────────────────
 
-  Widget _buildConnectionCard() {
-    return TextField(
-      controller: _serverCtrl,
-      style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
-      decoration: const InputDecoration(
-        hintText: 'host:port',
-        hintStyle: TextStyle(color: AppColors.textSecondary),
-        border: InputBorder.none,
-        enabledBorder: InputBorder.none,
-        focusedBorder: InputBorder.none,
-        filled: false,
-        isDense: true,
-        contentPadding: EdgeInsets.zero,
-      ),
-      keyboardType: TextInputType.url,
-      autocorrect: false,
-      enableSuggestions: false,
-      textCapitalization: TextCapitalization.none,
-      onChanged: (_) => _tryApplyConfig(),
-      onSubmitted: (_) => _tryApplyConfig(),
+  Widget _buildNodesCard() {
+    if (_nodesLoading) {
+      return const Row(
+        children: [
+          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 12),
+          Text('Loading…', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+        ],
+      );
+    }
+
+    if (_nodes.isEmpty) {
+      return Row(
+        children: [
+          const Expanded(
+            child: Text('No nodes yet',
+                style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+          ),
+          _ActionButton(
+            icon: Icons.add_circle_outline,
+            label: 'Add',
+            onPressed: _addNode,
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: _ActionButton(
+            icon: Icons.add_circle_outline,
+            label: 'Add',
+            onPressed: _addNode,
+          ),
+        ),
+        const SizedBox(height: 14),
+        ..._nodes.map((n) => _NodeRow(
+              node: n,
+              onEdit: () => _editNode(n),
+              onDelete: () => _deleteNode(n),
+            )),
+      ],
     );
   }
 
@@ -1515,6 +1778,87 @@ class _ActionButton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _NodeRow extends StatelessWidget {
+  final NodeConfig node;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  const _NodeRow({
+    required this.node,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.bgSurfaceActive,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        node.name,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  node.chatAddress,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'chat:${node.chatPort}  voice:${node.voicePort}  users:${node.usersPort}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          IconButton(
+            tooltip: 'Edit',
+            onPressed: onEdit,
+            icon: const Icon(Icons.edit_outlined,
+                size: 20, color: AppColors.textSecondary),
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            onPressed: onDelete,
+            icon: const Icon(Icons.delete_outline,
+                size: 20, color: AppColors.statusRed),
+          ),
+        ],
       ),
     );
   }

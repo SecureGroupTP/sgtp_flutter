@@ -8,7 +8,12 @@ abstract class RoomsEvent extends Equatable {
 
 /// Creates a new room with a freshly generated UUID v7.
 class RoomsCreateRoom extends RoomsEvent {
-  const RoomsCreateRoom();
+  /// Optional — if provided, this room will connect to that server instead of
+  /// the default one.
+  final String? serverAddress;
+  const RoomsCreateRoom({this.serverAddress});
+  @override
+  List<Object?> get props => [serverAddress];
 }
 
 /// Joins an existing room by its hex UUID string (32 chars, no dashes).
