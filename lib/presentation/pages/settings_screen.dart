@@ -535,12 +535,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<bool> _showPastePrivateKeySheet(String nodeId) async {
-    final ctrl = TextEditingController();
-    String? error;
-    bool ok = false;
+  Future<bool> _promptPrivateKeyForAccount(String nodeId) async {
+    final existing = await _settings.loadPrivateKeyForNode(nodeId);
+    if (existing != null) return true;
 
+    bool saved = false;
+    String? error;
+    final pasteCtrl = TextEditingController();
     if (!mounted) return false;
+
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.bgSurface,
@@ -553,218 +556,154 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Padding(
             padding: EdgeInsets.fromLTRB(
                 20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Paste private key',
-                        style: TextStyle(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Private key',
+                          style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary)),
-                    IconButton(
-                      icon: const Icon(Icons.close,
-                          color: AppColors.textSecondary),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Paste an OpenSSH Ed25519 private key (the full text, including BEGIN/END lines).',
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.bgSurfaceActive,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: error != null
-                            ? AppColors.statusRed
-                            : AppColors.border),
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => Navigator.pop(ctx),
+                        child: const Icon(Icons.close,
+                            color: AppColors.textSecondary, size: 22),
+                      ),
+                    ],
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: TextField(
-                    controller: ctrl,
-                    maxLines: 8,
-                    style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 14,
-                      fontFamily: 'monospace',
-                    ),
-                    decoration: const InputDecoration(
-                      hintText: '-----BEGIN OPENSSH PRIVATE KEY-----\n…',
-                      hintStyle: TextStyle(
-                          color: AppColors.textSecondary, fontSize: 14),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    onChanged: (_) => setS(() => error = null),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Select or generate an Ed25519 private key for this account.',
+                    style:
+                        TextStyle(fontSize: 13, color: AppColors.textSecondary),
                   ),
-                ),
-                if (error != null) ...[
-                  const SizedBox(height: 8),
-                  Text(error!,
+                  const SizedBox(height: 20),
+
+                  // Browse
+                  _SheetBtn(
+                    label: 'Browse file',
+                    icon: Icons.folder_open_outlined,
+                    onTap: () async {
+                      final ok = await _pickPrivateKeyForAccount(nodeId);
+                      if (!ctx.mounted) return;
+                      if (ok) {
+                        saved = true;
+                        Navigator.pop(ctx);
+                      } else {
+                        setS(() => error = 'Invalid or unreadable key file');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _OrDivider(),
+                  const SizedBox(height: 16),
+
+                  // Generate
+                  _SheetBtn(
+                    label: 'Generate key',
+                    icon: Icons.key_outlined,
+                    secondary: true,
+                    onTap: () async {
+                      final ok = await _generatePrivateKeyForAccount(nodeId);
+                      if (!ctx.mounted) return;
+                      if (ok) {
+                        saved = true;
+                        Navigator.pop(ctx);
+                      } else {
+                        setS(() => error = 'Key generation failed');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _OrDivider(),
+                  const SizedBox(height: 16),
+
+                  // Paste field
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.bgSurfaceActive,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: error != null
+                              ? AppColors.statusRed
+                              : AppColors.border),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      controller: pasteCtrl,
+                      maxLines: 6,
                       style: const TextStyle(
-                          fontSize: 13, color: AppColors.statusRed)),
-                ],
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel'),
+                        color: AppColors.textPrimary,
+                        fontSize: 13,
+                        fontFamily: 'monospace',
                       ),
+                      decoration: const InputDecoration(
+                        hintText:
+                            '-----BEGIN OPENSSH PRIVATE KEY-----\n…',
+                        hintStyle: TextStyle(
+                            color: AppColors.textSecondary, fontSize: 13),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      onChanged: (_) => setS(() => error = null),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: () async {
-                          final text = ctrl.text.trim();
-                          if (text.isEmpty) return;
-                          final saved =
-                              await _pastePrivateKeyForAccount(nodeId, text);
-                          if (!ctx.mounted) return;
-                          if (saved) {
-                            ok = true;
-                            Navigator.pop(ctx);
-                          } else {
-                            setS(() =>
-                                error = 'Invalid private key (OpenSSH format)');
-                          }
-                        },
-                        child: const Text('Import'),
-                      ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Text(error!,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.statusRed)),
                     ),
                   ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-
-    ctrl.dispose();
-    return ok;
-  }
-
-  Future<bool> _promptPrivateKeyForAccount(String nodeId) async {
-    final existing = await _settings.loadPrivateKeyForNode(nodeId);
-    if (existing != null) return true;
-
-    bool saved = false;
-    String? error;
-    if (!mounted) return false;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Private key',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Select or generate an Ed25519 private key for this account.',
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                ),
-                if (error != null) ...[
                   const SizedBox(height: 12),
-                  Text(error!,
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.statusRed)),
+                  _SheetBtn(
+                    label: 'Import key',
+                    icon: Icons.content_paste_outlined,
+                    secondary: true,
+                    onTap: () async {
+                      final text = pasteCtrl.text.trim();
+                      if (text.isEmpty) return;
+                      final ok =
+                          await _pastePrivateKeyForAccount(nodeId, text);
+                      if (!ctx.mounted) return;
+                      if (ok) {
+                        saved = true;
+                        Navigator.pop(ctx);
+                      } else {
+                        setS(
+                            () => error = 'Invalid private key (OpenSSH format)');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _SheetBtn(
+                    label: 'Later',
+                    secondary: true,
+                    onTap: () => Navigator.pop(ctx),
+                  ),
                 ],
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  icon: const Icon(Icons.folder_open_outlined),
-                  label: const Text('Browse'),
-                  onPressed: () async {
-                    final ok = await _pickPrivateKeyForAccount(nodeId);
-                    if (!ctx.mounted) return;
-                    if (ok) {
-                      saved = true;
-                      Navigator.pop(ctx);
-                    } else {
-                      setS(() => error = 'Invalid or unreadable key file');
-                    }
-                  },
-                ),
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  icon: const Icon(Icons.key_outlined),
-                  style: FilledButton.styleFrom(backgroundColor: Colors.orange),
-                  label: const Text('Generate'),
-                  onPressed: () async {
-                    final ok = await _generatePrivateKeyForAccount(nodeId);
-                    if (!ctx.mounted) return;
-                    if (ok) {
-                      saved = true;
-                      Navigator.pop(ctx);
-                    } else {
-                      setS(() => error = 'Key generation failed');
-                    }
-                  },
-                ),
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  icon: const Icon(Icons.content_paste_outlined),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.bgSurfaceActive,
-                    foregroundColor: AppColors.textPrimary,
-                    side: const BorderSide(color: AppColors.border),
-                  ),
-                  label: const Text('Paste'),
-                  onPressed: () async {
-                    final ok = await _showPastePrivateKeySheet(nodeId);
-                    if (!ctx.mounted) return;
-                    if (ok) {
-                      saved = true;
-                      Navigator.pop(ctx);
-                    } else {
-                      setS(() => error = 'Invalid private key');
-                    }
-                  },
-                ),
-                const SizedBox(height: 12),
-                Center(
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Later',
-                        style: TextStyle(color: AppColors.textSecondary)),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
 
+    pasteCtrl.dispose();
     return saved;
   }
 
@@ -1099,6 +1038,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setError(String msg) => setState(() => _error = msg);
 
+  // ── Connection address ────────────────────────────────────────────────────
+
+  Future<void> _saveConnectionAddress(String value) async {
+    _tryApplyConfig();
+    if (_preferredNodeId == null) return;
+    final raw = value.trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    final parsed = _parseHostPort(raw);
+    if (parsed == null) return;
+    final (host, port) = parsed;
+    final nodeIdx = _nodes.indexWhere((n) => n.id == _preferredNodeId);
+    if (nodeIdx < 0) return;
+    final updated = _nodes[nodeIdx].copyWith(
+      host: host,
+      chatPort: port ?? _nodes[nodeIdx].chatPort,
+      voicePort: port ?? _nodes[nodeIdx].voicePort,
+      usersPort: port ?? _nodes[nodeIdx].usersPort,
+    );
+    await _settings.upsertNode(updated);
+    await _reloadNodes();
+  }
+
   InputDecoration _darkFieldDeco({
     required String label,
     required String hint,
@@ -1146,21 +1109,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<NodeConfig?> _openNodeEditor({NodeConfig? existing}) async {
-    final base = existing ??
-        NodeConfig(
-          id: uuidBytesToHex(generateUUIDv7()),
-          name: 'Node',
-          host: 'localhost',
-          chatPort: 7777,
-          voicePort: 7777,
-          usersPort: 7777,
-        );
+    final baseId = existing?.id ?? uuidBytesToHex(generateUUIDv7());
 
-    final nameCtrl = TextEditingController(text: base.name);
-    final hostCtrl = TextEditingController(text: base.host);
-    final chatCtrl = TextEditingController(text: base.chatPort.toString());
-    final voiceCtrl = TextEditingController(text: base.voicePort.toString());
-    final usersCtrl = TextEditingController(text: base.usersPort.toString());
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final hostCtrl = TextEditingController(text: existing?.host ?? '');
+    final chatCtrl = TextEditingController(
+        text: existing != null ? existing.chatPort.toString() : '');
+    final voiceCtrl = TextEditingController(
+        text: existing != null ? existing.voicePort.toString() : '');
+    final usersCtrl = TextEditingController(
+        text: existing != null ? existing.usersPort.toString() : '');
 
     NodeConfig? result;
     await showModalBottomSheet<void>(
@@ -1170,7 +1128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => SafeArea(
+      builder: (ctx) => SafeArea(
         child: Padding(
           padding: EdgeInsets.fromLTRB(
               20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
@@ -1179,94 +1137,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  existing == null ? 'Add Account' : 'Edit Account',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        existing == null ? 'Add Account' : 'Edit Account',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.of(ctx).pop(),
+                      child: const Icon(Icons.close,
+                          color: AppColors.textSecondary, size: 22),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 14),
-                TextField(
+                const SizedBox(height: 16),
+                _StyledField(
                   controller: nameCtrl,
-                  style: const TextStyle(color: AppColors.textPrimary),
-                  decoration: _darkFieldDeco(
-                    label: 'Name',
-                    hint: 'Account name',
-                    icon: Icons.badge_outlined,
-                  ),
+                  icon: Icons.badge_outlined,
+                  hint: 'Account name',
                 ),
                 const SizedBox(height: 12),
-                TextField(
+                _StyledField(
                   controller: hostCtrl,
-                  style: const TextStyle(color: AppColors.textPrimary),
-                  decoration: _darkFieldDeco(
-                    label: 'Domain or IP',
-                    hint: 'example.com',
-                    icon: Icons.dns_outlined,
-                  ),
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  textCapitalization: TextCapitalization.none,
+                  icon: Icons.dns_outlined,
+                  hint: 'example.com',
                 ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
-                      child: TextField(
+                      child: _StyledField(
                         controller: chatCtrl,
-                        style: const TextStyle(color: AppColors.textPrimary),
-                        decoration: _darkFieldDeco(
-                          label: 'Chat port',
-                          hint: '7777',
-                          icon: Icons.chat_bubble_outline,
-                        ),
+                        icon: Icons.chat_bubble_outline,
+                        hint: 'Chat port',
                         keyboardType: TextInputType.number,
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: TextField(
+                      child: _StyledField(
                         controller: voiceCtrl,
-                        style: const TextStyle(color: AppColors.textPrimary),
-                        decoration: _darkFieldDeco(
-                          label: 'Voice port',
-                          hint: '7777',
-                          icon: Icons.mic_none_outlined,
-                        ),
+                        icon: Icons.mic_none_outlined,
+                        hint: 'Voice port',
                         keyboardType: TextInputType.number,
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                TextField(
+                _StyledField(
                   controller: usersCtrl,
-                  style: const TextStyle(color: AppColors.textPrimary),
-                  decoration: _darkFieldDeco(
-                    label: 'Users port',
-                    hint: '7777',
-                    icon: Icons.people_outline,
-                  ),
+                  icon: Icons.people_outline,
+                  hint: 'Users port',
                   keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 16),
                 Row(
                   children: [
                     Expanded(
-                      child: TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Cancel'),
+                      child: _SheetBtn(
+                        label: 'Cancel',
+                        secondary: true,
+                        onTap: () => Navigator.of(ctx).pop(),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: FilledButton(
-                        onPressed: () {
-                          final name = nameCtrl.text.trim().isEmpty
-                              ? 'Node'
-                              : nameCtrl.text.trim();
+                      child: _SheetBtn(
+                        label: 'Save',
+                        onTap: () {
+                          final name = nameCtrl.text.trim();
                           final host = hostCtrl.text
                               .trim()
                               .replaceAll(
@@ -1283,29 +1229,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                           bool validPort(int? p) =>
                               p != null && p > 0 && p <= 65535;
-                          if (host.isEmpty ||
+                          if (name.isEmpty ||
+                              host.isEmpty ||
                               !validPort(chatPort) ||
                               !validPort(voicePort) ||
                               !validPort(usersPort)) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text(
-                                    'Please enter a host and valid ports (1–65535)'),
+                                    'Please fill in all fields with valid values'),
                               ),
                             );
                             return;
                           }
 
-                          result = base.copyWith(
+                          result = NodeConfig(
+                            id: baseId,
                             name: name,
                             host: host,
                             chatPort: chatPort!,
                             voicePort: voicePort!,
                             usersPort: usersPort!,
                           );
-                          Navigator.of(context).pop();
+                          Navigator.of(ctx).pop();
                         },
-                        child: const Text('Save'),
                       ),
                     ),
                   ],
@@ -1350,25 +1297,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _deleteNode(NodeConfig node) async {
-    final confirmed = await showDialog<bool>(
+    bool confirmed = false;
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete Node?'),
-        content: Text('Delete "${node.name}" (${node.chatAddress})?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+      backgroundColor: AppColors.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Delete Account?',
+                style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary),
+              ),
+              const SizedBox(height: 12),
+              RichText(
+                text: TextSpan(
+                  style: const TextStyle(
+                      fontSize: 15,
+                      color: AppColors.textSecondary,
+                      height: 1.5),
+                  children: [
+                    const TextSpan(text: 'Remove '),
+                    TextSpan(
+                      text: node.name,
+                      style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    TextSpan(
+                        text: ' (${node.chatAddress}) from your accounts?'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: _SheetBtn(
+                      label: 'Cancel',
+                      secondary: true,
+                      onTap: () => Navigator.pop(ctx),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _SheetBtn(
+                      label: 'Delete',
+                      danger: true,
+                      onTap: () {
+                        confirmed = true;
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
+        ),
       ),
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     await _settings.deleteNode(node.id);
     await _reloadNodes();
   }
@@ -1385,6 +1383,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           _buildAccountSwitcher(),
           _buildProfileSection(),
+          _SettingsGroup(title: 'Connection', child: _buildConnectionCard()),
           _SettingsGroup(
               title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
           _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
@@ -2089,6 +2088,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  // ── Connection card ───────────────────────────────────────────────────────
+
+  Widget _buildConnectionCard() {
+    return Row(
+      children: [
+        const Icon(Icons.dns_outlined, size: 22, color: AppColors.textSecondary),
+        const SizedBox(width: 12),
+        Expanded(
+          child: TextField(
+            controller: _serverCtrl,
+            onChanged: (_) => _tryApplyConfig(),
+            onSubmitted: _saveConnectionAddress,
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+            autocorrect: false,
+            enableSuggestions: false,
+            textCapitalization: TextCapitalization.none,
+            decoration: const InputDecoration(
+              hintText: 'host:port',
+              hintStyle:
+                  TextStyle(color: AppColors.textSecondary, fontSize: 15),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              filled: false,
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2827,6 +2859,165 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
+
+// ── OR divider ───────────────────────────────────────────────────────────────
+
+class _OrDivider extends StatelessWidget {
+  const _OrDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(children: [
+      Expanded(child: Divider(color: AppColors.border)),
+      Padding(
+        padding: EdgeInsets.symmetric(horizontal: 12),
+        child: Text('or',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+      ),
+      Expanded(child: Divider(color: AppColors.border)),
+    ]);
+  }
+}
+
+// ── Sheet confirm button ──────────────────────────────────────────────────────
+
+class _SheetBtn extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final bool secondary;
+  final bool danger;
+  final IconData? icon;
+
+  const _SheetBtn({
+    required this.label,
+    required this.onTap,
+    this.secondary = false,
+    this.danger = false,
+    this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    final Color fg;
+    if (danger) {
+      bg = AppColors.statusRed;
+      fg = Colors.white;
+    } else if (secondary) {
+      bg = AppColors.bgSurfaceActive;
+      fg = AppColors.textPrimary;
+    } else {
+      bg = AppColors.accent;
+      fg = Colors.black;
+    }
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 48,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.center,
+        child: icon != null
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 18, color: fg),
+                  const SizedBox(width: 8),
+                  Text(label,
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600, color: fg)),
+                ],
+              )
+            : Text(
+                label,
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: fg),
+              ),
+      ),
+    );
+  }
+}
+
+// ── Styled input matching contacts_screen style ───────────────────────────────
+
+class _StyledField extends StatelessWidget {
+  final TextEditingController controller;
+  final IconData icon;
+  final String hint;
+  final TextInputType? keyboardType;
+  final bool monospace;
+  final String? error;
+  final ValueChanged<String>? onChanged;
+
+  const _StyledField({
+    required this.controller,
+    required this.icon,
+    required this.hint,
+    this.keyboardType,
+    this.monospace = false,
+    this.error,
+    this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.bgSurfaceActive,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+                color: error != null ? AppColors.statusRed : AppColors.border),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Icon(icon, size: 22, color: AppColors.textSecondary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  keyboardType: keyboardType,
+                  onChanged: onChanged,
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 15,
+                    fontFamily: monospace ? 'monospace' : null,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: hint,
+                    hintStyle: const TextStyle(
+                        color: AppColors.textSecondary, fontSize: 15),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    isDense: true,
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (error != null) ...[
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Text(error!,
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.statusRed)),
+          ),
+        ],
+      ],
+    );
+  }
+}
 
 // ── Account switcher widgets ──────────────────────────────────────────────────
 
