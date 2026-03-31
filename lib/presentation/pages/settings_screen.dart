@@ -1150,136 +1150,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildProfileSection() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(20, 32, 20, 24),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Avatar tap area
+          // ── Avatar ──────────────────────────────────────────────────────
           GestureDetector(
             onTap: _pickUserAvatar,
-            onLongPress: _userAvatar != null ? _removeUserAvatar : null,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
                 Container(
-                  width: 64,
-                  height: 64,
+                  width: 88,
+                  height: 88,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.bgSurface,
                     border: Border.all(color: AppColors.border),
                     image: _userAvatar != null
                         ? DecorationImage(
-                            image: MemoryImage(_userAvatar!), fit: BoxFit.cover)
+                            image: MemoryImage(_userAvatar!),
+                            fit: BoxFit.cover)
                         : null,
                   ),
                   child: _userAvatar == null
                       ? const Icon(Icons.person,
-                          size: 28, color: AppColors.textSecondary)
+                          size: 40, color: AppColors.textSecondary)
                       : null,
                 ),
                 Positioned(
                   bottom: -2,
                   right: -2,
                   child: Container(
-                    width: 24,
-                    height: 24,
+                    width: 32,
+                    height: 32,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: AppColors.bgSurfaceActive,
+                      color: const Color(0xFF222226),
                       border: Border.all(color: AppColors.bgMain, width: 2),
                     ),
                     child: const Icon(Icons.photo_camera,
-                        size: 13, color: AppColors.textPrimary),
+                        size: 18, color: AppColors.textPrimary),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(height: 24),
 
-          // Nickname field + share button
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Nickname text field
-                Container(
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: AppColors.bgSurface,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: TextField(
-                    controller: _nicknameCtrl,
-                    minLines: 1,
-                    maxLines: 1,
-                    onChanged: _saveNickname,
-                    onSubmitted: _saveNickname,
-                    textAlignVertical: TextAlignVertical.center,
-                    style: const TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        height: 1),
-                    strutStyle: const StrutStyle(
-                      fontSize: 14,
-                      height: 1,
-                      forceStrutHeight: true,
-                    ),
-                    decoration: const InputDecoration(
-                      hintText: 'Your nickname…',
-                      hintStyle: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 14,
-                          height: 1),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      filled: false,
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                      prefixIcon: Padding(
-                        padding: EdgeInsets.only(top: 1),
-                        child: Icon(Icons.badge_outlined,
-                            size: 15, color: AppColors.textSecondary),
-                      ),
-                      prefixIconConstraints:
-                          BoxConstraints(minWidth: 24, minHeight: 0),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // Share profile button
-                GestureDetector(
-                  onTap: _showMyProfileShare,
-                  child: Container(
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: AppColors.bgSurface,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.ios_share_outlined,
-                            size: 14, color: AppColors.textSecondary),
-                        SizedBox(width: 5),
-                        Text('Share My Profile',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.textSecondary)),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+          // ── Nickname input ───────────────────────────────────────────────
+          TextField(
+            controller: _nicknameCtrl,
+            onChanged: _saveNickname,
+            onSubmitted: _saveNickname,
+            cursorColor: AppColors.textPrimary,
+            style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w500),
+            decoration: InputDecoration(
+              hintText: 'Display Name',
+              hintStyle: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400),
+              prefixIcon: const Icon(Icons.person_outline,
+                  size: 22, color: AppColors.textSecondary),
+              suffixIcon: const Icon(Icons.edit_outlined,
+                  size: 18, color: AppColors.textSecondary),
+              filled: true,
+              fillColor: const Color(0xFF1B1B1F),
+              hoverColor: Colors.transparent,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.textSecondary),
+              ),
+              contentPadding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
+          const SizedBox(height: 16),
+
+          // ── Share Profile button ─────────────────────────────────────────
+          GestureDetector(
+            onTap: _showMyProfileShare,
+            child: Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.ios_share_outlined, size: 20, color: Colors.black),
+                  SizedBox(width: 8),
+                  Text(
+                    'Share Profile',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // ── Remove avatar ────────────────────────────────────────────────
+          if (_userAvatar != null) ...[
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: _removeUserAvatar,
+              child: const Text(
+                'Remove avatar',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFFFF453A)),
+              ),
+            ),
+          ],
         ],
       ),
     );
