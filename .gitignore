@@ -67,3 +67,5 @@ whitelist/
 .claude/
 docs/
 docs_v2/
+
+thresholds_new.pnm
