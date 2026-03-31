@@ -32,7 +32,8 @@ bool get _isDesktop =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 class RoomsPage extends StatefulWidget {
-  const RoomsPage({super.key});
+  final String accountId;
+  const RoomsPage({super.key, required this.accountId});
 
   @override
   State<RoomsPage> createState() => RoomsPageState();
@@ -40,7 +41,7 @@ class RoomsPage extends StatefulWidget {
 
 class RoomsPageState extends State<RoomsPage> {
   final _settingsRepo = SettingsRepository();
-  final _chatMetadataRepo = ChatMetadataRepository();
+  late ChatMetadataRepository _chatMetadataRepo;
   List<SavedChatRef> _savedChats = [];
   Map<String, ChatMetadata> _savedChatMetadata = const {};
   String _savedRoomsSignature = '';
@@ -48,11 +49,24 @@ class RoomsPageState extends State<RoomsPage> {
   @override
   void initState() {
     super.initState();
+    _chatMetadataRepo = ChatMetadataRepository(accountId: widget.accountId);
     _loadSavedChats();
   }
 
+  @override
+  void didUpdateWidget(covariant RoomsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.accountId != widget.accountId) {
+      _chatMetadataRepo = ChatMetadataRepository(accountId: widget.accountId);
+      _savedRoomsSignature = '';
+      _savedChats = [];
+      _savedChatMetadata = const {};
+      _loadSavedChats();
+    }
+  }
+
   Future<void> _loadSavedChats() async {
-    final refs = await _settingsRepo.loadSavedChats();
+    final refs = await _settingsRepo.loadSavedChatsForNode(widget.accountId);
     final allMetadata = await _chatMetadataRepo.loadAllChats();
     final metadataByUuid = <String, ChatMetadata>{
       for (final chat in allMetadata) chat.uuid: chat,
@@ -88,12 +102,13 @@ class RoomsPageState extends State<RoomsPage> {
         windowHeight: existing?.windowHeight,
       ));
     }
-    await _settingsRepo.addSavedChat(uuid, serverAddress: serverAddress);
+    await _settingsRepo.addSavedChatForNode(widget.accountId, uuid,
+        serverAddress: serverAddress);
     await _loadSavedChats();
   }
 
   Future<void> _unsaveChat(String uuid) async {
-    await _settingsRepo.removeSavedChat(uuid);
+    await _settingsRepo.removeSavedChatForNode(widget.accountId, uuid);
     await _loadSavedChats();
   }
 
@@ -220,7 +235,8 @@ class RoomsPageState extends State<RoomsPage> {
       final savedRef = savedByUuid[room.roomUUID];
       if ((savedRef?.serverAddress == null || savedRef!.serverAddress!.isEmpty) &&
           room.serverAddress.trim().isNotEmpty) {
-        await _settingsRepo.addSavedChat(
+        await _settingsRepo.addSavedChatForNode(
+          widget.accountId,
           room.roomUUID,
           serverAddress: room.serverAddress.trim(),
         );
@@ -987,12 +1003,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
               isLoading: _nodesLoading,
               nodes: _nodes,
               selectedId: _selectedNodeId,
-              onChanged: (id) async {
-                setState(() => _selectedNodeId = id);
-                if (id != null) {
-                  await _settingsRepo.setLastNodeId(id);
-                }
-              },
+              onChanged: (id) => setState(() => _selectedNodeId = id),
             ),
             const SizedBox(height: 16),
 

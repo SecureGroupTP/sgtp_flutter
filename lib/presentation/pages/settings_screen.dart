@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -27,7 +28,11 @@ import 'logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 typedef ConfigChangedCallback = void Function(
-    SgtpConfig config, Map<String, String> nicknames, String serverAddress);
+    String accountId,
+    SgtpConfig config,
+    Map<String, String> nicknames,
+    String serverAddress,
+    List<WhitelistEntry> whitelistEntries);
 
 typedef UserAvatarChangedCallback = void Function(Uint8List? avatar);
 
@@ -65,6 +70,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Uint8List? _userAvatar;
   String _nickname = '';
+  final Map<String, Uint8List?> _avatarsByNodeId = {};
+  final Map<String, String> _nicknamesByNodeId = {};
 
   bool _isLoading = false;
   bool _isGenerating = false;
@@ -106,55 +113,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadFromDisk() async {
-    final savedKey = await _settings.loadPrivateKey();
-    if (savedKey != null) {
-      try {
-        final parsed = parseOpenSshPrivateKey(savedKey.bytes);
-        setState(() {
-          _privateKeyBytes = savedKey.bytes;
-          _privateKeyPath = savedKey.name;
-          _myPublicKey = parsed.publicKey;
-        });
-      } catch (_) {}
-    }
-
-    final entries = await _settings.loadWhitelistEntries();
-    if (entries.isNotEmpty) {
-      setState(() {
-        _wlEntries = entries;
-        _nicknames = _buildNicknames(entries);
-      });
-    }
-
-    final lastAddr = await _settings.getLastAddress();
-    if (lastAddr != null && _serverCtrl.text.isEmpty) {
-      setState(() => _serverCtrl.text = lastAddr);
-    }
-
-    // Load nodes (no node details shown outside Settings).
+    // Load nodes first so we know which account is active.
     final nodes = await _settings.loadNodes();
     final preferredNode = await _settings.loadPreferredNode();
+    final preferredId =
+        preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
+
+    if (preferredId != null && preferredId.trim().isNotEmpty) {
+      await _settings.migrateLegacyAccountDataToNodeIfNeeded(preferredId);
+    }
+
     if (mounted) {
       setState(() {
         _nodes = nodes;
         _nodesLoading = false;
-        _preferredNodeId = preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
-        if (preferredNode != null) {
-          _serverCtrl.text = preferredNode.chatAddress;
-        }
+        _preferredNodeId = preferredId;
+        if (preferredNode != null) _serverCtrl.text = preferredNode.chatAddress;
       });
     }
 
-    final avatar = await _settings.loadUserAvatar();
-    if (avatar != null) setState(() => _userAvatar = avatar);
+    // Load account-scoped identity/profile/contacts for the active account.
+    if (preferredId != null && preferredId.trim().isNotEmpty) {
+      await _loadAccountData(preferredId, applyConfig: false);
+    } else {
+      final lastAddr = await _settings.getLastAddress();
+      if (lastAddr != null && _serverCtrl.text.isEmpty) {
+        setState(() => _serverCtrl.text = lastAddr);
+      }
+    }
+
     final mediaSettings = await _settings.loadMediaTransferSettings();
 
     // Load persisted prefs (nickname + interaction)
     final prefs = await SharedPreferences.getInstance();
-    final savedNickname = prefs.getString('sgtp_user_nickname') ?? '';
     setState(() {
-      _nickname = savedNickname;
-      _nicknameCtrl.text = savedNickname;
       _pingIntervalSeconds = prefs.getInt('sgtp_ping_interval') ?? 30;
       _compressFiles = mediaSettings.compressFiles;
       _compressPhotos = mediaSettings.compressPhotos;
@@ -169,6 +161,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     InteractionPrefs.doubleTapDesktop = _doubleTapDesktop;
     InteractionPrefs.swipeToReply = _swipeToReply;
     InteractionPrefs.longPressShowsMenu = _longPressMenu;
+
+    unawaited(_refreshProfilesCache(nodes));
   }
 
   @override
@@ -186,9 +180,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return result;
   }
 
+  Future<void> _loadAccountData(String nodeId, {bool applyConfig = true}) async {
+    // Profile (nickname + avatar)
+    final nickname = await _settings.loadUserNicknameForNode(nodeId);
+    final avatar = await _settings.loadUserAvatarForNode(nodeId);
+
+    // Identity key
+    Uint8List? privBytes;
+    String? privName;
+    Uint8List? pubKey;
+    final savedKey = await _settings.loadPrivateKeyForNode(nodeId);
+    if (savedKey != null) {
+      try {
+        final parsed = parseOpenSshPrivateKey(savedKey.bytes);
+        privBytes = savedKey.bytes;
+        privName = savedKey.name;
+        pubKey = parsed.publicKey;
+      } catch (_) {}
+    }
+
+    // Contacts (whitelist)
+    final entries = await _settings.loadWhitelistEntriesForNode(nodeId);
+
+    if (!mounted) return;
+    setState(() {
+      _nickname = nickname;
+      _nicknameCtrl.text = nickname;
+      _userAvatar = avatar;
+      _avatarsByNodeId[nodeId] = avatar;
+      _nicknamesByNodeId[nodeId] = nickname;
+
+      _privateKeyBytes = privBytes;
+      _privateKeyPath = privName;
+      _myPublicKey = pubKey;
+
+      _wlEntries = entries;
+      _nicknames = _buildNicknames(entries);
+    });
+
+    widget.onUserAvatarChanged?.call(avatar);
+    if (applyConfig) _tryApplyConfig();
+  }
+
+  Future<void> _refreshProfilesCache(List<NodeConfig> nodes) async {
+    final nextAvatars = <String, Uint8List?>{};
+    final nextNicks = <String, String>{};
+    for (final n in nodes) {
+      nextAvatars[n.id] = await _settings.loadUserAvatarForNode(n.id);
+      nextNicks[n.id] = await _settings.loadUserNicknameForNode(n.id);
+    }
+    if (!mounted) return;
+    setState(() {
+      _avatarsByNodeId
+        ..clear()
+        ..addAll(nextAvatars);
+      _nicknamesByNodeId
+        ..clear()
+        ..addAll(nextNicks);
+    });
+  }
+
   // ── Private key: browse ──────────────────────────────────────────────────
 
   Future<void> _pickPrivateKey() async {
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
     try {
       final result = await FilePicker.platform
           .pickFiles(type: FileType.any, withData: true, allowMultiple: false);
@@ -200,7 +256,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
       final parsed = parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKey(bytes, file.name);
+      await _settings.savePrivateKeyForNode(nodeId, bytes, file.name);
       setState(() {
         _privateKeyBytes = bytes;
         _privateKeyPath = file.name;
@@ -213,9 +269,188 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  void _showPrivateKeyExportSheet() {
+    final bytes = _privateKeyBytes;
+    if (bytes == null || bytes.isEmpty) return;
+    final keyText = utf8.decode(bytes, allowMalformed: true).trim();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Export private key',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close,
+                        color: AppColors.textSecondary),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Keep this secret. Anyone with this key can impersonate you.',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.45,
+                ),
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: AppColors.bgMain,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.all(12),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    keyText,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      color: AppColors.textPrimary,
+                      height: 1.25,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: keyText));
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Private key copied')),
+                    );
+                  },
+                  icon: const Icon(Icons.content_copy),
+                  label: const Text('Copy'),
+                  style: ButtonStyle(
+                    minimumSize:
+                        const WidgetStatePropertyAll(Size.fromHeight(48)),
+                    shape: WidgetStatePropertyAll(
+                      RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    backgroundColor:
+                        const WidgetStatePropertyAll(AppColors.accent),
+                    foregroundColor:
+                        const WidgetStatePropertyAll(Colors.black),
+                    overlayColor:
+                        WidgetStatePropertyAll(Colors.white.withAlpha(20)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _importPrivateKeyFromClipboard() async {
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Are you sure?'),
+        content: const Text(
+            'Importing a key from clipboard will REPLACE the private key for this account.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Clipboard is empty')),
+      );
+      return;
+    }
+
+    try {
+      final bytes = Uint8List.fromList(text.codeUnits);
+      final parsed = parseOpenSshPrivateKey(bytes);
+      await _settings.savePrivateKeyForNode(nodeId, bytes, 'clipboard_identity');
+      if (!mounted) return;
+      setState(() {
+        _privateKeyBytes = bytes;
+        _privateKeyPath = 'clipboard_identity';
+        _myPublicKey = parsed.publicKey;
+        _error = null;
+      });
+      _tryApplyConfig();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Private key imported from clipboard')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Invalid private key: $e')),
+      );
+    }
+  }
+
+  Future<bool> _pickPrivateKeyForAccount(String nodeId) async {
+    try {
+      final result = await FilePicker.platform
+          .pickFiles(type: FileType.any, withData: true, allowMultiple: false);
+      if (result == null || result.files.isEmpty) return false;
+      final file = result.files.first;
+      final bytes = file.bytes;
+      if (bytes == null) return false;
+      // Validate
+      parseOpenSshPrivateKey(bytes);
+      await _settings.savePrivateKeyForNode(nodeId, bytes, file.name);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ── Private key: generate ────────────────────────────────────────────────
 
   Future<void> _generatePrivateKey() async {
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -249,7 +484,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Encode as OpenSSH private key
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
       const name = 'identity';
-      await _settings.savePrivateKey(opensshBytes, name);
+      await _settings.savePrivateKeyForNode(nodeId, opensshBytes, name);
 
       setState(() {
         _privateKeyBytes = opensshBytes;
@@ -271,6 +506,266 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isGenerating = false;
       });
     }
+  }
+
+  Future<bool> _generatePrivateKeyForAccount(String nodeId) async {
+    try {
+      final algorithm = Ed25519();
+      final keyPair = await algorithm.newKeyPair();
+      final pubKey = await keyPair.extractPublicKey();
+      final privBytes = await keyPair.extractPrivateKeyBytes();
+      final pubBytes = Uint8List.fromList(pubKey.bytes);
+      final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
+      await _settings.savePrivateKeyForNode(nodeId, opensshBytes, 'identity');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _pastePrivateKeyForAccount(String nodeId, String text) async {
+    try {
+      final bytes = Uint8List.fromList(text.codeUnits);
+      // Validate
+      parseOpenSshPrivateKey(bytes);
+      await _settings.savePrivateKeyForNode(nodeId, bytes, 'pasted_identity');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _showPastePrivateKeySheet(String nodeId) async {
+    final ctrl = TextEditingController();
+    String? error;
+    bool ok = false;
+
+    if (!mounted) return false;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Paste private key',
+                        style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary)),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          color: AppColors.textSecondary),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Paste an OpenSSH Ed25519 private key (the full text, including BEGIN/END lines).',
+                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.bgSurfaceActive,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: error != null
+                            ? AppColors.statusRed
+                            : AppColors.border),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextField(
+                    controller: ctrl,
+                    maxLines: 8,
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                      fontFamily: 'monospace',
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: '-----BEGIN OPENSSH PRIVATE KEY-----\n…',
+                      hintStyle: TextStyle(
+                          color: AppColors.textSecondary, fontSize: 14),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onChanged: (_) => setS(() => error = null),
+                  ),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(error!,
+                      style: const TextStyle(
+                          fontSize: 13, color: AppColors.statusRed)),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () async {
+                          final text = ctrl.text.trim();
+                          if (text.isEmpty) return;
+                          final saved =
+                              await _pastePrivateKeyForAccount(nodeId, text);
+                          if (!ctx.mounted) return;
+                          if (saved) {
+                            ok = true;
+                            Navigator.pop(ctx);
+                          } else {
+                            setS(() =>
+                                error = 'Invalid private key (OpenSSH format)');
+                          }
+                        },
+                        child: const Text('Import'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    ctrl.dispose();
+    return ok;
+  }
+
+  Future<bool> _promptPrivateKeyForAccount(String nodeId) async {
+    final existing = await _settings.loadPrivateKeyForNode(nodeId);
+    if (existing != null) return true;
+
+    bool saved = false;
+    String? error;
+    if (!mounted) return false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Private key',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Select or generate an Ed25519 private key for this account.',
+                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(error!,
+                      style: const TextStyle(
+                          fontSize: 13, color: AppColors.statusRed)),
+                ],
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  icon: const Icon(Icons.folder_open_outlined),
+                  label: const Text('Browse'),
+                  onPressed: () async {
+                    final ok = await _pickPrivateKeyForAccount(nodeId);
+                    if (!ctx.mounted) return;
+                    if (ok) {
+                      saved = true;
+                      Navigator.pop(ctx);
+                    } else {
+                      setS(() => error = 'Invalid or unreadable key file');
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  icon: const Icon(Icons.key_outlined),
+                  style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+                  label: const Text('Generate'),
+                  onPressed: () async {
+                    final ok = await _generatePrivateKeyForAccount(nodeId);
+                    if (!ctx.mounted) return;
+                    if (ok) {
+                      saved = true;
+                      Navigator.pop(ctx);
+                    } else {
+                      setS(() => error = 'Key generation failed');
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  icon: const Icon(Icons.content_paste_outlined),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.bgSurfaceActive,
+                    foregroundColor: AppColors.textPrimary,
+                    side: const BorderSide(color: AppColors.border),
+                  ),
+                  label: const Text('Paste'),
+                  onPressed: () async {
+                    final ok = await _showPastePrivateKeySheet(nodeId);
+                    if (!ctx.mounted) return;
+                    if (ok) {
+                      saved = true;
+                      Navigator.pop(ctx);
+                    } else {
+                      setS(() => error = 'Invalid private key');
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Later',
+                        style: TextStyle(color: AppColors.textSecondary)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return saved;
   }
 
   /// Encode raw Ed25519 seed+public key as OpenSSH private key format.
@@ -354,7 +849,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _setError('No valid ed25519 keys found in folder');
         return;
       }
-      await _settings.saveWhitelistEntries(entries);
+      final nodeId = _preferredNodeId;
+      if (nodeId == null || nodeId.trim().isEmpty) return;
+      await _settings.saveWhitelistEntriesForNode(nodeId, entries);
       setState(() {
         _wlEntries = entries;
         _nicknames = _buildNicknames(entries);
@@ -393,7 +890,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       for (final e in entries) {
         if (!combined.any((x) => x.hexKey == e.hexKey)) combined.add(e);
       }
-      await _settings.saveWhitelistEntries(combined);
+      final nodeId = _preferredNodeId;
+      if (nodeId == null || nodeId.trim().isEmpty) return;
+      await _settings.saveWhitelistEntriesForNode(nodeId, combined);
       setState(() {
         _wlEntries = combined;
         _nicknames = _buildNicknames(combined);
@@ -453,7 +952,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     final combined = [..._wlEntries, entry];
-    await _settings.saveWhitelistEntries(combined);
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+    await _settings.saveWhitelistEntriesForNode(nodeId, combined);
     setState(() {
       _wlEntries = combined;
       _nicknames = _buildNicknames(combined);
@@ -496,7 +997,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (newName == null || newName.isEmpty) return;
     final updated = List<WhitelistEntry>.from(_wlEntries);
     updated[index] = entry.copyWithName(newName);
-    await _settings.saveWhitelistEntries(updated);
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+    await _settings.saveWhitelistEntriesForNode(nodeId, updated);
     setState(() {
       _wlEntries = updated;
       _nicknames = _buildNicknames(updated);
@@ -508,7 +1011,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _removeEntry(int index) async {
     final newList = List<WhitelistEntry>.from(_wlEntries)..removeAt(index);
-    await _settings.saveWhitelistEntries(newList);
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+    await _settings.saveWhitelistEntriesForNode(nodeId, newList);
     setState(() {
       _wlEntries = newList;
       _nicknames = _buildNicknames(newList);
@@ -519,6 +1024,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── User avatar ───────────────────────────────────────────────────────────
 
   Future<void> _pickUserAvatar() async {
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
     final picker = ImagePicker();
     final file = await picker.pickImage(
       source: ImageSource.gallery,
@@ -528,12 +1035,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (file == null) return;
     final bytes = await file.readAsBytes();
-    await _settings.saveUserAvatar(bytes);
+    await _settings.saveUserAvatarForNode(nodeId, bytes);
     setState(() {
       _userAvatar = bytes;
       _error = null;
     });
     widget.onUserAvatarChanged?.call(bytes);
+    _avatarsByNodeId[nodeId] = bytes;
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Avatar saved')),
@@ -542,9 +1050,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _removeUserAvatar() async {
-    await _settings.clearUserAvatar();
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+    await _settings.clearUserAvatarForNode(nodeId);
     setState(() => _userAvatar = null);
     widget.onUserAvatarChanged?.call(null);
+    _avatarsByNodeId[nodeId] = null;
   }
 
   // ── Config apply ──────────────────────────────────────────────────────────
@@ -577,13 +1088,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
         pingIntervalSeconds: _pingIntervalSeconds,
         mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
-      widget.onConfigChanged?.call(newConfig, _nicknames, server);
+      final accountId = _preferredNodeId;
+      if (accountId == null || accountId.trim().isEmpty) return;
+      widget.onConfigChanged
+          ?.call(accountId, newConfig, _nicknames, server, _wlEntries);
     } catch (e) {
       _setError('Config error: $e');
     }
   }
 
   void _setError(String msg) => setState(() => _error = msg);
+
+  InputDecoration _darkFieldDeco({
+    required String label,
+    required String hint,
+    required IconData icon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: AppColors.textSecondary),
+      hintText: hint,
+      hintStyle: const TextStyle(color: AppColors.textSecondary),
+      prefixIcon: Icon(icon, color: AppColors.textSecondary),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.accentBlue),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.statusRed),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.statusRed),
+      ),
+      filled: true,
+      fillColor: AppColors.bgSurfaceActive,
+    );
+  }
 
   // ── Nodes ────────────────────────────────────────────────────────────────
 
@@ -596,6 +1142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _nodesLoading = false;
       _preferredNodeId = preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
     });
+    unawaited(_refreshProfilesCache(nodes));
   }
 
   Future<NodeConfig?> _openNodeEditor({NodeConfig? existing}) async {
@@ -633,7 +1180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  existing == null ? 'Add Node' : 'Edit Node',
+                  existing == null ? 'Add Account' : 'Edit Account',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
@@ -643,17 +1190,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 14),
                 TextField(
                   controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Name',
-                    border: OutlineInputBorder(),
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: _darkFieldDeco(
+                    label: 'Name',
+                    hint: 'Account name',
+                    icon: Icons.badge_outlined,
                   ),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: hostCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Domain or IP',
-                    border: OutlineInputBorder(),
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: _darkFieldDeco(
+                    label: 'Domain or IP',
+                    hint: 'example.com',
+                    icon: Icons.dns_outlined,
                   ),
                   autocorrect: false,
                   enableSuggestions: false,
@@ -665,9 +1216,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Expanded(
                       child: TextField(
                         controller: chatCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Chat port',
-                          border: OutlineInputBorder(),
+                        style: const TextStyle(color: AppColors.textPrimary),
+                        decoration: _darkFieldDeco(
+                          label: 'Chat port',
+                          hint: '7777',
+                          icon: Icons.chat_bubble_outline,
                         ),
                         keyboardType: TextInputType.number,
                       ),
@@ -676,9 +1229,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Expanded(
                       child: TextField(
                         controller: voiceCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Voice port',
-                          border: OutlineInputBorder(),
+                        style: const TextStyle(color: AppColors.textPrimary),
+                        decoration: _darkFieldDeco(
+                          label: 'Voice port',
+                          hint: '7777',
+                          icon: Icons.mic_none_outlined,
                         ),
                         keyboardType: TextInputType.number,
                       ),
@@ -688,9 +1243,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: usersCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Users port',
-                    border: OutlineInputBorder(),
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: _darkFieldDeco(
+                    label: 'Users port',
+                    hint: '7777',
+                    icon: Icons.people_outline,
                   ),
                   keyboardType: TextInputType.number,
                 ),
@@ -774,7 +1331,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settings.upsertNode(node);
     await _reloadNodes();
     if (!mounted) return;
-    _selectAccount(node);
+    final ok = await _promptPrivateKeyForAccount(node.id);
+    if (!mounted) return;
+    if (ok) {
+      await _selectAccount(node);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Account added without private key')),
+      );
+    }
   }
 
   Future<void> _editNode(NodeConfig node) async {
@@ -837,9 +1402,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Profile section ───────────────────────────────────────────────────────
 
   Future<void> _saveNickname(String value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('sgtp_user_nickname', value.trim());
-    setState(() => _nickname = value.trim());
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final next = value.trim();
+    await _settings.saveUserNicknameForNode(nodeId, next);
+    if (!mounted) return;
+    setState(() => _nickname = next);
+    _nicknamesByNodeId[nodeId] = next;
   }
 
   void _showMyProfileShare() {
@@ -930,7 +1499,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (!mounted || data == null) return;
-    await _importNodeFromShareData(data);
+    final node = await _importNodeFromShareData(data);
+    if (!mounted || node == null) return;
+    final ok = await _promptPrivateKeyForAccount(node.id);
+    if (!mounted) return;
+    if (ok) {
+      await _selectAccount(node);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Account imported without private key')),
+      );
+    }
   }
 
   Future<void> _showNodeHexImportSheet() async {
@@ -1003,9 +1582,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                         final data = QrShareData.parse(raw);
                         if (data != null) {
-                          final ok = await _importNodeFromShareData(data);
+                          final node = await _importNodeFromShareData(data);
                           if (!ctx.mounted) return;
-                          if (ok) Navigator.pop(ctx);
+                          if (node != null) {
+                            Navigator.pop(ctx);
+                            final ok =
+                                await _promptPrivateKeyForAccount(node.id);
+                            if (!mounted) return;
+                            if (ok) {
+                              await _selectAccount(node);
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        'Account imported without private key')),
+                              );
+                            }
+                          }
                           return;
                         }
 
@@ -1039,6 +1632,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           SnackBar(
                               content: Text('Node imported: ${node.chatAddress}')),
                         );
+                        final ok =
+                            await _promptPrivateKeyForAccount(node.id);
+                        if (!mounted) return;
+                        if (ok) {
+                          await _selectAccount(node);
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content:
+                                    Text('Account imported without private key')),
+                          );
+                        }
                       },
                       child: const Text('Import'),
                     ),
@@ -1084,22 +1689,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return (host, port);
   }
 
-  Future<bool> _importNodeFromShareData(QrShareData data) async {
+  Future<NodeConfig?> _importNodeFromShareData(QrShareData data) async {
     final node = _nodeFromQrShareData(data);
     if (node == null) {
-      if (!mounted) return false;
+      if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid node QR/hex')),
       );
-      return false;
+      return null;
     }
     await _settings.upsertNode(node);
     await _reloadNodes();
-    if (!mounted) return true;
+    if (!mounted) return node;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Node imported: ${node.chatAddress}')),
     );
-    return true;
+    return node;
   }
 
   NodeConfig? _nodeFromQrShareData(QrShareData data) {
@@ -1319,7 +1924,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Row(
                 children: [
                   // Use profile avatar + nickname instead of node data
-                  _AccAvatarImage(avatar: _userAvatar, name: _nickname),
+                  _AccAvatarImage(
+                    avatar: _userAvatar,
+                    name: _nickname.isNotEmpty
+                        ? _nickname
+                        : (hasAccounts ? active.name : ''),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _nodesLoading
@@ -1373,11 +1983,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ..._nodes.map((n) => _AccountDropdownItem(
                       node: n,
                       isActive: n.id == _preferredNodeId,
-                      profileAvatar: n.id == _preferredNodeId ? _userAvatar : null,
-                      profileName: n.id == _preferredNodeId && _nickname.isNotEmpty
-                          ? _nickname
-                          : null,
-                      onTap: () => _selectAccount(n),
+                      profileAvatar: _avatarsByNodeId[n.id],
+                      profileName: _nicknamesByNodeId[n.id],
+                      onTap: () => unawaited(_selectAccount(n)),
                       onShare: () => _showNodeShare(n),
                       onDelete: () => _deleteNode(n),
                     )),
@@ -1424,14 +2032,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _selectAccount(NodeConfig node) {
+  Future<void> _selectAccount(NodeConfig node) async {
     setState(() {
       _preferredNodeId = node.id;
       _serverCtrl.text = node.chatAddress;
       _accountsExpanded = false;
     });
-    _settings.setLastNodeId(node.id);
-    _tryApplyConfig();
+    await _settings.setLastNodeId(node.id);
+    await _loadAccountData(node.id, applyConfig: true);
   }
 
   void _showAddAccountSheet() {
@@ -1516,6 +2124,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               loading: _isGenerating,
               onPressed:
                   (_isLoading || _isGenerating) ? null : _generatePrivateKey,
+            ),
+            _ActionButton(
+              icon: Icons.content_paste_outlined,
+              label: 'Import',
+              onPressed: (_isLoading || _preferredNodeId == null)
+                  ? null
+                  : _importPrivateKeyFromClipboard,
+            ),
+            _ActionButton(
+              icon: Icons.upload_outlined,
+              label: 'Export',
+              onPressed:
+                  (_isLoading || _privateKeyBytes == null) ? null : _showPrivateKeyExportSheet,
             ),
           ],
         ),
@@ -2296,7 +2917,8 @@ class _AccountDropdownItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayName = profileName ?? node.name;
+    final nick = (profileName ?? '').trim();
+    final displayName = nick.isNotEmpty ? nick : node.name;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -2305,9 +2927,7 @@ class _AccountDropdownItem extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Row(
           children: [
-            isActive
-                ? _AccAvatarImage(avatar: profileAvatar, name: displayName)
-                : _AccAvatar(name: node.name),
+            _AccAvatarImage(avatar: profileAvatar, name: displayName),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

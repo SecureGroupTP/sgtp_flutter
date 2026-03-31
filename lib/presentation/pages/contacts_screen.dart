@@ -10,6 +10,7 @@ import '../widgets/qr_scanner_dialog.dart';
 /// Contacts screen — shows the trusted-peer whitelist.
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
 class ContactsScreen extends StatefulWidget {
+  final String accountId;
   final List<WhitelistEntry> initialEntries;
 
   /// Called whenever the whitelist changes so HomeScreen can propagate
@@ -18,6 +19,7 @@ class ContactsScreen extends StatefulWidget {
 
   const ContactsScreen({
     super.key,
+    required this.accountId,
     required this.initialEntries,
     required this.onEntriesChanged,
   });
@@ -36,6 +38,18 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void initState() {
     super.initState();
     _entries = List.from(widget.initialEntries);
+  }
+
+  @override
+  void didUpdateWidget(covariant ContactsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.accountId != widget.accountId) {
+      setState(() {
+        _entries = List.from(widget.initialEntries);
+        _search = '';
+        _searchCtrl.clear();
+      });
+    }
   }
 
   @override
@@ -71,7 +85,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // ── Persistence ───────────────────────────────────────────────────────────
 
   Future<void> _save() async {
-    await _repo.saveWhitelistEntries(_entries);
+    await _repo.saveWhitelistEntriesForNode(widget.accountId, _entries);
     widget.onEntriesChanged(_entries);
   }
 

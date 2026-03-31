@@ -11,12 +11,21 @@ import '../../domain/entities/chat_metadata.dart';
 /// Metadata includes: chat name, avatar, window size (desktop).
 /// Message history is NOT stored here.
 class ChatMetadataRepository {
-  static const String _chatsDir = 'sgtp_chats';
+  static const String _legacyChatsDir = 'sgtp_chats';
+  static const String _accountsDir = 'sgtp_accounts';
+  static const String _chatsDirName = 'sgtp_chats';
+
+  final String? accountId;
+
+  ChatMetadataRepository({this.accountId});
 
   /// Get the chats directory path
   Future<Directory> _getChatsDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
-    final chatsDir = Directory('${docsDir.path}/$_chatsDir');
+    final id = (accountId ?? '').trim();
+    final chatsDir = id.isEmpty
+        ? Directory('${docsDir.path}/$_legacyChatsDir')
+        : Directory('${docsDir.path}/$_accountsDir/$id/$_chatsDirName');
     if (!await chatsDir.exists()) {
       await chatsDir.create(recursive: true);
     }

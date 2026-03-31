@@ -55,7 +55,7 @@ class PrettyQrSharePanel extends StatefulWidget {
 }
 
 class _PrettyQrSharePanelState extends State<PrettyQrSharePanel> {
-  static const _logoImage = AssetImage('web/icons/Icon-192.png');
+  static const _logoImage = AssetImage('assets/app_icon.png');
   static const _presets = [
     _PrettyQrPreset(
       label: 'Aurora',
@@ -212,7 +212,6 @@ class _PrettyQrSharePanelState extends State<PrettyQrSharePanel> {
               image: _logoImage,
               position: PrettyQrDecorationImagePosition.embedded,
               padding: EdgeInsets.all(10),
-              clipper: PrettyQrCircleClipper(),
             )
           : null,
     );

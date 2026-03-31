@@ -18,17 +18,20 @@ class _RoomsRefresh extends RoomsEvent {
 }
 
 class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
+  final String _accountId;
   SgtpConfig _baseConfig;
   final Map<String, String> _nicknames;
   Uint8List? _userAvatar;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
 
   RoomsBloc({
+    required String accountId,
     required SgtpConfig baseConfig,
     required Map<String, String> nicknames,
     required String serverAddress,
     Uint8List? userAvatar,
   })  : _baseConfig = baseConfig,
+        _accountId = accountId,
         _nicknames = nicknames,
         _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
@@ -106,7 +109,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
 
     final config   = (configOverride ?? _baseConfig).copyWithRoomUUID(roomUUID);
-    final chatBloc = ChatBloc()
+    final chatBloc = ChatBloc(accountId: _accountId)
       ..add(ChatConnect(config, nicknames: _nicknames));
 
     // Push user avatar into the new bloc

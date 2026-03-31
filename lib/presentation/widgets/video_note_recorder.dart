@@ -1,9 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 
 /// Full-screen video-note recorder overlay.
 /// Shows live circular camera preview (front camera by default),
@@ -26,6 +26,16 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   bool _initialising = true;
   bool _recording    = false;
   String? _initError;
+  DateTime? _recordStartAt;
+
+  static const Duration _minRecordDuration = Duration(milliseconds: 400);
+  static const Duration _holdIntentThreshold = Duration(milliseconds: 350);
+
+  bool _pointerDown = false;
+  bool _toggleMode = false;
+  bool _holdIntent = false;
+  Timer? _holdIntentTimer;
+  bool _pressWasRecording = false;
 
   @override
   void initState() {
@@ -37,6 +47,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _holdIntentTimer?.cancel();
     _ctrl?.dispose();
     super.dispose();
   }
@@ -91,8 +102,13 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
   Future<void> _swapCamera() async {
     if (_cameras.length < 2) return;
-    if (_recording) await _ctrl?.stopVideoRecording();
-    setState(() { _recording = false; });
+    if (_recording) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Can't switch camera while recording")),
+      );
+      return;
+    }
     final next = (_cameraIndex + 1) % _cameras.length;
     await _initCamera(index: next);
   }
@@ -101,30 +117,135 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     final ctrl = _ctrl;
     if (ctrl == null || !ctrl.value.isInitialized || _recording) return;
     try {
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _recording = true;
+        _recordStartAt = DateTime.now();
+        _toggleMode = true; // default: tap-to-start, tap-to-stop
+      });
       await ctrl.startVideoRecording();
-      setState(() => _recording = true);
     } catch (_) {}
   }
 
-  Future<void> _stopAndSend() async {
+  Future<Uint8List?> _stopRecording() async {
     final ctrl = _ctrl;
-    if (ctrl == null || !_recording) return;
+    if (ctrl == null || !_recording) return null;
     try {
+      if (!ctrl.value.isRecordingVideo) {
+        setState(() => _recording = false);
+        return null;
+      }
       final xfile = await ctrl.stopVideoRecording();
+      final startedAt = _recordStartAt;
+      _recordStartAt = null;
       setState(() => _recording = false);
+
+      final elapsed = startedAt == null
+          ? Duration.zero
+          : DateTime.now().difference(startedAt);
       final bytes = await File(xfile.path).readAsBytes();
-      await File(xfile.path).delete().catchError((_) {});
-      if (mounted) Navigator.of(context).pop(bytes);
+      try {
+        await File(xfile.path).delete();
+      } catch (_) {}
+      if (elapsed < _minRecordDuration) {
+        if (!mounted) return null;
+        HapticFeedback.selectionClick();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Hold a bit longer to record')),
+        );
+        return null;
+      }
+      return bytes;
     } catch (_) {
       setState(() => _recording = false);
+      return null;
+    }
+  }
+
+  Future<void> _stopAndConfirmSend() async {
+    final bytes = await _stopRecording();
+    if (bytes == null || !mounted) return;
+
+    HapticFeedback.lightImpact();
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Send this video note?'),
+        actions: [
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, false),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFFF453A),
+              side: const BorderSide(color: Color(0xFFFF453A)),
+            ),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (send == true) {
+      Navigator.of(context).pop(bytes);
     }
   }
 
   void _cancel() {
     if (_recording) {
-      _ctrl?.stopVideoRecording().catchError((_) {});
+      () async {
+        try {
+          await _ctrl?.stopVideoRecording();
+        } catch (_) {}
+      }();
     }
-    Navigator.of(context).pop(null);
+    if (mounted) Navigator.of(context).pop(null);
+  }
+
+  void _onPressDown() {
+    _pointerDown = true;
+    _pressWasRecording = _recording;
+    _holdIntent = false;
+    _holdIntentTimer?.cancel();
+
+    if (_recording) return;
+
+    _startRecording();
+    _holdIntentTimer = Timer(_holdIntentThreshold, () {
+      if (!mounted) return;
+      if (_pointerDown && _recording) {
+        setState(() => _holdIntent = true);
+        HapticFeedback.selectionClick();
+      }
+    });
+  }
+
+  void _onPressUp() {
+    _pointerDown = false;
+    _holdIntentTimer?.cancel();
+
+    if (!_recording) return;
+
+    // Hold-to-record: stop on release.
+    if (_holdIntent) {
+      _stopAndConfirmSend();
+      return;
+    }
+
+    // Tap-to-start keeps recording; a subsequent tap stops.
+    if (_toggleMode && _pressWasRecording) {
+      _stopAndConfirmSend();
+    }
+  }
+
+  void _onPressCancel() {
+    _pointerDown = false;
+    _holdIntentTimer?.cancel();
+    if (_recording && _holdIntent) {
+      _stopAndConfirmSend();
+    }
   }
 
   @override
@@ -211,7 +332,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                       opacity: _recording ? 0.0 : 1.0,
                       duration: const Duration(milliseconds: 200),
                       child: const Text(
-                        'Hold to record',
+                        'Tap or hold to record',
                         style: TextStyle(
                           color: Colors.white70,
                           fontSize: 14,
@@ -222,8 +343,9 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
                     // Record button
                     GestureDetector(
-                      onLongPressStart: (_) => _startRecording(),
-                      onLongPressEnd:   (_) => _stopAndSend(),
+                      onTapDown: (_) => _onPressDown(),
+                      onTapUp: (_) => _onPressUp(),
+                      onTapCancel: _onPressCancel,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         width:  _recording ? 80 : 72,
@@ -290,7 +412,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
           width: 240,
           height: 240,
           child: ClipOval(
-            child: CameraPreview(ctrl),
+            child: _coverCameraPreview(ctrl),
           ),
         ),
         // Blue border (thicker when recording)
@@ -309,6 +431,25 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
           ),
         ),
       ],
+    );
+  }
+
+  /// Scale camera preview to cover-fill a square, then we clip it as a circle.
+  Widget _coverCameraPreview(CameraController ctrl) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final preview = CameraPreview(ctrl);
+        final previewAspect = ctrl.value.aspectRatio;
+        final widgetAspect = size.width / size.height;
+
+        // Scale so that preview covers the widget bounds (no squish).
+        final scale = previewAspect / widgetAspect;
+        return Transform.scale(
+          scale: scale < 1 ? 1 / scale : scale,
+          child: Center(child: preview),
+        );
+      },
     );
   }
 }

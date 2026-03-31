@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../blocs/setup/setup_bloc.dart';
 import '../blocs/setup/setup_event.dart';
 import '../blocs/setup/setup_state.dart';
+import '../../data/repositories/settings_repository.dart';
 import 'home_screen.dart';
 
 class SetupPage extends StatefulWidget {
@@ -53,11 +55,28 @@ class _SetupPageState extends State<SetupPage> {
           final server    = state.serverAddress;
           context.read<SetupBloc>().add(const SetupClearConnection());
           // Navigate to HomeScreen, replacing setup
-          Navigator.of(context).pushReplacement(MaterialPageRoute(
-            builder: (_) => HomeScreen(
-              initialConfig: config, nicknames: nicknames, serverAddress: server,
-            ),
-          ));
+          unawaited(() async {
+            final settings = SettingsRepository();
+            final preferred = await settings.loadPreferredNode();
+            final accountId = preferred?.id ?? '';
+            final entries = accountId.trim().isEmpty
+                ? await settings.loadWhitelistEntries()
+                : await settings.loadWhitelistEntriesForNode(accountId);
+            final avatar = accountId.trim().isEmpty
+                ? await settings.loadUserAvatar()
+                : await settings.loadUserAvatarForNode(accountId);
+            if (!mounted) return;
+            Navigator.of(context).pushReplacement(MaterialPageRoute(
+              builder: (_) => HomeScreen(
+                accountId: accountId,
+                initialConfig: config,
+                nicknames: nicknames,
+                serverAddress: server,
+                userAvatar: avatar,
+                initialWhitelist: entries,
+              ),
+            ));
+          }());
         }
       },
       builder: (context, state) {

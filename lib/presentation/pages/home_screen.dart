@@ -20,6 +20,7 @@ import 'settings_screen.dart';
 /// Main screen shown after initial setup.
 /// Three-tab bottom navigation: Rooms | Contacts | Settings.
 class HomeScreen extends StatefulWidget {
+  final String accountId;
   final SgtpConfig initialConfig;
   final Map<String, String> nicknames;
   final String serverAddress;
@@ -28,6 +29,7 @@ class HomeScreen extends StatefulWidget {
 
   const HomeScreen({
     super.key,
+    required this.accountId,
     required this.initialConfig,
     required this.nicknames,
     required this.serverAddress,
@@ -48,16 +50,19 @@ class _HomeScreenState extends State<HomeScreen> {
   late SgtpConfig _config;
   Uint8List? _userAvatar;
   late List<WhitelistEntry> _whitelist;
+  late String _accountId;
 
   @override
   void initState() {
     super.initState();
+    _accountId = widget.accountId;
     _config = widget.initialConfig;
     _nicknames = widget.nicknames;
     _serverAddress = widget.serverAddress;
     _userAvatar = widget.userAvatar;
     _whitelist = List.from(widget.initialWhitelist);
     _roomsBloc = RoomsBloc(
+      accountId: _accountId,
       baseConfig: _config,
       nicknames: _nicknames,
       serverAddress: _serverAddress,
@@ -71,17 +76,25 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _onConfigChanged(SgtpConfig newConfig, Map<String, String> newNicknames,
-      String newServer) {
+  void _onConfigChanged(
+    String accountId,
+    SgtpConfig newConfig,
+    Map<String, String> newNicknames,
+    String newServer,
+    List<WhitelistEntry> whitelistEntries,
+  ) {
     setState(() {
+      _accountId = accountId;
       _config = newConfig;
-      _nicknames = newNicknames;
+      _whitelist = List.from(whitelistEntries);
+      _nicknames = {for (final e in whitelistEntries) e.hexKey: e.name};
       _serverAddress = newServer;
     });
     _roomsBloc.close();
     _roomsBloc = RoomsBloc(
+      accountId: _accountId,
       baseConfig: newConfig,
-      nicknames: newNicknames,
+      nicknames: _nicknames,
       serverAddress: newServer,
       userAvatar: _userAvatar,
     );
@@ -124,9 +137,10 @@ class _HomeScreenState extends State<HomeScreen> {
           index: _currentIndex,
           children: [
             // 0 — Rooms
-            RoomsPage(key: _roomsPageKey),
+            RoomsPage(key: _roomsPageKey, accountId: _accountId),
             // 1 — Contacts
             ContactsScreen(
+              accountId: _accountId,
               initialEntries: _whitelist,
               onEntriesChanged: _onWhitelistChanged,
             ),
@@ -207,15 +221,23 @@ class _AppStartScreenState extends State<AppStartScreen> {
 
   Future<void> _checkAndNavigate() async {
     final settings = SettingsRepository();
-    var savedKey = await settings.loadPrivateKey();
     final lastAddr = await settings.getLastAddress() ?? '';
     final preferredNode = await settings.loadPreferredNode();
+    final accountId = preferredNode?.id ?? (await settings.loadLastNodeId()) ?? '';
     final chatServer =
         preferredNode?.chatAddress ?? (lastAddr.isEmpty ? 'localhost:7777' : lastAddr);
 
-    // First launch: auto-generate an Ed25519 identity key silently.
-    if (savedKey == null) {
-      savedKey = await _autoGenerateKey(settings);
+    if (accountId.trim().isNotEmpty) {
+      await settings.migrateLegacyAccountDataToNodeIfNeeded(accountId);
+    }
+
+    var savedKey = accountId.trim().isEmpty
+        ? await settings.loadPrivateKey()
+        : await settings.loadPrivateKeyForNode(accountId);
+
+    // First launch (per-account): auto-generate an Ed25519 identity key silently.
+    if (savedKey == null && accountId.trim().isNotEmpty) {
+      savedKey = await _autoGenerateKey(settings, accountId);
     }
 
     // If key generation somehow failed, we still land on HomeScreen —
@@ -227,10 +249,14 @@ class _AppStartScreenState extends State<AppStartScreen> {
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final mediaSettings = await settings.loadMediaTransferSettings();
 
-      final entries = await settings.loadWhitelistEntries();
+      final entries = accountId.trim().isEmpty
+          ? await settings.loadWhitelistEntries()
+          : await settings.loadWhitelistEntriesForNode(accountId);
       final whitelist = entries.map((e) => e.hexKey).toSet();
       final nicknames = {for (final e in entries) e.hexKey: e.name};
-      final userAvatar = await settings.loadUserAvatar();
+      final userAvatar = accountId.trim().isEmpty
+          ? await settings.loadUserAvatar()
+          : await settings.loadUserAvatarForNode(accountId);
 
       final config = SgtpConfig(
         serverAddr: chatServer,
@@ -244,6 +270,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacement(MaterialPageRoute(
           builder: (_) => HomeScreen(
+            accountId: accountId,
             initialConfig: config,
             nicknames: nicknames,
             serverAddress: chatServer,
@@ -254,14 +281,18 @@ class _AppStartScreenState extends State<AppStartScreen> {
       }
     } catch (_) {
       // Corrupted key — clear it and try again next launch.
-      await settings.clearPrivateKey();
+      if (accountId.trim().isNotEmpty) {
+        await settings.clearPrivateKeyForNode(accountId);
+      } else {
+        await settings.clearPrivateKey();
+      }
       if (mounted) _checkAndNavigate();
     }
   }
 
   /// Silently generates a fresh Ed25519 key on first launch.
   Future<({Uint8List bytes, String name})?> _autoGenerateKey(
-      SettingsRepository settings) async {
+      SettingsRepository settings, String accountId) async {
     try {
       final algorithm = Ed25519();
       final keyPair = await algorithm.newKeyPair();
@@ -269,7 +300,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
       final privBytes = await keyPair.extractPrivateKeyBytes();
       final pubBytes = Uint8List.fromList(pubKey.bytes);
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      await settings.savePrivateKey(opensshBytes, 'identity');
+      await settings.savePrivateKeyForNode(accountId, opensshBytes, 'identity');
       return (bytes: opensshBytes, name: 'identity');
     } catch (_) {
       return null;

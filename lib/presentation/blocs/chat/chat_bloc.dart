@@ -15,7 +15,7 @@ import 'chat_state.dart';
 class ChatBloc extends Bloc<ChatEvent, ChatState> {
   SgtpClient? _client;
   StreamSubscription<SgtpEvent>? _eventSub;
-  final ChatMetadataRepository _metaRepo = ChatMetadataRepository();
+  final ChatMetadataRepository _metaRepo;
   DateTime? _lastActivityPersistAt;
 
   // Keep last config for reconnect
@@ -27,7 +27,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   /// reconnect.
   int _sessionId = 0;
 
-  ChatBloc() : super(const ChatState()) {
+  ChatBloc({required String accountId})
+      : _metaRepo = ChatMetadataRepository(accountId: accountId),
+        super(const ChatState()) {
     on<ChatConnect>(_onConnect);
     on<ChatReconnect>(_onReconnect);
     on<ChatProbeConnection>(_onProbeConnection);

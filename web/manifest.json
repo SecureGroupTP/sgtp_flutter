@@ -1,6 +1,6 @@
 {
-    "name": "sgtp_flutter",
-    "short_name": "sgtp_flutter",
+    "name": "SGTP",
+    "short_name": "SGTP",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -1069,13 +1069,24 @@ class _VideoNotePlayer extends StatefulWidget {
 class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   Player? _player;
   VideoController? _controller;
+  StreamSubscription<bool>? _playingSub;
   bool _loading = false;
   bool _initialized = false;
   bool _playing = false;
+  Duration _duration = Duration.zero;
+  double? _aspectRatio;
   String? _tmpPath;
 
   @override
+  void initState() {
+    super.initState();
+    // Load first frame for preview (like regular video thumbnails).
+    _preparePreview();
+  }
+
+  @override
   void dispose() {
+    _playingSub?.cancel();
     _player?.dispose();
     if (_tmpPath != null) {
       try {
@@ -1085,13 +1096,34 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     super.dispose();
   }
 
-  Future<void> _togglePlay() async {
-    if (_loading) return;
-    if (_initialized) {
-      await _player?.playOrPause();
-      return;
+  double _resolveVideoNoteAspectRatio(Player player) {
+    final params = player.state.videoParams;
+    var aspect = params.aspect ??
+        ((params.dw != null && params.dh != null && params.dh! > 0)
+            ? params.dw! / params.dh!
+            : null) ??
+        ((player.state.width != null &&
+                player.state.height != null &&
+                player.state.height! > 0)
+            ? player.state.width! / player.state.height!
+            : 1.0);
+
+    if (!aspect.isFinite || aspect <= 0) aspect = 1.0;
+
+    // Account for rotation metadata (fixes "flattened" / squished look).
+    final rotate = (params.rotate ?? 0) % 360;
+    if (rotate == 90 || rotate == 270) {
+      aspect = 1 / aspect;
     }
+    return aspect;
+  }
+
+  Future<void> _preparePreview({bool autoplay = false}) async {
+    if (_initialized || _loading) return;
     setState(() => _loading = true);
+    Player? player;
+    VideoController? controller;
+    StreamSubscription<bool>? playingSub;
     try {
       final tmpDir = await getTemporaryDirectory();
       final file =
@@ -1099,38 +1131,110 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       if (!file.existsSync()) await file.writeAsBytes(widget.videoBytes);
       _tmpPath = file.path;
 
-      final player = Player();
-      final controller = VideoController(player);
-      await player.open(Media('file://${file.path}'), play: true);
+      player = Player();
+      controller = VideoController(player);
 
-      // listen to playback state
-      player.stream.playing.listen((p) {
-        if (mounted) setState(() => _playing = p);
+      // Listen to playback state (also used for overlay visibility).
+      playingSub = player.stream.playing.listen((p) {
+        if (!mounted) return;
+        setState(() => _playing = p);
       });
 
-      if (mounted) {
-        setState(() {
-          _player = player;
-          _controller = controller;
-          _initialized = true;
-          _loading = false;
-          _playing = true;
-        });
+      // Open briefly to render first frame, then pause at 0.
+      await player.open(Media('file://${file.path}'), play: true);
+      await player.setVolume(0);
+      await _waitForVideoMetadata(player);
+      final aspectRatio = _resolveVideoNoteAspectRatio(player);
+
+      if (!autoplay) {
+        await player.pause();
+        await player.seek(Duration.zero);
       }
+      await player.setVolume(100);
+
+      if (!mounted) {
+        await player.dispose();
+        await playingSub.cancel();
+        return;
+      }
+
+      final prevSub = _playingSub;
+      _playingSub = playingSub;
+      try {
+        await prevSub?.cancel();
+      } catch (_) {}
+
+      final readyPlayer = player!;
+      final readyController = controller!;
+      setState(() {
+        _player = readyPlayer;
+        _controller = readyController;
+        _initialized = true;
+        _loading = false;
+        _duration = readyPlayer.state.duration;
+        _aspectRatio =
+            aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Video error: $e'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-        ));
-      }
+      try {
+        await playingSub?.cancel();
+      } catch (_) {}
+      try {
+        await player?.dispose();
+      } catch (_) {}
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Video error: $e'),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+      ));
     }
+  }
+
+  Future<void> _togglePlay() async {
+    if (_loading) return;
+    if (!_initialized) {
+      await _preparePreview(autoplay: true);
+      return;
+    }
+    await _player?.playOrPause();
+  }
+
+  Widget _coverFillVideo({
+    required VideoController controller,
+    required double aspectRatio,
+  }) {
+    // Similar to camera preview fix: scale to cover-fill without squishing.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final widgetAspect =
+            (size.height > 0) ? (size.width / size.height) : 1.0;
+        final safeAspect = aspectRatio.isFinite && aspectRatio > 0
+            ? aspectRatio
+            : widgetAspect;
+        final scale = safeAspect / widgetAspect;
+        return Transform.scale(
+          scale: scale < 1 ? 1 / scale : scale,
+          child: Center(
+            child: Video(
+              controller: controller,
+              controls: NoVideoControls,
+              // Keep correct aspect, scaling is handled by Transform.scale above.
+              fit: BoxFit.contain,
+              aspectRatio: safeAspect,
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final player = _player;
+    final sourceAspectRatio = _aspectRatio ?? 1.0;
     return SizedBox.expand(
       child: Stack(
         fit: StackFit.expand,
@@ -1148,14 +1252,41 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
 
           // Video (when loaded) — cover-fill the circle
           if (_initialized && _controller != null)
-            FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: 200,
-                height: 200,
-                child: Video(
-                  controller: _controller!,
-                  controls: NoVideoControls,
+            Positioned.fill(
+              child: _coverFillVideo(
+                controller: _controller!,
+                aspectRatio: sourceAspectRatio,
+              ),
+            ),
+
+          // Playback progress ring (white stroke from 12:00)
+          if (_initialized && player != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: StreamBuilder<Duration>(
+                  stream: player.stream.position,
+                  initialData: player.state.position,
+                  builder: (context, posSnap) {
+                    final position = posSnap.data ?? Duration.zero;
+                    return StreamBuilder<Duration>(
+                      stream: player.stream.duration,
+                      initialData: _duration,
+                      builder: (context, durSnap) {
+                        final duration = durSnap.data ?? _duration;
+                        final maxMs = duration.inMilliseconds;
+                        final valueMs = position.inMilliseconds;
+                        final progress = maxMs > 0
+                            ? (valueMs / maxMs).clamp(0.0, 1.0)
+                            : 0.0;
+                        return CustomPaint(
+                          painter: _VideoNoteProgressRingPainter(
+                            progress: progress,
+                            visible: maxMs > 0,
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
               ),
             ),
@@ -1191,6 +1322,42 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         ],
       ),
     );
+  }
+}
+
+class _VideoNoteProgressRingPainter extends CustomPainter {
+  final double progress; // 0..1
+  final bool visible;
+  const _VideoNoteProgressRingPainter({
+    required this.progress,
+    required this.visible,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!visible) return;
+
+    final stroke = math.max(2.0, size.shortestSide * 0.02);
+    final rect = Offset.zero & size;
+    final ringRect = Rect.fromCircle(
+      center: rect.center,
+      radius: (size.shortestSide / 2) - (stroke / 2),
+    );
+
+    final paint = Paint()
+      ..color = Colors.white.withAlpha(220)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round;
+
+    final startAngle = -math.pi / 2; // 12:00
+    final sweepAngle = (2 * math.pi) * progress;
+    canvas.drawArc(ringRect, startAngle, sweepAngle, false, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _VideoNoteProgressRingPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.visible != visible;
   }
 }
 

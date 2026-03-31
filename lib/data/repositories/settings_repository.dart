@@ -14,10 +14,15 @@ class SettingsRepository {
   static const _lastAddressKey = 'sgtp_last_address';
   static const _nodesJsonKey = 'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort,usersPort}]
   static const _lastNodeIdKey = 'sgtp_last_node_id';
+  // Legacy (global) identity + profile keys. New code should prefer per-account scoped variants.
   static const _privKeyB64Key = 'sgtp_private_key_b64';
   static const _privKeyNameKey = 'sgtp_private_key_name';
-  static const _whitelistJsonKey = 'sgtp_whitelist_json'; // [{b64, name, nick}]
+  static const _whitelistJsonKey = 'sgtp_whitelist_json'; // [{b64, name}]
   static const _userAvatarB64Key = 'sgtp_user_avatar_b64';
+  static const _userNicknameKey = 'sgtp_user_nickname';
+
+  // Per-account scoping / migration
+  static const _accountsMigratedV1Key = 'sgtp_accounts_migrated_v1';
   static const _compressFilesKey = 'sgtp_compress_files_enabled';
   static const _compressPhotosKey = 'sgtp_compress_photos_enabled';
   static const _compressVideosKey = 'sgtp_compress_videos_enabled';
@@ -28,6 +33,12 @@ class SettingsRepository {
   static const _qrShapeStyleKey = 'sgtp_qr_shape_style';
   static const _qrShowLogoKey = 'sgtp_qr_show_logo';
   static const int _maxSaved = 10;
+
+  String _scopedKey(String base, String? nodeId) {
+    final id = (nodeId ?? '').trim();
+    if (id.isEmpty) return base;
+    return '${base}_$id';
+  }
 
   // ── Shared sgtp directory ──────────────────────────────────────────────────
 
@@ -188,6 +199,46 @@ class SettingsRepository {
 
   // ── Private key ───────────────────────────────────────────────────────────
 
+  Future<void> migrateLegacyAccountDataToNodeIfNeeded(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    if (p.getBool(_accountsMigratedV1Key) == true) return;
+
+    final scopedPriv = _scopedKey(_privKeyB64Key, nodeId);
+    final scopedPrivName = _scopedKey(_privKeyNameKey, nodeId);
+    final scopedWl = _scopedKey(_whitelistJsonKey, nodeId);
+    final scopedAvatar = _scopedKey(_userAvatarB64Key, nodeId);
+    final scopedNick = _scopedKey(_userNicknameKey, nodeId);
+    final scopedSavedV2 = _scopedKey(_savedChatsV2Key, nodeId);
+
+    // Only migrate into the preferred node if it has no scoped data yet.
+    if (p.getString(scopedPriv) == null) {
+      final legacy = p.getString(_privKeyB64Key);
+      if (legacy != null) await p.setString(scopedPriv, legacy);
+    }
+    if (p.getString(scopedPrivName) == null) {
+      final legacy = p.getString(_privKeyNameKey);
+      if (legacy != null) await p.setString(scopedPrivName, legacy);
+    }
+    if (p.getStringList(scopedWl) == null) {
+      final legacy = p.getStringList(_whitelistJsonKey);
+      if (legacy != null) await p.setStringList(scopedWl, legacy);
+    }
+    if (p.getString(scopedAvatar) == null) {
+      final legacy = p.getString(_userAvatarB64Key);
+      if (legacy != null) await p.setString(scopedAvatar, legacy);
+    }
+    if (p.getString(scopedNick) == null) {
+      final legacy = p.getString(_userNicknameKey);
+      if (legacy != null) await p.setString(scopedNick, legacy);
+    }
+    if (p.getStringList(scopedSavedV2) == null) {
+      final legacy = p.getStringList(_savedChatsV2Key);
+      if (legacy != null) await p.setStringList(scopedSavedV2, legacy);
+    }
+
+    await p.setBool(_accountsMigratedV1Key, true);
+  }
+
   Future<void> savePrivateKey(Uint8List bytes, String name) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_privKeyB64Key, base64.encode(bytes));
@@ -219,6 +270,40 @@ class SettingsRepository {
     await p.remove(_privKeyNameKey);
   }
 
+  Future<void> savePrivateKeyForNode(
+      String nodeId, Uint8List bytes, String name) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_scopedKey(_privKeyB64Key, nodeId), base64.encode(bytes));
+    await p.setString(_scopedKey(_privKeyNameKey, nodeId), name);
+    // Also write to sgtp dir (account-scoped filename).
+    try {
+      final dir = await getSgtpDirectory();
+      final safe = nodeId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]+'), '');
+      final fileName = safe.isEmpty ? 'identity' : 'identity_$safe';
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(bytes, flush: true);
+    } catch (_) {}
+  }
+
+  Future<({Uint8List bytes, String name})?> loadPrivateKeyForNode(
+      String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final b64 = p.getString(_scopedKey(_privKeyB64Key, nodeId));
+    final name = p.getString(_scopedKey(_privKeyNameKey, nodeId)) ?? 'identity';
+    if (b64 == null) return null;
+    try {
+      return (bytes: base64.decode(b64), name: name);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearPrivateKeyForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_scopedKey(_privKeyB64Key, nodeId));
+    await p.remove(_scopedKey(_privKeyNameKey, nodeId));
+  }
+
   // ── Whitelist ─────────────────────────────────────────────────────────────
 
   /// Whitelist entry: public key bytes + display name (editable)
@@ -235,6 +320,33 @@ class SettingsRepository {
   Future<List<WhitelistEntry>> loadWhitelistEntries() async {
     final p = await SharedPreferences.getInstance();
     final jsonList = p.getStringList(_whitelistJsonKey);
+    if (jsonList == null) return [];
+    final result = <WhitelistEntry>[];
+    for (final s in jsonList) {
+      try {
+        final m = json.decode(s) as Map<String, dynamic>;
+        result.add(WhitelistEntry(
+          bytes: base64.decode(m['b64'] as String),
+          name: m['name'] as String? ?? 'unknown',
+        ));
+      } catch (_) {}
+    }
+    return result;
+  }
+
+  Future<void> saveWhitelistEntriesForNode(
+      String nodeId, List<WhitelistEntry> entries) async {
+    final p = await SharedPreferences.getInstance();
+    final jsonList = entries
+        .map(
+            (e) => json.encode({'b64': base64.encode(e.bytes), 'name': e.name}))
+        .toList();
+    await p.setStringList(_scopedKey(_whitelistJsonKey, nodeId), jsonList);
+  }
+
+  Future<List<WhitelistEntry>> loadWhitelistEntriesForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final jsonList = p.getStringList(_scopedKey(_whitelistJsonKey, nodeId));
     if (jsonList == null) return [];
     final result = <WhitelistEntry>[];
     for (final s in jsonList) {
@@ -272,6 +384,11 @@ class SettingsRepository {
     await p.remove(_whitelistJsonKey);
   }
 
+  Future<void> clearWhitelistForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_scopedKey(_whitelistJsonKey, nodeId));
+  }
+
   // ── User avatar ───────────────────────────────────────────────────────────
 
   Future<void> saveUserAvatar(Uint8List bytes) async {
@@ -293,6 +410,39 @@ class SettingsRepository {
   Future<void> clearUserAvatar() async {
     final p = await SharedPreferences.getInstance();
     await p.remove(_userAvatarB64Key);
+  }
+
+  Future<void> saveUserAvatarForNode(String nodeId, Uint8List bytes) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_scopedKey(_userAvatarB64Key, nodeId), base64.encode(bytes));
+  }
+
+  Future<Uint8List?> loadUserAvatarForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final b64 = p.getString(_scopedKey(_userAvatarB64Key, nodeId));
+    if (b64 == null) return null;
+    try {
+      return base64.decode(b64);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearUserAvatarForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_scopedKey(_userAvatarB64Key, nodeId));
+  }
+
+  // ── User nickname ────────────────────────────────────────────────────────
+
+  Future<String> loadUserNicknameForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_scopedKey(_userNicknameKey, nodeId)) ?? '';
+  }
+
+  Future<void> saveUserNicknameForNode(String nodeId, String nickname) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_scopedKey(_userNicknameKey, nodeId), nickname.trim());
   }
 
   // ── Saved chats (UUIDs) ───────────────────────────────────────────────────
@@ -329,6 +479,21 @@ class SettingsRepository {
     return result;
   }
 
+  Future<List<SavedChatRef>> loadSavedChatsForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getStringList(_scopedKey(_savedChatsV2Key, nodeId)) ?? [];
+    final result = <SavedChatRef>[];
+    for (final s in raw) {
+      try {
+        final m = json.decode(s) as Map<String, dynamic>;
+        final ref = SavedChatRef.fromJson(m);
+        if (ref.uuid.isEmpty) continue;
+        result.add(ref);
+      } catch (_) {}
+    }
+    return result;
+  }
+
   Future<void> saveSavedChats(List<SavedChatRef> refs) async {
     final p = await SharedPreferences.getInstance();
     final jsonList = refs.map((r) => json.encode(r.toJson())).toList();
@@ -337,8 +502,20 @@ class SettingsRepository {
     await p.setStringList(_savedChatsKey, refs.map((r) => r.uuid).toList());
   }
 
+  Future<void> saveSavedChatsForNode(
+      String nodeId, List<SavedChatRef> refs) async {
+    final p = await SharedPreferences.getInstance();
+    final jsonList = refs.map((r) => json.encode(r.toJson())).toList();
+    await p.setStringList(_scopedKey(_savedChatsV2Key, nodeId), jsonList);
+  }
+
   Future<List<String>> loadSavedChatUUIDs() async {
     final refs = await loadSavedChats();
+    return refs.map((r) => r.uuid).toList();
+  }
+
+  Future<List<String>> loadSavedChatUUIDsForNode(String nodeId) async {
+    final refs = await loadSavedChatsForNode(nodeId);
     return refs.map((r) => r.uuid).toList();
   }
 
@@ -355,10 +532,30 @@ class SettingsRepository {
     await saveSavedChats(next);
   }
 
+  Future<void> addSavedChatForNode(String nodeId, String uuid,
+      {String? serverAddress}) async {
+    final refs = await loadSavedChatsForNode(nodeId);
+    final next = [...refs];
+    final idx = next.indexWhere((r) => r.uuid == uuid);
+    final ref = SavedChatRef(uuid: uuid, serverAddress: serverAddress);
+    if (idx >= 0) {
+      next[idx] = ref;
+    } else {
+      next.add(ref);
+    }
+    await saveSavedChatsForNode(nodeId, next);
+  }
+
   Future<void> removeSavedChat(String uuid) async {
     final refs = await loadSavedChats();
     final next = refs.where((r) => r.uuid != uuid).toList();
     await saveSavedChats(next);
+  }
+
+  Future<void> removeSavedChatForNode(String nodeId, String uuid) async {
+    final refs = await loadSavedChatsForNode(nodeId);
+    final next = refs.where((r) => r.uuid != uuid).toList();
+    await saveSavedChatsForNode(nodeId, next);
   }
 
   // ── Media transfer ───────────────────────────────────────────────────────
