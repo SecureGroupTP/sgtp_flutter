@@ -4,7 +4,6 @@ class NodeConfig {
   final String host; // domain or IP, without scheme
   final int chatPort;
   final int voicePort;
-  final int usersPort;
 
   const NodeConfig({
     required this.id,
@@ -12,7 +11,6 @@ class NodeConfig {
     required this.host,
     required this.chatPort,
     required this.voicePort,
-    required this.usersPort,
   });
 
   String get chatAddress => '$host:$chatPort';
@@ -23,7 +21,6 @@ class NodeConfig {
     String? host,
     int? chatPort,
     int? voicePort,
-    int? usersPort,
   }) {
     return NodeConfig(
       id: id ?? this.id,
@@ -31,7 +28,6 @@ class NodeConfig {
       host: host ?? this.host,
       chatPort: chatPort ?? this.chatPort,
       voicePort: voicePort ?? this.voicePort,
-      usersPort: usersPort ?? this.usersPort,
     );
   }
 
@@ -41,7 +37,6 @@ class NodeConfig {
         'host': host,
         'chatPort': chatPort,
         'voicePort': voicePort,
-        'usersPort': usersPort,
       };
 
   static NodeConfig fromJson(Map<String, dynamic> json) {
@@ -54,8 +49,7 @@ class NodeConfig {
       chatPort: (json['chatPort'] as num?)?.toInt() ?? 7777,
       voicePort: (json['voicePort'] as num?)?.toInt() ??
           ((json['chatPort'] as num?)?.toInt() ?? 7777),
-      usersPort: (json['usersPort'] as num?)?.toInt() ??
-          ((json['chatPort'] as num?)?.toInt() ?? 7777),
+      // 'usersPort' key is ignored for backward compatibility
     );
   }
 }

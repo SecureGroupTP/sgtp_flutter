@@ -12,7 +12,7 @@ import '../../domain/entities/node.dart';
 class SettingsRepository {
   static const _savedAddressesKey = 'sgtp_saved_addresses';
   static const _lastAddressKey = 'sgtp_last_address';
-  static const _nodesJsonKey = 'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort,usersPort}]
+  static const _nodesJsonKey = 'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort}]
   static const _lastNodeIdKey = 'sgtp_last_node_id';
   // Legacy (global) identity + profile keys. New code should prefer per-account scoped variants.
   static const _privKeyB64Key = 'sgtp_private_key_b64';
@@ -32,6 +32,7 @@ class SettingsRepository {
   static const _qrSecondaryColorKey = 'sgtp_qr_secondary_color';
   static const _qrShapeStyleKey = 'sgtp_qr_shape_style';
   static const _qrShowLogoKey = 'sgtp_qr_show_logo';
+  static const _contactProfilesKey = 'sgtp_contact_profiles';
   static const int _maxSaved = 10;
 
   String _scopedKey(String base, String? nodeId) {
@@ -193,7 +194,6 @@ class SettingsRepository {
       host: host.isEmpty ? 'localhost' : host,
       chatPort: port,
       voicePort: port,
-      usersPort: port,
     );
   }
 
@@ -607,6 +607,88 @@ class SettingsRepository {
     await p.setString(_qrShapeStyleKey, settings.shapeStyle);
     await p.setBool(_qrShowLogoKey, settings.showLogo);
   }
+
+  // ── Contact profiles ──────────────────────────────────────────────────────
+
+  Future<Directory> _contactAvatarDir(String nodeId) async {
+    final base = await getSgtpDirectory();
+    final dir = Directory('${base.path}/contact_avatars/$nodeId');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
+  Future<void> saveContactProfile(String nodeId, ContactProfile profile) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_contactProfilesKey, nodeId);
+    final raw = p.getString(key);
+    final map = raw != null
+        ? (json.decode(raw) as Map<String, dynamic>)
+        : <String, dynamic>{};
+    map[profile.pubkeyHex] = {
+      'username': profile.username,
+      'fullname': profile.fullname,
+      'sha256': profile.avatarSha256Hex,
+      'updatedAt': profile.updatedAt,
+    };
+    await p.setString(key, json.encode(map));
+    if (profile.avatarBytes != null && profile.avatarBytes!.isNotEmpty) {
+      final dir = await _contactAvatarDir(nodeId);
+      final file = File('${dir.path}/${profile.pubkeyHex}.bin');
+      await file.writeAsBytes(profile.avatarBytes!);
+    }
+  }
+
+  Future<ContactProfile?> loadContactProfile(
+      String nodeId, String pubkeyHex) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_contactProfilesKey, nodeId);
+    final raw = p.getString(key);
+    if (raw == null) return null;
+    final map = json.decode(raw) as Map<String, dynamic>;
+    final entry = map[pubkeyHex] as Map<String, dynamic>?;
+    if (entry == null) return null;
+
+    Uint8List? avatar;
+    final dir = await _contactAvatarDir(nodeId);
+    final file = File('${dir.path}/$pubkeyHex.bin');
+    if (await file.exists()) avatar = await file.readAsBytes();
+
+    return ContactProfile(
+      pubkeyHex: pubkeyHex,
+      username: entry['username'] as String?,
+      fullname: entry['fullname'] as String?,
+      avatarBytes: avatar,
+      avatarSha256Hex: entry['sha256'] as String? ?? '',
+      updatedAt: entry['updatedAt'] as int? ?? 0,
+    );
+  }
+
+  Future<Map<String, ContactProfile>> loadAllContactProfiles(
+      String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_contactProfilesKey, nodeId);
+    final raw = p.getString(key);
+    if (raw == null) return {};
+    final map = json.decode(raw) as Map<String, dynamic>;
+    final result = <String, ContactProfile>{};
+    final dir = await _contactAvatarDir(nodeId);
+    for (final kv in map.entries) {
+      final pubkeyHex = kv.key;
+      final data = kv.value as Map<String, dynamic>;
+      Uint8List? avatar;
+      final file = File('${dir.path}/$pubkeyHex.bin');
+      if (await file.exists()) avatar = await file.readAsBytes();
+      result[pubkeyHex] = ContactProfile(
+        pubkeyHex: pubkeyHex,
+        username: data['username'] as String?,
+        fullname: data['fullname'] as String?,
+        avatarBytes: avatar,
+        avatarSha256Hex: data['sha256'] as String? ?? '',
+        updatedAt: data['updatedAt'] as int? ?? 0,
+      );
+    }
+    return result;
+  }
 }
 
 class MediaTransferSettings {
@@ -690,4 +772,23 @@ class WhitelistEntry {
 
   WhitelistEntry copyWithName(String newName) =>
       WhitelistEntry(bytes: bytes, name: newName);
+}
+
+/// Cached profile data fetched from the userdir service.
+class ContactProfile {
+  final String pubkeyHex;
+  final String? username;
+  final String? fullname;
+  final Uint8List? avatarBytes;
+  final String avatarSha256Hex; // 64-char hex; empty string if not set
+  final int updatedAt; // unix seconds
+
+  const ContactProfile({
+    required this.pubkeyHex,
+    this.username,
+    this.fullname,
+    this.avatarBytes,
+    required this.avatarSha256Hex,
+    required this.updatedAt,
+  });
 }

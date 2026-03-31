@@ -1056,7 +1056,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       host: host,
       chatPort: port ?? _nodes[nodeIdx].chatPort,
       voicePort: port ?? _nodes[nodeIdx].voicePort,
-      usersPort: port ?? _nodes[nodeIdx].usersPort,
     );
     await _settings.upsertNode(updated);
     await _reloadNodes();
@@ -1117,8 +1116,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         text: existing != null ? existing.chatPort.toString() : '');
     final voiceCtrl = TextEditingController(
         text: existing != null ? existing.voicePort.toString() : '');
-    final usersCtrl = TextEditingController(
-        text: existing != null ? existing.usersPort.toString() : '');
 
     NodeConfig? result;
     await showModalBottomSheet<void>(
@@ -1190,13 +1187,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                _StyledField(
-                  controller: usersCtrl,
-                  icon: Icons.people_outline,
-                  hint: 'Users port',
-                  keyboardType: TextInputType.number,
-                ),
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -1225,15 +1215,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                           final chatPort = parsePort(chatCtrl.text);
                           final voicePort = parsePort(voiceCtrl.text);
-                          final usersPort = parsePort(usersCtrl.text);
 
                           bool validPort(int? p) =>
                               p != null && p > 0 && p <= 65535;
                           if (name.isEmpty ||
                               host.isEmpty ||
                               !validPort(chatPort) ||
-                              !validPort(voicePort) ||
-                              !validPort(usersPort)) {
+                              !validPort(voicePort)) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text(
@@ -1249,7 +1237,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             host: host,
                             chatPort: chatPort!,
                             voicePort: voicePort!,
-                            usersPort: usersPort!,
                           );
                           Navigator.of(ctx).pop();
                         },
@@ -1268,7 +1255,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     hostCtrl.dispose();
     chatCtrl.dispose();
     voiceCtrl.dispose();
-    usersCtrl.dispose();
     return result;
   }
 
@@ -1459,7 +1445,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       nodeHost: node.host,
       nodeChatPort: node.chatPort,
       nodeVoicePort: node.voicePort,
-      nodeUsersPort: node.usersPort,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
@@ -1621,7 +1606,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           host: host,
                           chatPort: chatPort,
                           voicePort: chatPort,
-                          usersPort: chatPort,
                         );
                         await _settings.upsertNode(node);
                         await _reloadNodes();
@@ -1735,13 +1719,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     host = host?.trim();
     chatPort ??= 7777;
     final voicePort = data.nodeVoicePort ?? chatPort;
-    final usersPort = data.nodeUsersPort ?? chatPort;
 
     if (host == null ||
         host.isEmpty ||
         !validPort(chatPort) ||
-        !validPort(voicePort) ||
-        !validPort(usersPort)) {
+        !validPort(voicePort)) {
       return null;
     }
 
@@ -1755,7 +1737,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       host: host,
       chatPort: chatPort,
       voicePort: voicePort,
-      usersPort: usersPort,
     );
   }
 
@@ -1903,7 +1884,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? _nodes.first
           : NodeConfig(
               id: '', name: '', host: '', chatPort: 7777,
-              voicePort: 7777, usersPort: 7777),
+              voicePort: 7777),
     );
     final hasAccounts = _nodes.isNotEmpty;
 

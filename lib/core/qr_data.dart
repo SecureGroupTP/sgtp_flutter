@@ -36,9 +36,6 @@ class QrShareData {
   /// Node voice port (for type='node')
   final int? nodeVoicePort;
 
-  /// Node users port (for type='node')
-  final int? nodeUsersPort;
-
   const QrShareData({
     required this.type,
     this.roomUUID,
@@ -50,7 +47,6 @@ class QrShareData {
     this.nodeHost,
     this.nodeChatPort,
     this.nodeVoicePort,
-    this.nodeUsersPort,
     required this.timestamp,
   });
 
@@ -81,7 +77,6 @@ class QrShareData {
       if (nodeHost != null) 'host': nodeHost,
       if (nodeChatPort != null) 'chat': nodeChatPort,
       if (nodeVoicePort != null) 'voice': nodeVoicePort,
-      if (nodeUsersPort != null) 'users': nodeUsersPort,
       'ts': timestamp,
     };
     final jsonStr = jsonEncode(json);
@@ -135,7 +130,7 @@ class QrShareData {
       nodeHost: json['host'] as String?,
       nodeChatPort: (json['chat'] as num?)?.toInt(),
       nodeVoicePort: (json['voice'] as num?)?.toInt(),
-      nodeUsersPort: (json['users'] as num?)?.toInt(),
+      // 'users' key is ignored for backward compatibility
       timestamp: json['ts'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     );
   }

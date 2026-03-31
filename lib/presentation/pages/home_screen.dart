@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -7,6 +8,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/app_theme.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../data/userdir_client.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
 import '../../data/sgtp_client.dart';
@@ -52,6 +54,11 @@ class _HomeScreenState extends State<HomeScreen> {
   late List<WhitelistEntry> _whitelist;
   late String _accountId;
 
+  UserDirClient? _userDirClient;
+  StreamSubscription<UserDirMeta>? _userDirSub;
+  Map<String, ContactProfile> _contactProfiles = {};
+  Future<void> _notifyQueue = Future.value();
+
   @override
   void initState() {
     super.initState();
@@ -68,10 +75,13 @@ class _HomeScreenState extends State<HomeScreen> {
       serverAddress: _serverAddress,
       userAvatar: _userAvatar,
     );
+    unawaited(_initUserDir());
   }
 
   @override
   void dispose() {
+    _userDirSub?.cancel();
+    _userDirClient?.close();
     _roomsBloc.close();
     super.dispose();
   }
@@ -98,6 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
       serverAddress: newServer,
       userAvatar: _userAvatar,
     );
+    unawaited(_initUserDir());
   }
 
   void _onWhitelistChanged(List<WhitelistEntry> entries) {
@@ -116,6 +127,113 @@ class _HomeScreenState extends State<HomeScreen> {
     _roomsBloc.add(RoomsUpdateNicknames(
       {for (final e in entries) e.hexKey: e.name},
     ));
+    unawaited(_initUserDir());
+  }
+
+  Future<void> _initUserDir() async {
+    if (_accountId.trim().isEmpty || _whitelist.isEmpty) return;
+    final parts = _serverAddress.split(':');
+    if (parts.length < 2) return;
+    final host = parts.sublist(0, parts.length - 1).join(':');
+    final port = int.tryParse(parts.last);
+    if (port == null) return;
+
+    try {
+      final client = UserDirClient(host: host, port: port);
+      await client.connect();
+      _userDirClient?.close();
+      _userDirSub?.cancel();
+      _userDirClient = client;
+
+      final settings = SettingsRepository();
+      final cached = await settings.loadAllContactProfiles(_accountId);
+
+      // GET_META → compare sha256 → GET_PROFILE if stale
+      for (final contact in _whitelist) {
+        if (!mounted) break;
+        final meta = await client.getMeta(contact.bytes);
+        if (meta == null) continue;
+
+        final cachedProfile = cached[contact.hexKey];
+        if (cachedProfile == null ||
+            cachedProfile.avatarSha256Hex != meta.avatarSha256Hex ||
+            cachedProfile.avatarBytes == null) {
+          // Avatar stale or missing — fetch full profile
+          final profile = await client.getProfile(contact.bytes);
+          if (profile == null) continue;
+          final cp = ContactProfile(
+            pubkeyHex: contact.hexKey,
+            username: profile.username,
+            fullname: profile.fullname,
+            avatarBytes: profile.avatarBytes,
+            avatarSha256Hex: profile.avatarSha256Hex,
+            updatedAt: profile.updatedAt,
+          );
+          await settings.saveContactProfile(_accountId, cp);
+          if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
+        } else if (cachedProfile.username != meta.username ||
+            cachedProfile.fullname != meta.fullname) {
+          // Name/username changed, avatar is same
+          final cp = ContactProfile(
+            pubkeyHex: contact.hexKey,
+            username: meta.username,
+            fullname: meta.fullname,
+            avatarBytes: cachedProfile.avatarBytes,
+            avatarSha256Hex: meta.avatarSha256Hex,
+            updatedAt: meta.updatedAt,
+          );
+          await settings.saveContactProfile(_accountId, cp);
+          if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
+        } else if (mounted) {
+          setState(() => _contactProfiles[contact.hexKey] = cachedProfile);
+        }
+      }
+
+      // Subscribe to all contacts for live NOTIFY
+      await client.subscribe(_whitelist.map((e) => e.bytes).toList());
+
+      // Queue NOTIFY handling serially to avoid concurrent GET_PROFILE calls
+      _userDirSub = client.notifyStream.listen((meta) {
+        _notifyQueue = _notifyQueue.then((_) => _handleNotify(meta, client));
+      });
+    } catch (_) {
+      // Userdir unavailable — non-critical, proceed without profile sync
+    }
+  }
+
+  Future<void> _handleNotify(UserDirMeta meta, UserDirClient client) async {
+    if (!mounted) return;
+    final settings = SettingsRepository();
+    final cached =
+        await settings.loadContactProfile(_accountId, meta.pubkeyHex);
+
+    if (cached == null ||
+        cached.avatarSha256Hex != meta.avatarSha256Hex ||
+        cached.avatarBytes == null) {
+      final profile = await client.getProfile(meta.pubkey);
+      if (profile == null) return;
+      final cp = ContactProfile(
+        pubkeyHex: meta.pubkeyHex,
+        username: profile.username,
+        fullname: profile.fullname,
+        avatarBytes: profile.avatarBytes,
+        avatarSha256Hex: profile.avatarSha256Hex,
+        updatedAt: profile.updatedAt,
+      );
+      await settings.saveContactProfile(_accountId, cp);
+      if (mounted) setState(() => _contactProfiles[meta.pubkeyHex] = cp);
+    } else {
+      final cp = ContactProfile(
+        pubkeyHex: meta.pubkeyHex,
+        username: meta.username,
+        fullname: meta.fullname,
+        avatarBytes: cached.avatarBytes,
+        avatarSha256Hex: meta.avatarSha256Hex,
+        updatedAt: meta.updatedAt,
+      );
+      await settings.saveContactProfile(_accountId, cp);
+      if (mounted) setState(() => _contactProfiles[meta.pubkeyHex] = cp);
+    }
   }
 
   void _showAddSheet() {
