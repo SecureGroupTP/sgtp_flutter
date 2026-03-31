@@ -58,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<UserDirMeta>? _userDirSub;
   Map<String, ContactProfile> _contactProfiles = {};
   Future<void> _notifyQueue = Future.value();
+  String _nickname = '';
 
   @override
   void initState() {
@@ -75,7 +76,15 @@ class _HomeScreenState extends State<HomeScreen> {
       serverAddress: _serverAddress,
       userAvatar: _userAvatar,
     );
-    unawaited(_initUserDir());
+    unawaited(_loadNicknameAndInitUserDir());
+  }
+
+  Future<void> _loadNicknameAndInitUserDir() async {
+    if (_accountId.trim().isNotEmpty) {
+      _nickname =
+          await SettingsRepository().loadUserNicknameForNode(_accountId);
+    }
+    await _initUserDir();
   }
 
   @override
@@ -108,7 +117,12 @@ class _HomeScreenState extends State<HomeScreen> {
       serverAddress: newServer,
       userAvatar: _userAvatar,
     );
-    unawaited(_initUserDir());
+    unawaited(_loadNicknameAndInitUserDir());
+  }
+
+  void _onNicknameChanged(String nickname) {
+    _nickname = nickname;
+    unawaited(_registerSelf());
   }
 
   void _onWhitelistChanged(List<WhitelistEntry> entries) {
@@ -130,6 +144,31 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_initUserDir());
   }
 
+  /// Builds a valid @username from [_nickname] or falls back to pubkey prefix.
+  String _buildUsername() {
+    final sanitized =
+        _nickname.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '');
+    if (sanitized.isNotEmpty) {
+      return '@${sanitized.substring(0, sanitized.length.clamp(0, 32))}';
+    }
+    final pubHex = _config.myPublicKey
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '@${pubHex.substring(0, 16)}';
+  }
+
+  Future<void> _registerSelf() async {
+    final client = _userDirClient;
+    if (client == null) return;
+    await client.register(
+      username: _buildUsername(),
+      fullname: _nickname,
+      pubkey: _config.myPublicKey,
+      avatarBytes: _userAvatar ?? Uint8List(0),
+      identityKeyPair: _config.identityKeyPair,
+    );
+  }
+
   Future<void> _initUserDir() async {
     if (_accountId.trim().isEmpty || _whitelist.isEmpty) return;
     final parts = _serverAddress.split(':');
@@ -144,6 +183,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _userDirClient?.close();
       _userDirSub?.cancel();
       _userDirClient = client;
+
+      // Register/update our own profile on the server
+      await _registerSelf();
 
       final settings = SettingsRepository();
       final cached = await settings.loadAllContactProfiles(_accountId);
@@ -243,6 +285,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onUserAvatarChanged(Uint8List? avatar) {
     setState(() => _userAvatar = avatar);
     _roomsBloc.setUserAvatar(avatar);
+    unawaited(_registerSelf());
   }
 
   @override
@@ -261,6 +304,7 @@ class _HomeScreenState extends State<HomeScreen> {
               accountId: _accountId,
               initialEntries: _whitelist,
               onEntriesChanged: _onWhitelistChanged,
+              contactProfiles: _contactProfiles,
             ),
             // 2 — Settings
             SettingsScreen(
@@ -268,6 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
               initialNicknames: _nicknames,
               onConfigChanged: _onConfigChanged,
               onUserAvatarChanged: _onUserAvatarChanged,
+              onNicknameChanged: _onNicknameChanged,
               currentUserAvatar: _userAvatar,
             ),
           ],

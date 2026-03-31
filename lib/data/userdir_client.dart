@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
+
 import '../core/app_logger.dart';
 
 const _tag = 'UDIR';
@@ -210,6 +212,77 @@ class UserDirClient {
       _pending.remove(c);
       return null;
     });
+  }
+
+  /// Registers (or updates) the caller's own profile on the server.
+  ///
+  /// [username] must match `^@[A-Za-z0-9_]{1,32}$`.
+  /// The payload is signed with [identityKeyPair] using Ed25519.
+  Future<bool> register({
+    required String username,
+    required String fullname,
+    required Uint8List pubkey,
+    required Uint8List avatarBytes,
+    required SimpleKeyPairData identityKeyPair,
+  }) async {
+    final usernameBytes = utf8.encode(username);
+    final fullnameBytes = utf8.encode(fullname);
+    final avatarLen = avatarBytes.length;
+
+    // Build payload without signature (65 bytes placeholder at end)
+    final payloadSize = 1 + // version
+        2 + usernameBytes.length +
+        2 + fullnameBytes.length +
+        32 + // pubkey
+        4 + avatarLen +
+        1 + // sig_alg
+        64; // signature placeholder
+    final payload = Uint8List(payloadSize);
+    var o = 0;
+    payload[o++] = 1; // version
+    payload[o++] = (usernameBytes.length >> 8) & 0xff;
+    payload[o++] = usernameBytes.length & 0xff;
+    payload.setRange(o, o + usernameBytes.length, usernameBytes);
+    o += usernameBytes.length;
+    payload[o++] = (fullnameBytes.length >> 8) & 0xff;
+    payload[o++] = fullnameBytes.length & 0xff;
+    payload.setRange(o, o + fullnameBytes.length, fullnameBytes);
+    o += fullnameBytes.length;
+    payload.setRange(o, o + 32, pubkey);
+    o += 32;
+    payload[o++] = (avatarLen >> 24) & 0xff;
+    payload[o++] = (avatarLen >> 16) & 0xff;
+    payload[o++] = (avatarLen >> 8) & 0xff;
+    payload[o++] = avatarLen & 0xff;
+    payload.setRange(o, o + avatarLen, avatarBytes);
+    o += avatarLen;
+    payload[o++] = 1; // sig_alg = Ed25519
+    // last 64 bytes are the signature slot (currently zero)
+
+    // Sign: msg_type(0x01) || payload_without_last_64
+    final toSign = Uint8List(1 + payloadSize - 64);
+    toSign[0] = 0x01; // msg_type
+    toSign.setRange(1, toSign.length, payload.sublist(0, payloadSize - 64));
+    final sig =
+        await Ed25519().sign(toSign, keyPair: identityKeyPair);
+    payload.setRange(payloadSize - 64, payloadSize, sig.bytes);
+
+    AppLogger.d(
+      '→ OUTBOUND  REGISTER       '
+      'username=$username  fullname=$fullname  avatar=${avatarLen}B',
+      tag: _tag,
+    );
+
+    final resp = await _send(0x01, payload);
+    final ok = resp != null && resp.isNotEmpty && resp[0] == 0x81;
+    if (ok) {
+      AppLogger.i('REGISTER OK  username=$username', tag: _tag);
+    } else {
+      AppLogger.w(
+          'REGISTER failed  ${resp == null ? 'null' : _msgName(resp[0])}${_errorDetail(resp)}',
+          tag: _tag);
+    }
+    return ok;
   }
 
   /// Fetches lightweight metadata (no avatar bytes) for [pubkey].

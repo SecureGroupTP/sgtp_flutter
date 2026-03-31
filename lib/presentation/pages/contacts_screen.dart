@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -12,6 +14,7 @@ import '../widgets/qr_scanner_dialog.dart';
 class ContactsScreen extends StatefulWidget {
   final String accountId;
   final List<WhitelistEntry> initialEntries;
+  final Map<String, ContactProfile> contactProfiles;
 
   /// Called whenever the whitelist changes so HomeScreen can propagate
   /// updated nicknames to RoomsBloc.
@@ -22,6 +25,7 @@ class ContactsScreen extends StatefulWidget {
     required this.accountId,
     required this.initialEntries,
     required this.onEntriesChanged,
+    this.contactProfiles = const {},
   });
 
   @override
@@ -739,6 +743,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         final e = filtered[i];
                         return _ContactTile(
                           entry: e,
+                          avatar: widget.contactProfiles[e.hexKey]?.avatarBytes,
                           shortKey: _shortKey(e.hexKey),
                           onTap: () => _editContact(e),
                           onShare: () => _shareContact(e),
@@ -758,6 +763,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
 class _ContactTile extends StatelessWidget {
   final WhitelistEntry entry;
+  final Uint8List? avatar;
   final String shortKey;
   final VoidCallback onTap;
   final VoidCallback onShare;
@@ -769,6 +775,7 @@ class _ContactTile extends StatelessWidget {
     required this.onTap,
     required this.onShare,
     required this.onDelete,
+    this.avatar,
   });
 
   // Returns 1 or 2 initials: two-word names → "JD", single-word → "J"
@@ -824,11 +831,19 @@ class _ContactTile extends StatelessWidget {
               height: 46,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: gradient,
-                ),
+                gradient: avatar == null
+                    ? LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: gradient,
+                      )
+                    : null,
+                image: avatar != null
+                    ? DecorationImage(
+                        image: MemoryImage(avatar!),
+                        fit: BoxFit.cover,
+                      )
+                    : null,
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withAlpha(13),
@@ -837,14 +852,16 @@ class _ContactTile extends StatelessWidget {
                   ),
                 ],
               ),
-              child: Center(
-                child: Text(initial,
-                    style: const TextStyle(
-                        fontSize: 18, // ~46 * 0.45 ≈ 20, keep 18 for 1-2 chars
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white,
-                        height: 1.0)),
-              ),
+              child: avatar == null
+                  ? Center(
+                      child: Text(initial,
+                          style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white,
+                              height: 1.0)),
+                    )
+                  : null,
             ),
             const SizedBox(width: 14),
 

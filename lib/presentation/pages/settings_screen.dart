@@ -42,6 +42,7 @@ class SettingsScreen extends StatefulWidget {
   final ConfigChangedCallback? onConfigChanged;
   final UserAvatarChangedCallback? onUserAvatarChanged;
   final Uint8List? currentUserAvatar;
+  final void Function(String nickname)? onNicknameChanged;
 
   const SettingsScreen({
     super.key,
@@ -50,6 +51,7 @@ class SettingsScreen extends StatefulWidget {
     this.onConfigChanged,
     this.onUserAvatarChanged,
     this.currentUserAvatar,
+    this.onNicknameChanged,
   });
 
   @override
@@ -1394,6 +1396,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() => _nickname = next);
     _nicknamesByNodeId[nodeId] = next;
+    widget.onNicknameChanged?.call(next);
   }
 
   void _showMyProfileShare() {
