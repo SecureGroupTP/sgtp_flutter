@@ -664,6 +664,24 @@ class SgtpClient {
     await _cleanup();
   }
 
+  /// Nudge the existing TCP session after app resume without tearing it down.
+  /// We can't observe raw TCP ACKs from Dart, so we rely on a lightweight
+  /// application-level keepalive and the socket's onDone/onError callbacks.
+  Future<void> probeConnection() async {
+    if (_state == _ClientState.disconnected) return;
+    try {
+      await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
+      if (_state == _ClientState.ready) {
+        for (final peer in _peers.values.toList()) {
+          await _sendPing(peer.uuidBytes);
+        }
+      }
+      AppLogger.d('Sent connection probe on existing socket', tag: 'SGTP');
+    } catch (e) {
+      AppLogger.w('Connection probe failed: $e', tag: 'SGTP');
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Socket
   // ---------------------------------------------------------------------------

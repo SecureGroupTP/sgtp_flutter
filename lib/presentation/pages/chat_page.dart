@@ -77,7 +77,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   bool _scrollRestored = false;
 
   /// Timestamp when the app went to background. Used to decide whether
-  /// to force-reconnect on resume (NAT may have killed the TCP connection).
+  /// to log how long the app stayed backgrounded before resuming.
   DateTime? _wentToBackground;
 
   static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
@@ -147,17 +147,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           final isDown =
               status == ChatStatus.disconnected || status == ChatStatus.error;
 
-          // Force-reconnect if status shows down, OR if we were backgrounded
-          // long enough that the NAT table likely dropped the TCP connection.
-          // NAT timeout for TCP is typically 60–300 s on mobile networks;
-          // we use 50 s as the threshold (slightly above our ping interval).
-          final staleTcp =
-              status == ChatStatus.ready && bgDuration.inSeconds > 50;
-
-          if (isDown || staleTcp) {
+          if (isDown) {
             AppLogger.w('[Chat] reconnecting after background '
                 '(${bgDuration.inSeconds}s, status=$status)');
             bloc.add(const ChatReconnect());
+          } else {
+            AppLogger.i('[Chat] probing live connection after background '
+                '(${bgDuration.inSeconds}s, status=$status)');
+            bloc.add(const ChatProbeConnection());
           }
         }
         _flushPendingReadReceipts();

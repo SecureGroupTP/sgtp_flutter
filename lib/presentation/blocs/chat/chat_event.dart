@@ -22,6 +22,11 @@ class ChatReconnect extends ChatEvent {
   const ChatReconnect();
 }
 
+/// Probe the existing connection after app resume without forcing reconnect.
+class ChatProbeConnection extends ChatEvent {
+  const ChatProbeConnection();
+}
+
 class ChatSendMessage extends ChatEvent {
   final String text;
   final String? replyToId;

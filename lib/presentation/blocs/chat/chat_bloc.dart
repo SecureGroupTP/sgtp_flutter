@@ -30,6 +30,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   ChatBloc() : super(const ChatState()) {
     on<ChatConnect>(_onConnect);
     on<ChatReconnect>(_onReconnect);
+    on<ChatProbeConnection>(_onProbeConnection);
     on<ChatSendMessage>(_onSendMessage);
     on<ChatSendImage>(_onSendImage);
     on<ChatSendVideo>(_onSendVideo);
@@ -59,6 +60,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final last = _lastConnectEvent;
     if (last == null) return;
     await _doConnect(last, emit);
+  }
+
+  Future<void> _onProbeConnection(
+      ChatProbeConnection event, Emitter<ChatState> emit) async {
+    await _client?.probeConnection();
   }
 
   Future<void> _doConnect(ChatConnect event, Emitter<ChatState> emit) async {
