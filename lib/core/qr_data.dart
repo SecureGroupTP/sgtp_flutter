@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 /// Data that can be encoded in QR code for sharing room/profile
 class QrShareData {
-  /// Type: 'room' or 'profile'
+  /// Type: 'room', 'profile', or 'node'
   final String type;
 
   /// Room UUID (for type='room')
@@ -21,12 +21,36 @@ class QrShareData {
   /// Timestamp when created
   final int timestamp;
 
+  /// Node id (for type='node')
+  final String? nodeId;
+
+  /// Node name (for type='node')
+  final String? nodeName;
+
+  /// Node host (for type='node')
+  final String? nodeHost;
+
+  /// Node chat port (for type='node')
+  final int? nodeChatPort;
+
+  /// Node voice port (for type='node')
+  final int? nodeVoicePort;
+
+  /// Node users port (for type='node')
+  final int? nodeUsersPort;
+
   const QrShareData({
     required this.type,
     this.roomUUID,
     this.serverAddress,
     this.publicKeyHex,
     this.nickname,
+    this.nodeId,
+    this.nodeName,
+    this.nodeHost,
+    this.nodeChatPort,
+    this.nodeVoicePort,
+    this.nodeUsersPort,
     required this.timestamp,
   });
 
@@ -52,6 +76,12 @@ class QrShareData {
       if (serverAddress != null) 'server': serverAddress,
       if (publicKeyHex != null) 'pubkey': publicKeyHex,
       if (nickname != null) 'nick': nickname,
+      if (nodeId != null) 'nid': nodeId,
+      if (nodeName != null) 'name': nodeName,
+      if (nodeHost != null) 'host': nodeHost,
+      if (nodeChatPort != null) 'chat': nodeChatPort,
+      if (nodeVoicePort != null) 'voice': nodeVoicePort,
+      if (nodeUsersPort != null) 'users': nodeUsersPort,
       'ts': timestamp,
     };
     final jsonStr = jsonEncode(json);
@@ -100,6 +130,12 @@ class QrShareData {
       serverAddress: json['server'] as String?,
       publicKeyHex: json['pubkey'] as String?,
       nickname: json['nick'] as String?,
+      nodeId: json['nid'] as String?,
+      nodeName: json['name'] as String?,
+      nodeHost: json['host'] as String?,
+      nodeChatPort: (json['chat'] as num?)?.toInt(),
+      nodeVoicePort: (json['voice'] as num?)?.toInt(),
+      nodeUsersPort: (json['users'] as num?)?.toInt(),
       timestamp: json['ts'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     );
   }

@@ -22,6 +22,7 @@ import '../../domain/entities/node.dart';
 import '../../core/app_logger.dart';
 import '../../core/constants.dart';
 import '../widgets/pretty_qr_share_panel.dart';
+import '../widgets/qr_scanner_dialog.dart';
 import 'logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -874,6 +875,279 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  void _showNodeShare(NodeConfig node) {
+    final shareData = QrShareData(
+      type: 'node',
+      serverAddress: node.chatAddress,
+      nodeId: node.id,
+      nodeName: node.name,
+      nodeHost: node.host,
+      nodeChatPort: node.chatPort,
+      nodeVoicePort: node.voicePort,
+      nodeUsersPort: node.usersPort,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+    );
+
+    final safeName = node.name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: PrettyQrSharePanel(
+          data: shareData,
+          title: node.name,
+          subtitle: node.chatAddress,
+          description:
+              'Share this so others can add the node without typing it manually.',
+          copyMessage: 'Node hex copied',
+          exportName: safeName.isEmpty ? 'node' : 'node-$safeName',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _importNodeFromQr() async {
+    final data = await Navigator.push<QrShareData>(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => const QrScannerDialog(),
+      ),
+    );
+    if (!mounted || data == null) return;
+    await _importNodeFromShareData(data);
+  }
+
+  Future<void> _showNodeHexImportSheet() async {
+    final inputCtrl = TextEditingController();
+    String? errorMsg;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Padding(
+          padding: EdgeInsets.fromLTRB(
+              20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Import Node',
+                      style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary)),
+                  IconButton(
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Paste node share hex (or base64). You can also paste a raw host:port.',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: inputCtrl,
+                maxLines: 4,
+                decoration: InputDecoration(
+                  hintText: 'Node share hex / base64 / host:port…',
+                  border: const OutlineInputBorder(),
+                  errorText: errorMsg,
+                ),
+                autocorrect: false,
+                enableSuggestions: false,
+                textCapitalization: TextCapitalization.none,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () async {
+                        final raw = inputCtrl.text.trim();
+                        if (raw.isEmpty) return;
+
+                        final data = QrShareData.parse(raw);
+                        if (data != null) {
+                          final ok = await _importNodeFromShareData(data);
+                          if (!ctx.mounted) return;
+                          if (ok) Navigator.pop(ctx);
+                          return;
+                        }
+
+                        final parsed = _parseHostPort(raw);
+                        if (parsed == null) {
+                          setS(() => errorMsg =
+                              'Could not parse — paste node share hex/base64 or host:port');
+                          return;
+                        }
+
+                        final (host, port) = parsed;
+                        final chatPort = port ?? 7777;
+                        if (chatPort <= 0 || chatPort > 65535) {
+                          setS(() =>
+                              errorMsg = 'Port must be in range 1–65535');
+                          return;
+                        }
+                        final node = NodeConfig(
+                          id: uuidBytesToHex(generateUUIDv7()),
+                          name: host,
+                          host: host,
+                          chatPort: chatPort,
+                          voicePort: chatPort,
+                          usersPort: chatPort,
+                        );
+                        await _settings.upsertNode(node);
+                        await _reloadNodes();
+                        if (!mounted) return;
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text('Node imported: ${node.chatAddress}')),
+                        );
+                      },
+                      child: const Text('Import'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    inputCtrl.dispose();
+  }
+
+  (String, int?)? _parseHostPort(String raw) {
+    final normalized = raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    if (normalized.isEmpty) return null;
+
+    // IPv6 in brackets: [::1]:7777
+    if (normalized.startsWith('[')) {
+      final end = normalized.indexOf(']');
+      if (end <= 1) return null;
+      final host = normalized.substring(1, end).trim();
+      if (host.isEmpty) return null;
+      final rest = normalized.substring(end + 1).trim();
+      if (rest.isEmpty) return (host, null);
+      if (!rest.startsWith(':')) return null;
+      final port = int.tryParse(rest.substring(1).trim());
+      if (port == null) return null;
+      return (host, port);
+    }
+
+    final idx = normalized.lastIndexOf(':');
+    if (idx <= 0 || idx == normalized.length - 1) return (normalized, null);
+    final host = normalized.substring(0, idx).trim();
+    final port = int.tryParse(normalized.substring(idx + 1).trim());
+    if (port == null) return null;
+    return (host, port);
+  }
+
+  Future<bool> _importNodeFromShareData(QrShareData data) async {
+    final node = _nodeFromQrShareData(data);
+    if (node == null) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid node QR/hex')),
+      );
+      return false;
+    }
+    await _settings.upsertNode(node);
+    await _reloadNodes();
+    if (!mounted) return true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Node imported: ${node.chatAddress}')),
+    );
+    return true;
+  }
+
+  NodeConfig? _nodeFromQrShareData(QrShareData data) {
+    if (data.type != 'node') return null;
+
+    bool validPort(int? p) => p != null && p > 0 && p <= 65535;
+
+    String normalizeHost(String host) => host
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+
+    final id = (data.nodeId ?? '').trim().isNotEmpty
+        ? data.nodeId!.trim()
+        : uuidBytesToHex(generateUUIDv7());
+
+    String? host = data.nodeHost != null ? normalizeHost(data.nodeHost!) : null;
+    int? chatPort = data.nodeChatPort;
+
+    if ((host == null || host.isEmpty) && data.serverAddress != null) {
+      final parsed = _parseHostPort(data.serverAddress!);
+      if (parsed != null) {
+        host = parsed.$1;
+        chatPort ??= parsed.$2;
+      }
+    }
+
+    host = host?.trim();
+    chatPort ??= 7777;
+    final voicePort = data.nodeVoicePort ?? chatPort;
+    final usersPort = data.nodeUsersPort ?? chatPort;
+
+    if (host == null ||
+        host.isEmpty ||
+        !validPort(chatPort) ||
+        !validPort(voicePort) ||
+        !validPort(usersPort)) {
+      return null;
+    }
+
+    final name = (data.nodeName ?? host).trim().isEmpty
+        ? 'Node'
+        : (data.nodeName ?? host).trim();
+
+    return NodeConfig(
+      id: id,
+      name: name,
+      host: host,
+      chatPort: chatPort,
+      voicePort: voicePort,
+      usersPort: usersPort,
+    );
+  }
+
   Widget _buildProfileSection() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
@@ -1024,18 +1298,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     }
 
-    if (_nodes.isEmpty) {
-      return Row(
+    Widget actions() {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.end,
         children: [
-          const Expanded(
-            child: Text('No nodes yet',
-                style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-          ),
           _ActionButton(
             icon: Icons.add_circle_outline,
             label: 'Add',
             onPressed: _addNode,
           ),
+          _ActionButton(
+            icon: Icons.qr_code_scanner_outlined,
+            label: 'Import QR',
+            onPressed: _importNodeFromQr,
+          ),
+          _ActionButton(
+            icon: Icons.paste_outlined,
+            label: 'Import Hex',
+            onPressed: _showNodeHexImportSheet,
+          ),
+        ],
+      );
+    }
+
+    if (_nodes.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('No nodes yet',
+              style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+          const SizedBox(height: 12),
+          Align(alignment: Alignment.centerRight, child: actions()),
         ],
       );
     }
@@ -1045,15 +1340,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         Align(
           alignment: Alignment.centerRight,
-          child: _ActionButton(
-            icon: Icons.add_circle_outline,
-            label: 'Add',
-            onPressed: _addNode,
-          ),
+          child: actions(),
         ),
         const SizedBox(height: 14),
         ..._nodes.map((n) => _NodeRow(
               node: n,
+              onShare: () => _showNodeShare(n),
               onEdit: () => _editNode(n),
               onDelete: () => _deleteNode(n),
             )),
@@ -1785,11 +2077,13 @@ class _ActionButton extends StatelessWidget {
 
 class _NodeRow extends StatelessWidget {
   final NodeConfig node;
+  final VoidCallback onShare;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   const _NodeRow({
     required this.node,
+    required this.onShare,
     required this.onEdit,
     required this.onDelete,
   });
@@ -1846,6 +2140,12 @@ class _NodeRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
+          IconButton(
+            tooltip: 'Share',
+            onPressed: onShare,
+            icon: const Icon(Icons.qr_code_2_outlined,
+                size: 20, color: AppColors.textSecondary),
+          ),
           IconButton(
             tooltip: 'Edit',
             onPressed: onEdit,

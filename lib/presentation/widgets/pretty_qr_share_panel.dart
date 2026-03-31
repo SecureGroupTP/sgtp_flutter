@@ -541,7 +541,7 @@ class _PrettyQrSharePanelState extends State<PrettyQrSharePanel> {
               ),
             ),
             subtitle: const Text(
-              'Share or copy the raw contact or room code.',
+              'Share or copy the raw share code.',
               style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 12,
