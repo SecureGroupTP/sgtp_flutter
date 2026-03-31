@@ -282,6 +282,7 @@ class SgtpClient {
       _keepaliveTimer; // actively pings all known peers to keep connections alive
   bool _infoTimerStarted = false;
   final Set<String> _pendingHandshakes = {};
+  final Map<String, Timer> _pendingHandshakeTimers = {};
   bool _chatRequestSent = false;
   bool _readyEmitted = false;
 
@@ -863,6 +864,7 @@ class SgtpClient {
         handshakeComplete: true);
     _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
     _pendingHandshakes.remove(h);
+    _pendingHandshakeTimers.remove(h)?.cancel();
     _peerPublicKeys[h] = edH;
     if (!_eventController.isClosed && !_announcedJoins.contains(h)) {
       _announcedJoins.add(h);
@@ -899,12 +901,23 @@ class SgtpClient {
   }
 
   Future<void> _onInfoResp(ParsedFrame f) async {
-    final uuids = f.infoUUIDs.map((u) => uuidBytesToHex(u)).toList();
     bool any = false;
     for (final u in f.infoUUIDs) {
       final h = uuidBytesToHex(u);
       if (h == myUUIDHex || _peers.containsKey(h)) continue;
       _pendingHandshakes.add(h);
+      _pendingHandshakeTimers[h]?.cancel();
+      _pendingHandshakeTimers[h] = Timer(const Duration(seconds: 5), () async {
+        if (_pendingHandshakes.remove(h)) {
+          AppLogger.w(
+            'Handshake probe timed out for ${h.substring(0, 8)}; continuing with reachable peers',
+            tag: 'SGTP',
+          );
+          _pendingHandshakeTimers.remove(h)?.cancel();
+          _pendingHandshakeTimers.remove(h);
+          await _checkChatReq();
+        }
+      });
       await _sendPing(u);
       any = true;
     }
@@ -1397,6 +1410,7 @@ class SgtpClient {
     }
     _peers.remove(h);
     _pendingHandshakes.remove(h);
+    _pendingHandshakeTimers.remove(h)?.cancel();
     _peerLastSeen.remove(h);
     _announcedJoins.remove(h); // allow re-announce if they rejoin later
     _eventController.add(SgtpPeerLeft(peerUUID: h));
@@ -1418,6 +1432,7 @@ class SgtpClient {
     final h = uuidBytesToHex(f.payload.sublist(0, 16));
     _peers.remove(h);
     _pendingHandshakes.remove(h);
+    _pendingHandshakeTimers.remove(h)?.cancel();
     _eventController.add(SgtpPeerLeft(peerUUID: h));
   }
 
@@ -1563,6 +1578,10 @@ class SgtpClient {
     _isMaster = false;
     _peers.clear();
     _pendingHandshakes.clear();
+    for (final timer in _pendingHandshakeTimers.values) {
+      timer.cancel();
+    }
+    _pendingHandshakeTimers.clear();
     _pendingFiles.clear();
     _hsiReplies.clear();
     _peerPublicKeys.clear();
