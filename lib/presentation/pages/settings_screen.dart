@@ -82,9 +82,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _swipeToReply = true;
   bool _longPressMenu = true;
 
-  // Nodes
+  // Accounts (formerly Nodes)
   List<NodeConfig> _nodes = const [];
   bool _nodesLoading = true;
+  bool _accountsExpanded = false;
+  String? _preferredNodeId;
 
   @override
   void initState() {
@@ -136,6 +138,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _nodes = nodes;
         _nodesLoading = false;
+        _preferredNodeId = preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
         if (preferredNode != null) {
           _serverCtrl.text = preferredNode.chatAddress;
         }
@@ -586,10 +589,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _reloadNodes() async {
     final nodes = await _settings.loadNodes();
+    final preferred = await _settings.loadPreferredNode();
     if (!mounted) return;
     setState(() {
       _nodes = nodes;
       _nodesLoading = false;
+      _preferredNodeId = preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
     });
   }
 
@@ -768,6 +773,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (node == null) return;
     await _settings.upsertNode(node);
     await _reloadNodes();
+    if (!mounted) return;
+    _selectAccount(node);
   }
 
   Future<void> _editNode(NodeConfig node) async {
@@ -811,8 +818,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 100),
         children: [
+          _buildAccountSwitcher(),
           _buildProfileSection(),
-          _SettingsGroup(title: 'Nodes', child: _buildNodesCard()),
           _SettingsGroup(
               title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
           _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
@@ -1283,71 +1290,197 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Nodes card ───────────────────────────────────────────────────────────
+  // ── Account switcher ─────────────────────────────────────────────────────
 
-  Widget _buildNodesCard() {
-    if (_nodesLoading) {
-      return const Row(
+  Widget _buildAccountSwitcher() {
+    final active = _nodes.firstWhere(
+      (n) => n.id == _preferredNodeId,
+      orElse: () => _nodes.isNotEmpty
+          ? _nodes.first
+          : NodeConfig(
+              id: '', name: '', host: '', chatPort: 7777,
+              voicePort: 7777, usersPort: 7777),
+    );
+    final hasAccounts = _nodes.isNotEmpty;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bgSurface,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
         children: [
-          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-          SizedBox(width: 12),
-          Text('Loading…', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-        ],
-      );
-    }
-
-    Widget actions() {
-      return Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        alignment: WrapAlignment.end,
-        children: [
-          _ActionButton(
-            icon: Icons.add_circle_outline,
-            label: 'Add',
-            onPressed: _addNode,
+          // ── Header row ─────────────────────────────────────────────────
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _accountsExpanded = !_accountsExpanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                children: [
+                  // Use profile avatar + nickname instead of node data
+                  _AccAvatarImage(avatar: _userAvatar, name: _nickname),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _nodesLoading
+                        ? const Text('Loading…',
+                            style: TextStyle(
+                                fontSize: 15, color: AppColors.textSecondary))
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _nickname.isNotEmpty
+                                    ? _nickname
+                                    : (hasAccounts ? active.name : 'No accounts'),
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              if (hasAccounts) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  active.chatAddress,
+                                  style: const TextStyle(
+                                      fontSize: 13,
+                                      color: AppColors.textSecondary),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
+                  const SizedBox(width: 12),
+                  AnimatedRotation(
+                    turns: _accountsExpanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeInOut,
+                    child: const Icon(Icons.expand_more,
+                        color: AppColors.textSecondary, size: 24),
+                  ),
+                ],
+              ),
+            ),
           ),
-          _ActionButton(
-            icon: Icons.qr_code_scanner_outlined,
-            label: 'Import QR',
-            onPressed: _importNodeFromQr,
-          ),
-          _ActionButton(
-            icon: Icons.paste_outlined,
-            label: 'Import Hex',
-            onPressed: _showNodeHexImportSheet,
-          ),
+          // ── Dropdown ───────────────────────────────────────────────────
+          if (_accountsExpanded) ...[
+            const Divider(height: 1, thickness: 1, color: AppColors.border),
+            Column(
+              children: [
+                ..._nodes.map((n) => _AccountDropdownItem(
+                      node: n,
+                      isActive: n.id == _preferredNodeId,
+                      profileAvatar: n.id == _preferredNodeId ? _userAvatar : null,
+                      profileName: n.id == _preferredNodeId && _nickname.isNotEmpty
+                          ? _nickname
+                          : null,
+                      onTap: () => _selectAccount(n),
+                      onShare: () => _showNodeShare(n),
+                      onDelete: () => _deleteNode(n),
+                    )),
+                // ── Add Account ───────────────────────────────────────
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    setState(() => _accountsExpanded = false);
+                    _showAddAccountSheet();
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: AppColors.textSecondary),
+                          ),
+                          child: const Icon(Icons.add,
+                              color: AppColors.textSecondary, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text(
+                          'Add Account',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
-      );
-    }
+      ),
+    );
+  }
 
-    if (_nodes.isEmpty) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('No nodes yet',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-          const SizedBox(height: 12),
-          Align(alignment: Alignment.centerRight, child: actions()),
-        ],
-      );
-    }
+  void _selectAccount(NodeConfig node) {
+    setState(() {
+      _preferredNodeId = node.id;
+      _serverCtrl.text = node.chatAddress;
+      _accountsExpanded = false;
+    });
+    _settings.setLastNodeId(node.id);
+    _tryApplyConfig();
+  }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: actions(),
+  void _showAddAccountSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.bgSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Add Account',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 20),
+              _AddAccountOption(
+                icon: Icons.qr_code_scanner_outlined,
+                title: 'Scan QR',
+                subtitle: 'Import an account by scanning its QR code',
+                onTap: () {
+                  Navigator.pop(context);
+                  _importNodeFromQr();
+                },
+              ),
+              const SizedBox(height: 12),
+              _AddAccountOption(
+                icon: Icons.edit_note_outlined,
+                title: 'Enter Manually',
+                subtitle: 'Fill in the server address and ports by hand',
+                onTap: () {
+                  Navigator.pop(context);
+                  _addNode();
+                },
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 14),
-        ..._nodes.map((n) => _NodeRow(
-              node: n,
-              onShare: () => _showNodeShare(n),
-              onEdit: () => _editNode(n),
-              onDelete: () => _deleteNode(n),
-            )),
-      ],
+      ),
     );
   }
 
@@ -2073,94 +2206,229 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-class _NodeRow extends StatelessWidget {
+
+// ── Account switcher widgets ──────────────────────────────────────────────────
+
+/// Avatar that shows a profile image if available, otherwise a letter.
+class _AccAvatarImage extends StatelessWidget {
+  final Uint8List? avatar;
+  final String name;
+  const _AccAvatarImage({required this.avatar, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
+    return Container(
+      width: 42,
+      height: 42,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.bgMain,
+        border: const Border.fromBorderSide(BorderSide(color: AppColors.border)),
+        image: avatar != null
+            ? DecorationImage(image: MemoryImage(avatar!), fit: BoxFit.cover)
+            : null,
+      ),
+      child: avatar == null
+          ? Center(
+              child: Text(
+                letter,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            )
+          : null,
+    );
+  }
+}
+
+/// Avatar showing first letter of a node name (no image support).
+class _AccAvatar extends StatelessWidget {
+  final String name;
+  const _AccAvatar({required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
+    return Container(
+      width: 42,
+      height: 42,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.bgMain,
+        border: Border.fromBorderSide(BorderSide(color: AppColors.border)),
+      ),
+      child: Center(
+        child: Text(
+          letter,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountDropdownItem extends StatelessWidget {
   final NodeConfig node;
+  final bool isActive;
+  final Uint8List? profileAvatar;
+  final String? profileName;
+  final VoidCallback onTap;
   final VoidCallback onShare;
-  final VoidCallback onEdit;
   final VoidCallback onDelete;
 
-  const _NodeRow({
+  const _AccountDropdownItem({
     required this.node,
+    required this.isActive,
+    this.profileAvatar,
+    this.profileName,
+    required this.onTap,
     required this.onShare,
-    required this.onEdit,
     required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.bgSurfaceActive,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        node.name,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+    final displayName = profileName ?? node.name;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        color: isActive ? AppColors.bgMain : Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          children: [
+            isActive
+                ? _AccAvatarImage(avatar: profileAvatar, name: displayName)
+                : _AccAvatar(name: node.name),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    displayName,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  node.chatAddress,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'chat:${node.chatPort}  voice:${node.voicePort}  users:${node.usersPort}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
+                  const SizedBox(height: 2),
+                  Text(
+                    node.chatAddress,
+                    style: const TextStyle(
+                        fontSize: 13, color: AppColors.textSecondary),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          IconButton(
-            tooltip: 'Share',
-            onPressed: onShare,
-            icon: const Icon(Icons.qr_code_2_outlined,
-                size: 20, color: AppColors.textSecondary),
-          ),
-          IconButton(
-            tooltip: 'Edit',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined,
-                size: 20, color: AppColors.textSecondary),
-          ),
-          IconButton(
-            tooltip: 'Delete',
-            onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline,
-                size: 20, color: AppColors.statusRed),
-          ),
-        ],
+            // QR share
+            GestureDetector(
+              onTap: onShare,
+              child: const SizedBox(
+                width: 36,
+                height: 36,
+                child: Icon(Icons.qr_code_outlined,
+                    size: 20, color: AppColors.textSecondary),
+              ),
+            ),
+            const SizedBox(width: 4),
+            // Active check OR delete
+            if (isActive)
+              const Icon(Icons.check_circle,
+                  size: 20, color: Color(0xFF0A84FF))
+            else
+              GestureDetector(
+                onTap: onDelete,
+                child: const SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: Icon(Icons.delete_outline,
+                      size: 20, color: AppColors.statusRed),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
+
+class _AddAccountOption extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _AddAccountOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.bgSurfaceActive,
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.bgMain,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: AppColors.textPrimary, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                        fontSize: 13, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _AboutRow extends StatelessWidget {
   final String label;
