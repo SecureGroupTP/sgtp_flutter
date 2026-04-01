@@ -1151,6 +1151,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final node = await _openNodeEditor();
     if (node == null) return;
     await _settings.upsertNode(node);
+    // Pre-seed nickname with the account name so the profile field isn't blank
+    await _settings.saveUserNicknameForNode(node.id, node.name);
     await _reloadNodes();
     _tryApplyConfig();
     if (!mounted) return;
