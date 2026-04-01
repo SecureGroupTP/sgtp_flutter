@@ -46,6 +46,7 @@ class SettingsScreen extends StatefulWidget {
   final UserAvatarChangedCallback? onUserAvatarChanged;
   final Uint8List? currentUserAvatar;
   final void Function(String nickname)? onNicknameChanged;
+  final void Function(String username)? onUsernameChanged;
 
   const SettingsScreen({
     super.key,
@@ -55,6 +56,7 @@ class SettingsScreen extends StatefulWidget {
     this.onUserAvatarChanged,
     this.currentUserAvatar,
     this.onNicknameChanged,
+    this.onUsernameChanged,
   });
 
   @override
@@ -65,6 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = SettingsRepository();
   final _serverCtrl = TextEditingController();
   final _nicknameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
 
   String? _privateKeyPath;
   Uint8List? _privateKeyBytes;
@@ -174,6 +177,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _serverCtrl.dispose();
     _nicknameCtrl.dispose();
+    _usernameCtrl.dispose();
     super.dispose();
   }
 
@@ -186,8 +190,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadAccountData(String nodeId, {bool applyConfig = true}) async {
-    // Profile (nickname + avatar)
+    // Profile (nickname + username + avatar)
     final nickname = await _settings.loadUserNicknameForNode(nodeId);
+    final username = await _settings.loadUserUsernameForNode(nodeId);
     final avatar = await _settings.loadUserAvatarForNode(nodeId);
 
     // Identity key
@@ -211,6 +216,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _nickname = nickname;
       _nicknameCtrl.text = nickname;
+      _usernameCtrl.text = username;
       _userAvatar = avatar;
       _avatarsByNodeId[nodeId] = avatar;
       _nicknamesByNodeId[nodeId] = nickname;
@@ -1560,6 +1566,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.onNicknameChanged?.call(next);
   }
 
+  Future<void> _saveUsername(String value) async {
+    final nodeId = _preferredNodeId;
+    if (nodeId == null || nodeId.trim().isEmpty) return;
+    // Strip leading @ if user typed it, sanitize
+    final stripped = value.trim().replaceFirst(RegExp(r'^@'), '');
+    final sanitized =
+        stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').substring(
+              0,
+              stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
+            );
+    await _settings.saveUserUsernameForNode(nodeId, sanitized);
+    if (!mounted) return;
+    widget.onUsernameChanged?.call(sanitized);
+  }
+
   void _showMyProfileShare() {
     if (_myPublicKey == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1971,6 +1992,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   fontSize: 16,
                   fontWeight: FontWeight.w400),
               prefixIcon: const Icon(Icons.person_outline,
+                  size: 22, color: AppColors.textSecondary),
+              suffixIcon: const Icon(Icons.edit_outlined,
+                  size: 18, color: AppColors.textSecondary),
+              filled: true,
+              fillColor: const Color(0xFF1B1B1F),
+              hoverColor: Colors.transparent,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.textSecondary),
+              ),
+              contentPadding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Username input ───────────────────────────────────────────────
+          TextField(
+            controller: _usernameCtrl,
+            onChanged: _saveUsername,
+            onSubmitted: _saveUsername,
+            cursorColor: AppColors.textPrimary,
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_@]')),
+            ],
+            style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w500),
+            decoration: InputDecoration(
+              hintText: 'username',
+              hintStyle: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400),
+              prefixIcon: const Icon(Icons.alternate_email,
                   size: 22, color: AppColors.textSecondary),
               suffixIcon: const Icon(Icons.edit_outlined,
                   size: 18, color: AppColors.textSecondary),

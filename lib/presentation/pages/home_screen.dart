@@ -60,6 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, ContactProfile> _contactProfiles = {};
   Future<void> _notifyQueue = Future.value();
   String _nickname = '';
+  String _username = '';
 
   @override
   void initState() {
@@ -82,8 +83,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadNicknameAndInitUserDir() async {
     if (_accountId.trim().isNotEmpty) {
-      _nickname =
-          await SettingsRepository().loadUserNicknameForNode(_accountId);
+      final repo = SettingsRepository();
+      _nickname = await repo.loadUserNicknameForNode(_accountId);
+      _username = await repo.loadUserUsernameForNode(_accountId);
     }
     await _initUserDir();
   }
@@ -126,6 +128,11 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_registerSelf());
   }
 
+  void _onUsernameChanged(String username) {
+    _username = username;
+    unawaited(_registerSelf());
+  }
+
   void _onWhitelistChanged(List<WhitelistEntry> entries) {
     setState(() {
       _whitelist = entries;
@@ -145,10 +152,11 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_initUserDir());
   }
 
-  /// Builds a valid @username from [_nickname] or falls back to pubkey prefix.
+  /// Returns the @username: user-set value, or auto-derived from nickname,
+  /// or falls back to pubkey prefix.
   String _buildUsername() {
-    final sanitized =
-        _nickname.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '');
+    if (_username.isNotEmpty) return '@$_username';
+    final sanitized = _nickname.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '');
     if (sanitized.isNotEmpty) {
       return '@${sanitized.substring(0, sanitized.length.clamp(0, 32))}';
     }
@@ -314,6 +322,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onConfigChanged: _onConfigChanged,
               onUserAvatarChanged: _onUserAvatarChanged,
               onNicknameChanged: _onNicknameChanged,
+              onUsernameChanged: _onUsernameChanged,
               currentUserAvatar: _userAvatar,
             ),
           ],

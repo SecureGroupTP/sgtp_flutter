@@ -21,6 +21,7 @@ class SettingsRepository {
   static const _whitelistJsonKey = 'sgtp_whitelist_json'; // [{b64, name}]
   static const _userAvatarB64Key = 'sgtp_user_avatar_b64';
   static const _userNicknameKey = 'sgtp_user_nickname';
+  static const _userUsernameKey = 'sgtp_user_username';
 
   // Per-account scoping / migration
   static const _accountsMigratedV1Key = 'sgtp_accounts_migrated_v1';
@@ -482,6 +483,18 @@ class SettingsRepository {
   Future<void> saveUserNicknameForNode(String nodeId, String nickname) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_scopedKey(_userNicknameKey, nodeId), nickname.trim());
+  }
+
+  // ── User username ────────────────────────────────────────────────────────
+
+  Future<String> loadUserUsernameForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_scopedKey(_userUsernameKey, nodeId)) ?? '';
+  }
+
+  Future<void> saveUserUsernameForNode(String nodeId, String username) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_scopedKey(_userUsernameKey, nodeId), username.trim());
   }
 
   // ── Saved chats (UUIDs) ───────────────────────────────────────────────────
