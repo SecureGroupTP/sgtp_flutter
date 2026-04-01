@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../../core/sgtp_server_options.dart';
 import 'sgtp_transport.dart';
 
 class TcpSgtpTransport implements SgtpTransport {
@@ -48,11 +49,72 @@ class TcpSgtpTransport implements SgtpTransport {
     } catch (_) {}
 
     _socket = s;
+
+    // ── Read the 25-byte discovery header ─────────────────────────────────
+    // The server (serveTCP in multi.go) sends the 25-byte discovery payload
+    // immediately after accepting every TCP relay connection.  We must
+    // consume exactly those bytes before feeding data to the relay loop;
+    // otherwise the frame parser sees 25 bytes of garbage at the front of
+    // the stream and corrupts subsequent SGTP frames.
+    //
+    // Discovery clients (SgtpServerDiscovery / "Fetch server options") also
+    // connect to the TCP relay port, read the same 25 bytes, and close —
+    // so both use-cases are served by the same server-side change.
+    const int discoveryHeaderLen = SgtpServerOptions.wireBytesLength; // 25
+    final headerBuf = BytesBuilder();
+    final headerDone = Completer<void>();
+
     _sub = s.listen(
-      (data) => _inbound.add(Uint8List.fromList(data)),
-      onError: (e, st) => _inbound.addError(e, st),
-      onDone: () => _inbound.close(),
+      (chunk) {
+        if (!headerDone.isCompleted) {
+          // Still accumulating the discovery header.
+          headerBuf.add(chunk);
+
+          if (headerBuf.length >= discoveryHeaderLen) {
+            // Full 25-byte header received (chunk may also contain relay bytes).
+            final all = headerBuf.toBytes();
+
+            // Bytes past the header belong to the relay stream.
+            // Inject them BEFORE completing the future so they are always
+            // the first bytes the relay loop processes. (Dart is single-
+            // threaded; no other stream event fires until this callback
+            // returns, guaranteeing correct ordering.)
+            if (all.length > discoveryHeaderLen) {
+              _inbound.add(
+                  Uint8List.fromList(all.sublist(discoveryHeaderLen)));
+            }
+
+            headerDone.complete();
+          }
+          // Haven't accumulated 25 bytes yet — keep buffering.
+        } else {
+          // Header consumed — forward relay data directly.
+          _inbound.add(Uint8List.fromList(chunk));
+        }
+      },
+      onError: (e, st) {
+        if (!headerDone.isCompleted) headerDone.completeError(e, st);
+        _inbound.addError(e, st);
+      },
+      onDone: () {
+        if (!headerDone.isCompleted) {
+          headerDone.completeError(StateError(
+              'TCP connection closed before the 25-byte discovery header '
+              'was received. Ensure the server is running and you are '
+              'connecting to the correct TCP relay port.'));
+        }
+        if (!_inbound.isClosed) _inbound.close();
+      },
       cancelOnError: false,
+    );
+
+    // Wait up to 3 s for the server to send its discovery header.
+    await headerDone.future.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => throw TimeoutException(
+          'Server did not send the 25-byte discovery header within 3 s. '
+          'Check that the server is running and that multi.go serveTCP '
+          'sends the discovery response on every connection.'),
     );
   }
 
