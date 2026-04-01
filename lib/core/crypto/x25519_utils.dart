@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:convert' show utf8;
 import 'package:cryptography/cryptography.dart';
 
 /// Generate an ephemeral X25519 key pair.
@@ -25,4 +26,17 @@ Future<Uint8List> computeSharedSecret(
   );
   final bytes = await sharedSecretKey.extractBytes();
   return Uint8List.fromList(bytes);
+}
+
+/// Derive a uniformly-random 32-byte key from the raw X25519 shared secret.
+///
+/// Use this instead of using the ECDH output directly as a symmetric key.
+Future<Uint8List> deriveSharedKey(Uint8List rawSecret, Uint8List salt) async {
+  final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+  final output = await hkdf.deriveKey(
+    secretKey: SecretKey(rawSecret),
+    nonce: salt,
+    info: utf8.encode('sgtp-shared-key-v1'),
+  );
+  return Uint8List.fromList(await output.extractBytes());
 }

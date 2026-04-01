@@ -78,8 +78,26 @@ class ParsedFrame {
     return bd.getUint64(0, Endian.big);
   }
 
-  Uint8List get encryptedChatKey =>
-      Uint8List.fromList(payload.sublist(8, 56));
+  /// Nonce used to encrypt/decrypt the CHAT_KEY payload.
+  ///
+  /// v1: equals [epoch].
+  /// v2+: stored explicitly in payload[8:16].
+  int get chatKeyEncryptionNonce {
+    if (version >= 0x0002 && payload.length >= 16) {
+      final bd = ByteData.view(payload.buffer, payload.offsetInBytes + 8, 8);
+      return bd.getUint64(0, Endian.big);
+    }
+    return epoch;
+  }
+
+  Uint8List get encryptedChatKey {
+    if (version >= 0x0002) {
+      if (payload.length < 16 + 48) return Uint8List(0);
+      return Uint8List.fromList(payload.sublist(16, 16 + 48));
+    }
+    if (payload.length < 8 + 48) return Uint8List(0);
+    return Uint8List.fromList(payload.sublist(8, 8 + 48));
+  }
 
   // ---- MESSAGE accessors ----
 

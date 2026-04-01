@@ -12,8 +12,11 @@ class PeerInfo extends Equatable {
   /// Ed25519 long-term public key (32 bytes)
   final Uint8List ed25519PubKey;
 
-  /// X25519 shared secret (32 bytes), computed after handshake
+  /// Symmetric key derived from X25519 (32 bytes), computed after handshake.
   final Uint8List sharedKey;
+
+  /// Peer protocol version as received in PING/PONG.
+  final int protocolVersion;
 
   /// Whether the handshake (PING/PONG exchange) is complete
   final bool handshakeComplete;
@@ -23,6 +26,7 @@ class PeerInfo extends Equatable {
     required this.uuidBytes,
     required this.ed25519PubKey,
     required this.sharedKey,
+    required this.protocolVersion,
     required this.handshakeComplete,
   });
 
@@ -31,6 +35,7 @@ class PeerInfo extends Equatable {
     Uint8List? uuidBytes,
     Uint8List? ed25519PubKey,
     Uint8List? sharedKey,
+    int? protocolVersion,
     bool? handshakeComplete,
   }) {
     return PeerInfo(
@@ -38,11 +43,12 @@ class PeerInfo extends Equatable {
       uuidBytes: uuidBytes ?? this.uuidBytes,
       ed25519PubKey: ed25519PubKey ?? this.ed25519PubKey,
       sharedKey: sharedKey ?? this.sharedKey,
+      protocolVersion: protocolVersion ?? this.protocolVersion,
       handshakeComplete: handshakeComplete ?? this.handshakeComplete,
     );
   }
 
   @override
   List<Object?> get props =>
-      [uuid, uuidBytes, ed25519PubKey, sharedKey, handshakeComplete];
+      [uuid, uuidBytes, ed25519PubKey, sharedKey, protocolVersion, handshakeComplete];
 }

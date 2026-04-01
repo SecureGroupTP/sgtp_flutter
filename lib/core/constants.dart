@@ -8,7 +8,7 @@ class SgtpConstants {
 
   static final Uint8List broadcastUUID = Uint8List(16);
 
-  static const int version = 0x0001;
+  static const int version = 0x0002;
 
   // Packet types
   static const int pktIntent = 0x0000;
@@ -61,8 +61,11 @@ class SgtpConstants {
   /// Minimum PING/PONG payload: 32 + 32 = 64
   static const int pingPayloadMinLength = 64;
 
-  /// CHAT_KEY payload length: 8 (epoch) + 48 (ciphertext) = 56
-  static const int chatKeyPayloadLength = 56;
+  /// CHAT_KEY v1 payload length: 8 (epoch) + 48 (ciphertext) = 56
+  static const int chatKeyPayloadLengthV1 = 56;
+
+  /// CHAT_KEY v2 payload length: 8 (epoch) + 8 (nonce) + 48 (ciphertext) = 64
+  static const int chatKeyPayloadLengthV2 = 64;
 
   /// FIN payload length: 8 (nonce) + 16 (poly1305 tag) = 24
   static const int finPayloadLength = 24;

@@ -10,11 +10,12 @@ void _writeHeader(
   Uint8List senderUUID,
   int packetType,
   int payloadLength,
+  {int version = SgtpConstants.version,}
 ) {
   for (var i = 0; i < 16; i++) bd.setUint8(i, roomUUID[i]);
   for (var i = 0; i < 16; i++) bd.setUint8(16 + i, receiverUUID[i]);
   for (var i = 0; i < 16; i++) bd.setUint8(32 + i, senderUUID[i]);
-  bd.setUint16(48, SgtpConstants.version, Endian.big);
+  bd.setUint16(48, version, Endian.big);
   bd.setUint16(50, packetType, Endian.big);
   bd.setUint32(52, payloadLength, Endian.big);
   bd.setUint64(56, DateTime.now().millisecondsSinceEpoch, Endian.big);
@@ -35,11 +36,13 @@ Uint8List buildIntentFrame(Uint8List roomUUID, Uint8List senderUUID) {
 Uint8List buildPingFrame(
   Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
   Uint8List x25519PubKey, Uint8List ed25519PubKey,
+  {int version = SgtpConstants.version,}
 ) {
   const payloadLength = SgtpConstants.pingPayloadLength;
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
-  _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.ping, payloadLength);
+  _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.ping, payloadLength,
+      version: version);
   int off = SgtpConstants.headerSize;
   frame.setRange(off, off + 32, x25519PubKey); off += 32;
   frame.setRange(off, off + 32, ed25519PubKey); off += 32;
@@ -50,11 +53,13 @@ Uint8List buildPingFrame(
 Uint8List buildPongFrame(
   Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
   Uint8List x25519PubKey, Uint8List ed25519PubKey,
+  {int version = SgtpConstants.version,}
 ) {
   const payloadLength = SgtpConstants.pingPayloadLength;
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
-  _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.pong, payloadLength);
+  _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.pong, payloadLength,
+      version: version);
   int off = SgtpConstants.headerSize;
   frame.setRange(off, off + 32, x25519PubKey); off += 32;
   frame.setRange(off, off + 32, ed25519PubKey); off += 32;
@@ -120,14 +125,28 @@ Uint8List buildChatRequest(
 
 Uint8List buildChatKey(
   Uint8List roomUUID, Uint8List receiverUUID, Uint8List senderUUID,
-  int epoch, Uint8List encryptedKey48,
+  int epoch, int nonce, Uint8List encryptedKey48, {int version = SgtpConstants.version,}
 ) {
-  const payloadLength = SgtpConstants.chatKeyPayloadLength;
+  final payloadLength = version >= 0x0002
+      ? SgtpConstants.chatKeyPayloadLengthV2
+      : SgtpConstants.chatKeyPayloadLengthV1;
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
-  _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.chatKey, payloadLength);
+  _writeHeader(
+    bd,
+    roomUUID,
+    receiverUUID,
+    senderUUID,
+    PacketType.chatKey,
+    payloadLength,
+    version: version,
+  );
   int off = SgtpConstants.headerSize;
   bd.setUint64(off, epoch, Endian.big); off += 8;
+  if (version >= 0x0002) {
+    bd.setUint64(off, nonce, Endian.big);
+    off += 8;
+  }
   frame.setRange(off, off + 48, encryptedKey48);
   return frame;
 }

@@ -243,6 +243,7 @@ class SgtpClient {
   final SgtpConfig _config;
   final Uint8List _myUUID;
   late final Uint8List _roomUUID;
+  final Random _secureRandom = Random.secure();
 
   final _eventController = StreamController<SgtpEvent>.broadcast();
   Stream<SgtpEvent> get events => _eventController.stream;
@@ -673,7 +674,7 @@ class SgtpClient {
       await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       if (_state == _ClientState.ready) {
         for (final peer in _peers.values.toList()) {
-          await _sendPing(peer.uuidBytes);
+          await _sendPing(peer.uuidBytes, version: peer.protocolVersion);
         }
       }
       AppLogger.d('Sent connection probe on existing socket', tag: 'SGTP');
@@ -736,6 +737,14 @@ class SgtpClient {
       );
       return;
     }
+    if (frame.version != SgtpConstants.version) {
+      AppLogger.w(
+        '← INBOUND ${_pktName(frame.packetType)} from ${uuidBytesToHex(frame.senderUUID).substring(0, 8)} '
+        'DROPPED (version mismatch: ${frame.version})',
+        tag: 'PKT',
+      );
+      return;
+    }
     final frameSender = uuidBytesToHex(frame.senderUUID);
     if (_peers.containsKey(frameSender)) {
       _peerLastSeen[frameSender] = DateTime.now().millisecondsSinceEpoch;
@@ -777,7 +786,7 @@ class SgtpClient {
       case PacketType.hsir:
         await _onHsir(frame);
       case PacketType.hsi:
-        _onHsi(frame);
+        await _onHsi(frame);
       case PacketType.hsr:
         await _onHsr(frame);
       case PacketType.hsra:
@@ -840,16 +849,21 @@ class SgtpClient {
       final hello = ascii.decode(f.payload.sublist(64, 76), allowInvalid: true);
       if (hello != SgtpConstants.clientHello) return;
     }
-    final ss = await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
+    final rawSecret =
+        await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
+    final ss = f.version >= 0x0002
+        ? await deriveSharedKey(rawSecret, _roomUUID)
+        : rawSecret;
     final prev = _peers[h];
     _peers[h] = PeerInfo(
         uuid: h,
         uuidBytes: Uint8List.fromList(f.senderUUID),
         ed25519PubKey: ed,
         sharedKey: ss,
+        protocolVersion: f.version,
         handshakeComplete: prev?.handshakeComplete ?? false);
     _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
-    await _sendPong(f.senderUUID);
+    await _sendPong(f.senderUUID, version: f.version);
     _scheduleInfo();
     // Only announce if we have NOT announced this peer yet this session.
     _peerPublicKeys[h] = edH;
@@ -872,13 +886,17 @@ class SgtpClient {
       final hello = ascii.decode(f.payload.sublist(64, 76), allowInvalid: true);
       if (hello != SgtpConstants.clientHello) return;
     }
-    final ss = await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
-    final prev = _peers[h];
+    final rawSecret =
+        await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
+    final ss = f.version >= 0x0002
+        ? await deriveSharedKey(rawSecret, _roomUUID)
+        : rawSecret;
     _peers[h] = PeerInfo(
         uuid: h,
         uuidBytes: Uint8List.fromList(f.senderUUID),
         ed25519PubKey: ed,
         sharedKey: ss,
+        protocolVersion: f.version,
         handshakeComplete: true);
     _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
     _pendingHandshakes.remove(h);
@@ -889,7 +907,7 @@ class SgtpClient {
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
     if (_state == _ClientState.ready && _isMaster) {
-      await _issueCKToPeer(h);
+      await _issueCK();
     } else {
       _scheduleInfo();
       await _checkChatReq();
@@ -970,6 +988,9 @@ class SgtpClient {
   Future<void> _onChatRequest(ParsedFrame f) async {
     final sender = uuidBytesToHex(f.senderUUID);
     AppLogger.d('CHAT_REQUEST from $sender', tag: 'SGTP');
+    final peer = _peers[sender];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
 
     // Parse metadata from the extended CHAT_REQUEST
     final name = f.chatRequestName;
@@ -997,9 +1018,18 @@ class SgtpClient {
     final peer = _peers[peerHex];
     if (peer == null || peer.sharedKey.isEmpty) return;
     try {
-      final enc = await encrypt(_chatKey!, peer.sharedKey, _chatEpoch);
-      await _sendFrame(
-          buildChatKey(_roomUUID, peer.uuidBytes, _myUUID, _chatEpoch, enc));
+      final version = peer.protocolVersion;
+      final nonce = version >= 0x0002 ? _randomUint64() : _chatEpoch;
+      final enc = await encrypt(_chatKey!, peer.sharedKey, nonce);
+      await _sendFrame(buildChatKey(
+        _roomUUID,
+        peer.uuidBytes,
+        _myUUID,
+        _chatEpoch,
+        nonce,
+        enc,
+        version: version,
+      ));
     } catch (e) {
       AppLogger.e('_issueCKToPeer failed for $peerHex: $e', tag: 'SGTP');
     }
@@ -1007,7 +1037,7 @@ class SgtpClient {
 
   Future<void> _issueCK() async {
     final key = Uint8List.fromList(
-        List.generate(32, (_) => Random.secure().nextInt(256)));
+        List.generate(32, (_) => _secureRandom.nextInt(256)));
     _chatKey = key;
     final ts = DateTime.now().millisecondsSinceEpoch;
     _chatEpoch = ts > _chatEpoch ? ts : _chatEpoch + 1;
@@ -1015,9 +1045,18 @@ class SgtpClient {
     for (final peer in _peers.values) {
       if (peer.sharedKey.isEmpty) continue;
       try {
-        final enc = await encrypt(key, peer.sharedKey, _chatEpoch);
-        await _sendFrame(
-            buildChatKey(_roomUUID, peer.uuidBytes, _myUUID, _chatEpoch, enc));
+        final version = peer.protocolVersion;
+        final nonce = version >= 0x0002 ? _randomUint64() : _chatEpoch;
+        final enc = await encrypt(key, peer.sharedKey, nonce);
+        await _sendFrame(buildChatKey(
+          _roomUUID,
+          peer.uuidBytes,
+          _myUUID,
+          _chatEpoch,
+          nonce,
+          enc,
+          version: version,
+        ));
       } catch (e) {
         AppLogger.e('issueCK encrypt failed for ${peer.uuid}: $e', tag: 'SGTP');
       }
@@ -1036,11 +1075,16 @@ class SgtpClient {
 
   Future<void> _onChatKey(ParsedFrame f) async {
     final senderH = uuidBytesToHex(f.senderUUID);
-    if (f.payloadLength < SgtpConstants.chatKeyPayloadLength) return;
     final peer = _peers[senderH];
     if (peer == null || peer.sharedKey.isEmpty) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
+    final minLen = f.version >= 0x0002
+        ? SgtpConstants.chatKeyPayloadLengthV2
+        : SgtpConstants.chatKeyPayloadLengthV1;
+    if (f.payloadLength < minLen) return;
     try {
-      final dec = await decrypt(f.encryptedChatKey, peer.sharedKey, f.epoch);
+      final dec = await decrypt(
+          f.encryptedChatKey, peer.sharedKey, f.chatKeyEncryptionNonce);
       if (dec.length != 32) return;
       _chatKey = Uint8List.fromList(dec);
       _chatEpoch = f.epoch;
@@ -1068,6 +1112,11 @@ class SgtpClient {
   Future<void> _onMessage(ParsedFrame f, {bool history = false}) async {
     if (_chatKey == null || f.payloadLength < 40) return;
     final sH = uuidBytesToHex(f.senderUUID);
+    if (!history) {
+      final peer = _peers[sH];
+      if (peer == null) return;
+      if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
+    }
     if (!history && sH == myUUIDHex) return;
     try {
       final plain =
@@ -1306,12 +1355,19 @@ class SgtpClient {
   Future<void> _onHsir(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
+    final peer = _peers[h];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     await _sendFrame(buildHsi(_roomUUID, Uint8List.fromList(f.senderUUID),
         _myUUID, _historyStore.length));
   }
 
   Future<void> _onHsr(ParsedFrame f) async {
     final recv = Uint8List.fromList(f.senderUUID);
+    final senderHex = uuidBytesToHex(f.senderUUID);
+    final peer = _peers[senderHex];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     if (_chatKey == null || _historyStore.isEmpty) {
       await _sendFrame(buildHsraEos(_roomUUID, recv, _myUUID, 0));
       return;
@@ -1361,9 +1417,12 @@ class SgtpClient {
     _hsiTimer = Timer(const Duration(seconds: 2), _sendHsr);
   }
 
-  void _onHsi(ParsedFrame f) {
+  Future<void> _onHsi(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
+    final peer = _peers[h];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     _hsiReplies[h] = f.hsiMessageCount;
   }
 
@@ -1378,6 +1437,10 @@ class SgtpClient {
   }
 
   Future<void> _onHsra(ParsedFrame f) async {
+    final senderHex = uuidBytesToHex(f.senderUUID);
+    final peer = _peers[senderHex];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     if (f.hsraIsEndOfStream) return;
     for (final raw in f.hsraExtractMessages) {
       final parsed = tryParseFrame(raw);
@@ -1393,8 +1456,10 @@ class SgtpClient {
   Future<void> _onMsgFailed(ParsedFrame f) async {
     final peer = _peers[uuidBytesToHex(f.senderUUID)];
     if (peer == null || peer.sharedKey.isEmpty) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     try {
-      final plain = await decrypt(f.payload, peer.sharedKey, f.timestamp);
+      final (nonce, ciphertext) = _sharedKeyCipherParams(f);
+      final plain = await decrypt(ciphertext, peer.sharedKey, nonce);
       if (plain.length >= 16)
         _eventController
             .add(SgtpError(error: 'Message rejected (CK rotation)'));
@@ -1405,8 +1470,10 @@ class SgtpClient {
   Future<void> _onStatus(ParsedFrame f) async {
     final peer = _peers[uuidBytesToHex(f.senderUUID)];
     if (peer == null || peer.sharedKey.isEmpty) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     try {
-      final plain = await decrypt(f.payload, peer.sharedKey, f.timestamp);
+      final (nonce, ciphertext) = _sharedKeyCipherParams(f);
+      final plain = await decrypt(ciphertext, peer.sharedKey, nonce);
       if (plain.length >= 2) {
         final code = ByteData.view(plain.buffer, plain.offsetInBytes, 2)
             .getUint16(0, Endian.big);
@@ -1419,6 +1486,9 @@ class SgtpClient {
   Future<void> _onFin(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
+    final peer = _peers[h];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     if (_chatKey != null && f.payloadLength >= SgtpConstants.finPayloadLength) {
       try {
         await decrypt(f.finTag, _chatKey!, f.finNonce);
@@ -1458,10 +1528,30 @@ class SgtpClient {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  Future<void> _sendPing(Uint8List r) async {
+  (int nonce, Uint8List ciphertext) _sharedKeyCipherParams(ParsedFrame f) {
+    if (f.version >= 0x0002 && f.payloadLength >= 8) {
+      final bd = ByteData.view(f.payload.buffer, f.payload.offsetInBytes, 8);
+      final nonce = bd.getUint64(0, Endian.big);
+      final ciphertext = Uint8List.fromList(f.payload.sublist(8));
+      return (nonce, ciphertext);
+    }
+    return (f.timestamp, f.payload);
+  }
+
+  int _randomUint64() {
+    final bytes = Uint8List(8);
+    for (var i = 0; i < 8; i++) {
+      bytes[i] = _secureRandom.nextInt(256);
+    }
+    final bd = ByteData.view(bytes.buffer);
+    return bd.getUint64(0, Endian.big);
+  }
+
+  Future<void> _sendPing(Uint8List r, {int version = SgtpConstants.version}) async {
     if (_ephemeralX25519Pub == null) return;
     await _sendFrame(buildPingFrame(
-        _roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey));
+        _roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey,
+        version: version));
   }
 
   /// Proactively ping every connected peer to keep connections alive,
@@ -1473,14 +1563,15 @@ class SgtpClient {
     await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
     // Also ping known peers so their last-seen timestamps stay fresh.
     for (final peer in _peers.values.toList()) {
-      await _sendPing(peer.uuidBytes);
+      await _sendPing(peer.uuidBytes, version: peer.protocolVersion);
     }
   }
 
-  Future<void> _sendPong(Uint8List r) async {
+  Future<void> _sendPong(Uint8List r, {int version = SgtpConstants.version}) async {
     if (_ephemeralX25519Pub == null) return;
     await _sendFrame(buildPongFrame(
-        _roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey));
+        _roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey,
+        version: version));
   }
 
   Future<void> _sendFrame(Uint8List unsigned) async {
