@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/sgtp_server_options.dart';
 import '../../core/uuid_v7.dart';
 import '../../domain/entities/node.dart';
 
@@ -33,6 +34,9 @@ class SettingsRepository {
   static const _qrShapeStyleKey = 'sgtp_qr_shape_style';
   static const _qrShowLogoKey = 'sgtp_qr_show_logo';
   static const _contactProfilesKey = 'sgtp_contact_profiles';
+  static const _nodeServerOptionsKeyPrefix = 'sgtp_node_server_options_v1_';
+  static const _nodeServerOptionsSavedAtKeyPrefix =
+      'sgtp_node_server_options_saved_at_v1_';
   static const int _maxSaved = 10;
 
   String _scopedKey(String base, String? nodeId) {
@@ -168,6 +172,41 @@ class SettingsRepository {
         await setLastNodeId(fallback.id);
       }
     }
+  }
+
+  // ── Server options (transport discovery cache) ────────────────────────────
+
+  Future<void> saveNodeServerOptions(String nodeId, SgtpServerOptions options) async {
+    final id = nodeId.trim();
+    if (id.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final bytesB64 = base64.encode(options.toBytes());
+    await p.setString('$_nodeServerOptionsKeyPrefix$id', bytesB64);
+    await p.setInt('$_nodeServerOptionsSavedAtKeyPrefix$id',
+        DateTime.now().millisecondsSinceEpoch);
+  }
+
+  Future<SgtpServerOptions?> loadNodeServerOptions(String nodeId) async {
+    final id = nodeId.trim();
+    if (id.isEmpty) return null;
+    final p = await SharedPreferences.getInstance();
+    final b64 = p.getString('$_nodeServerOptionsKeyPrefix$id');
+    if (b64 == null || b64.isEmpty) return null;
+    try {
+      final bytes = base64.decode(b64);
+      return SgtpServerOptions.fromBytes(Uint8List.fromList(bytes));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<DateTime?> loadNodeServerOptionsSavedAt(String nodeId) async {
+    final id = nodeId.trim();
+    if (id.isEmpty) return null;
+    final p = await SharedPreferences.getInstance();
+    final ts = p.getInt('$_nodeServerOptionsSavedAtKeyPrefix$id');
+    if (ts == null || ts <= 0) return null;
+    return DateTime.fromMillisecondsSinceEpoch(ts);
   }
 
   NodeConfig _nodeFromLegacyAddress(String address) {

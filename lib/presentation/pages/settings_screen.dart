@@ -16,9 +16,12 @@ import '../../core/crypto/ed25519_utils.dart';
 import '../../core/interaction_prefs.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/qr_data.dart';
+import '../../core/sgtp_server_options.dart';
+import '../../core/sgtp_transport.dart';
 import '../../core/uuid_v7.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
+import '../../data/transport/server_discovery.dart';
 import '../../domain/entities/node.dart';
 import '../../core/app_logger.dart';
 import '../../core/constants.dart';
@@ -1020,17 +1023,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final parsed = parseOpenSshPrivateKey(_privateKeyBytes!);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
+      final accountId = _preferredNodeId;
+      if (accountId == null || accountId.trim().isEmpty) return;
+      final node =
+          _nodes.where((n) => n.id == accountId).firstOrNull;
       final newConfig = SgtpConfig(
         serverAddr: server.isEmpty ? 'localhost:7777' : server,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
         whitelist: whitelist,
+        transport: node?.transport ?? SgtpTransportFamily.tcp,
+        useTls: node?.useTls ?? false,
+        nodeId: accountId,
         pingIntervalSeconds: _pingIntervalSeconds,
         mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
-      final accountId = _preferredNodeId;
-      if (accountId == null || accountId.trim().isEmpty) return;
       widget.onConfigChanged
           ?.call(accountId, newConfig, _nicknames, server, _wlEntries);
     } catch (e) {
@@ -1119,6 +1127,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final voiceCtrl = TextEditingController(
         text: existing != null ? existing.voicePort.toString() : '');
 
+    var transport = existing?.transport ?? SgtpTransportFamily.tcp;
+    var useTls = existing?.useTls ?? false;
+    SgtpServerOptions? serverOptions =
+        existing != null ? await _settings.loadNodeServerOptions(baseId) : null;
+    DateTime? serverOptionsAt = existing != null
+        ? await _settings.loadNodeServerOptionsSavedAt(baseId)
+        : null;
+    var optionsLoading = false;
+    String? optionsError;
+
     NodeConfig? result;
     await showModalBottomSheet<void>(
       context: context,
@@ -1174,7 +1192,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: _StyledField(
                         controller: chatCtrl,
                         icon: Icons.chat_bubble_outline,
-                        hint: 'Chat port',
+                        hint: 'Discovery port',
                         keyboardType: TextInputType.number,
                       ),
                     ),
@@ -1189,6 +1207,145 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 12),
+                StatefulBuilder(builder: (ctx, setModalState) {
+                  bool tlsAvailable() =>
+                      serverOptions?.supports(transport, tls: true) == true;
+                  if (useTls && !tlsAvailable()) useTls = false;
+
+                  Future<void> refreshOptions() async {
+                    final host = hostCtrl.text
+                        .trim()
+                        .replaceAll(
+                            RegExp(r'^https?://', caseSensitive: false), '')
+                        .replaceAll(
+                            RegExp(r'^wss?://', caseSensitive: false), '')
+                        .trim();
+                    final discoveryPort = int.tryParse(chatCtrl.text.trim());
+                    if (host.isEmpty ||
+                        discoveryPort == null ||
+                        discoveryPort <= 0 ||
+                        discoveryPort > 65535) {
+                      setModalState(() {
+                        optionsError = 'Enter a valid host and discovery port';
+                      });
+                      return;
+                    }
+
+                    setModalState(() {
+                      optionsLoading = true;
+                      optionsError = null;
+                    });
+                    try {
+                      final opts = await SgtpServerDiscovery.discover(
+                          host, discoveryPort);
+                      await _settings.saveNodeServerOptions(baseId, opts);
+                      final savedAt =
+                          await _settings.loadNodeServerOptionsSavedAt(baseId);
+                      setModalState(() {
+                        serverOptions = opts;
+                        serverOptionsAt = savedAt ?? DateTime.now();
+                        optionsLoading = false;
+                        optionsError = null;
+                        if (useTls && !tlsAvailable()) useTls = false;
+                      });
+                    } catch (e) {
+                      setModalState(() {
+                        optionsLoading = false;
+                        optionsError = 'Failed to fetch options: $e';
+                      });
+                    }
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<SgtpTransportFamily>(
+                              value: transport,
+                              items: const [
+                                DropdownMenuItem(
+                                  value: SgtpTransportFamily.tcp,
+                                  child: Text('TCP'),
+                                ),
+                                DropdownMenuItem(
+                                  value: SgtpTransportFamily.http,
+                                  child: Text('HTTP'),
+                                ),
+                                DropdownMenuItem(
+                                  value: SgtpTransportFamily.websocket,
+                                  child: Text('WebSocket'),
+                                ),
+                              ],
+                              onChanged: (v) {
+                                if (v == null) return;
+                                setModalState(() {
+                                  transport = v;
+                                  if (useTls && !tlsAvailable()) useTls = false;
+                                });
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'Transport',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: CheckboxListTile(
+                              value: useTls,
+                              onChanged: tlsAvailable()
+                                  ? (v) =>
+                                      setModalState(() => useTls = v ?? false)
+                                  : null,
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('TLS'),
+                              controlAffinity: ListTileControlAffinity.leading,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: optionsLoading ? null : refreshOptions,
+                              icon: optionsLoading
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.sync),
+                              label: const Text('Fetch server options'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (optionsError != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          optionsError!,
+                          style: const TextStyle(color: AppColors.statusRed),
+                        ),
+                      ],
+                      if (serverOptions != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'Available: ${serverOptions!.availableLabels().join(", ")}'
+                          '${serverOptionsAt != null ? " (cached)" : ""}',
+                          style: const TextStyle(
+                              color: AppColors.textSecondary, fontSize: 12),
+                        ),
+                      ],
+                    ],
+                  );
+                }),
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -1239,6 +1396,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             host: host,
                             chatPort: chatPort!,
                             voicePort: voicePort!,
+                            transport: transport,
+                            useTls: useTls,
                           );
                           Navigator.of(ctx).pop();
                         },
@@ -1265,6 +1424,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (node == null) return;
     await _settings.upsertNode(node);
     await _reloadNodes();
+    _tryApplyConfig();
     if (!mounted) return;
     final ok = await _promptPrivateKeyForAccount(node.id);
     if (!mounted) return;
@@ -1282,6 +1442,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (updated == null) return;
     await _settings.upsertNode(updated);
     await _reloadNodes();
+    _tryApplyConfig();
   }
 
   Future<void> _deleteNode(NodeConfig node) async {

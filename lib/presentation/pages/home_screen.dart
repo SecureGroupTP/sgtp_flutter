@@ -11,6 +11,7 @@ import '../../data/repositories/settings_repository.dart';
 import '../../data/userdir_client.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
+import '../../core/sgtp_transport.dart';
 import '../../data/sgtp_client.dart';
 import '../blocs/rooms/rooms_bloc.dart';
 import '../blocs/rooms/rooms_event.dart';
@@ -427,6 +428,9 @@ class _AppStartScreenState extends State<AppStartScreen> {
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
         whitelist: whitelist,
+        transport: preferredNode?.transport ?? SgtpTransportFamily.tcp,
+        useTls: preferredNode?.useTls ?? false,
+        nodeId: accountId.trim().isEmpty ? null : accountId,
         mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
       );
 

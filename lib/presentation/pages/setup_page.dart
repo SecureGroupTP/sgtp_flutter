@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../blocs/setup/setup_bloc.dart';
 import '../blocs/setup/setup_event.dart';
 import '../blocs/setup/setup_state.dart';
+import '../../core/sgtp_transport.dart';
 import '../../data/repositories/settings_repository.dart';
 import 'home_screen.dart';
 
@@ -94,6 +95,8 @@ class _SetupPageState extends State<SetupPage> {
                     const SizedBox(height: 40),
                     _buildServerField(context, state),
                     const SizedBox(height: 16),
+                    _buildTransportSection(context, state),
+                    const SizedBox(height: 16),
                     _buildPrivateKeySection(context, state),
                     const SizedBox(height: 16),
                     _buildWhitelistSection(context, state),
@@ -148,6 +151,102 @@ class _SetupPageState extends State<SetupPage> {
           validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
         );
       },
+    );
+  }
+
+  Widget _buildTransportSection(BuildContext context, SetupState state) {
+    final theme = Theme.of(context);
+    final opts = state.serverOptions;
+    final tlsAvailable =
+        opts?.supports(state.transport, tls: true) == true;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outline),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Transport', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<SgtpTransportFamily>(
+            value: state.transport,
+            decoration: const InputDecoration(
+              labelText: 'Type',
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(
+                value: SgtpTransportFamily.tcp,
+                child: Text('TCP'),
+              ),
+              DropdownMenuItem(
+                value: SgtpTransportFamily.http,
+                child: Text('HTTP'),
+              ),
+              DropdownMenuItem(
+                value: SgtpTransportFamily.websocket,
+                child: Text('WebSocket'),
+              ),
+            ],
+            onChanged: state.isLoading
+                ? null
+                : (v) {
+                    if (v == null) return;
+                    context.read<SetupBloc>().add(SetupTransportChanged(v));
+                  },
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            value: state.useTls,
+            onChanged: (!state.isLoading && tlsAvailable)
+                ? (v) => context.read<SetupBloc>().add(SetupTlsChanged(v))
+                : null,
+            title: const Text('TLS'),
+            subtitle: opts == null
+                ? const Text('Fetch server options to enable TLS')
+                : (!tlsAvailable ? const Text('TLS not available on server') : null),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: state.isOptionsLoading
+                    ? null
+                    : () => context
+                        .read<SetupBloc>()
+                        .add(const SetupFetchServerOptions()),
+                icon: state.isOptionsLoading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.sync),
+                label: const Text('Fetch server options'),
+              ),
+            ),
+          ]),
+          if (state.optionsError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              state.optionsError!,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.error),
+            ),
+          ],
+          if (opts != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Available: ${opts.availableLabels().join(", ")}',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ]),
+      ),
     );
   }
 

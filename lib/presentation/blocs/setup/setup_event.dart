@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import '../../../core/sgtp_transport.dart';
+
 abstract class SetupEvent extends Equatable {
   const SetupEvent();
   @override
@@ -29,6 +31,24 @@ class SetupPickWhitelistFolder extends SetupEvent {
 /// Pick individual .pub files.
 class SetupPickWhitelistFiles extends SetupEvent {
   const SetupPickWhitelistFiles();
+}
+
+class SetupTransportChanged extends SetupEvent {
+  final SgtpTransportFamily transport;
+  const SetupTransportChanged(this.transport);
+  @override
+  List<Object?> get props => [transport];
+}
+
+class SetupTlsChanged extends SetupEvent {
+  final bool useTls;
+  const SetupTlsChanged(this.useTls);
+  @override
+  List<Object?> get props => [useTls];
+}
+
+class SetupFetchServerOptions extends SetupEvent {
+  const SetupFetchServerOptions();
 }
 
 class SetupConnect extends SetupEvent {

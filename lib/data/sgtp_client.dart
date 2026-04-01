@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert' show base64, json, utf8, ascii;
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -9,6 +8,8 @@ import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../core/app_logger.dart';
 import '../core/constants.dart';
+import '../core/sgtp_server_options.dart';
+import '../core/sgtp_transport.dart';
 import '../core/crypto/chacha20_utils.dart';
 import '../core/crypto/ed25519_utils.dart';
 import '../core/crypto/x25519_utils.dart';
@@ -16,6 +17,12 @@ import '../core/protocol/frame_builder.dart';
 import '../core/protocol/frame_parser.dart';
 import '../core/protocol/packet_types.dart';
 import '../core/uuid_v7.dart';
+import 'repositories/settings_repository.dart';
+import 'transport/http_sgtp_transport.dart';
+import 'transport/server_discovery.dart';
+import 'transport/sgtp_transport.dart';
+import 'transport/tcp_sgtp_transport.dart';
+import 'transport/websocket_sgtp_transport.dart';
 import '../domain/entities/message.dart';
 import '../domain/entities/peer.dart';
 
@@ -76,6 +83,9 @@ class SgtpConfig {
   final SimpleKeyPairData identityKeyPair;
   final Uint8List myPublicKey;
   final Set<String> whitelist;
+  final SgtpTransportFamily transport;
+  final bool useTls;
+  final String? nodeId;
 
   /// Initial chat name to send in CHAT_REQUEST and display until updated
   final String chatName;
@@ -95,6 +105,9 @@ class SgtpConfig {
     required this.identityKeyPair,
     required this.myPublicKey,
     required this.whitelist,
+    this.transport = SgtpTransportFamily.tcp,
+    this.useTls = false,
+    this.nodeId,
     this.chatName = 'Chat',
     this.chatAvatarBytes,
     this.pingIntervalSeconds = 30,
@@ -107,6 +120,9 @@ class SgtpConfig {
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
         whitelist: whitelist,
+        transport: transport,
+        useTls: useTls,
+        nodeId: nodeId,
         chatName: chatName,
         chatAvatarBytes: chatAvatarBytes,
         pingIntervalSeconds: pingIntervalSeconds,
@@ -119,6 +135,9 @@ class SgtpConfig {
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
         whitelist: whitelist,
+        transport: transport,
+        useTls: useTls,
+        nodeId: nodeId,
         chatName: name ?? chatName,
         chatAvatarBytes: avatar ?? chatAvatarBytes,
         pingIntervalSeconds: pingIntervalSeconds,
@@ -128,13 +147,19 @@ class SgtpConfig {
   SgtpConfig copyWith(
           {Set<String>? whitelist,
           String? serverAddr,
-          int? mediaChunkSizeBytes}) =>
+          int? mediaChunkSizeBytes,
+          SgtpTransportFamily? transport,
+          bool? useTls,
+          String? nodeId}) =>
       SgtpConfig(
         serverAddr: serverAddr ?? this.serverAddr,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
         whitelist: whitelist ?? this.whitelist,
+        transport: transport ?? this.transport,
+        useTls: useTls ?? this.useTls,
+        nodeId: nodeId ?? this.nodeId,
         chatName: chatName,
         chatAvatarBytes: chatAvatarBytes,
         pingIntervalSeconds: pingIntervalSeconds,
@@ -248,7 +273,7 @@ class SgtpClient {
   final _eventController = StreamController<SgtpEvent>.broadcast();
   Stream<SgtpEvent> get events => _eventController.stream;
 
-  Socket? _socket;
+  SgtpTransport? _transport;
   final List<int> _receiveBuffer = [];
   _ClientState _state = _ClientState.disconnected;
 
@@ -352,29 +377,53 @@ class SgtpClient {
     try {
       _ephemeralX25519 = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
-      final parts = _config.serverAddr.split(':');
-      _socket = await Socket.connect(parts[0], int.parse(parts.last));
+      final (host, discoveryPort) = _parseHostPortOrThrow(_config.serverAddr);
 
-      // Reduce latency: send small frames immediately without Nagle buffering.
-      _socket!.setOption(SocketOption.tcpNoDelay, true);
-
-      // Ask the OS to send TCP keepalive probes so the NAT entry and the
-      // server-side socket stay alive while the app is backgrounded.
-      // SO_KEEPALIVE = 9, SOL_SOCKET level = RawSocketOption.levelSocket.
-      // Silently ignored on platforms that don't support this raw option.
+      SgtpServerOptions? options;
       try {
-        _socket!.setRawOption(RawSocketOption(
-          RawSocketOption.levelSocket,
-          9, // SO_KEEPALIVE
-          Uint8List.fromList([1, 0, 0, 0]),
-        ));
-      } catch (_) {}
+        options = await SgtpServerDiscovery.discover(host, discoveryPort);
+        final nodeId = (_config.nodeId ?? '').trim();
+        if (nodeId.isNotEmpty) {
+          await SettingsRepository().saveNodeServerOptions(nodeId, options);
+        }
+      } catch (e) {
+        final nodeId = (_config.nodeId ?? '').trim();
+        if (nodeId.isNotEmpty) {
+          options = await SettingsRepository().loadNodeServerOptions(nodeId);
+        }
+        if (options == null) rethrow;
+      }
+
+      if (!options.hasAny) {
+        throw StateError('Server returned no transport options');
+      }
+
+      final family = _config.transport;
+      var tls = _config.useTls;
+      if (tls && !options.supports(family, tls: true)) tls = false;
+      if (!options.supports(family, tls: tls)) {
+        throw StateError(
+          'Transport not supported by server. Available: ${options.availableLabels().join(", ")}',
+        );
+      }
+      final port = options.portFor(family, tls: tls);
+      if (port <= 0 || port > 65535) {
+        throw StateError('Invalid port for selected transport: $port');
+      }
+
+      _transport =
+          _buildTransport(host: host, port: port, family: family, tls: tls);
+      await _transport!.connect();
 
       _state = _ClientState.waitingHandshake;
       _eventController.add(SgtpHandshaking());
       AppLogger.i('Performing handshake...', tag: 'SGTP');
-      _socket!.listen(_onData,
-          onError: _onSocketError, onDone: _onSocketDone, cancelOnError: false);
+      _transport!.inbound.listen(
+        _onData,
+        onError: _onTransportError,
+        onDone: _onTransportDone,
+        cancelOnError: false,
+      );
       _stalePruneTimer = Timer.periodic(
           Duration(seconds: _config.pingIntervalSeconds),
           (_) =>
@@ -402,6 +451,66 @@ class SgtpClient {
       AppLogger.e('Connection failed: $e', tag: 'SGTP');
       _eventController.add(SgtpError(error: 'Connection failed: $e'));
     }
+  }
+
+  (String host, int port) _parseHostPortOrThrow(String raw) {
+    final s = raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    if (s.isEmpty) {
+      throw ArgumentError('Empty server address');
+    }
+
+    if (s.startsWith('[')) {
+      final end = s.indexOf(']');
+      if (end <= 1) throw ArgumentError('Invalid IPv6 address: $raw');
+      final host = s.substring(1, end);
+      final rest = s.substring(end + 1);
+      final port = (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
+      if (port <= 0 || port > 65535) {
+        throw ArgumentError('Invalid port in server address: $raw');
+      }
+      return (host, port);
+    }
+
+    final parts = s.split(':');
+    if (parts.length < 2) {
+      throw ArgumentError('Expected host:port, got: $raw');
+    }
+    final port = int.tryParse(parts.last.trim()) ?? 0;
+    if (port <= 0 || port > 65535) {
+      throw ArgumentError('Invalid port in server address: $raw');
+    }
+    final host = parts.sublist(0, parts.length - 1).join(':').trim();
+    if (host.isEmpty) throw ArgumentError('Invalid host in server address: $raw');
+    return (host, port);
+  }
+
+  SgtpTransport _buildTransport({
+    required String host,
+    required int port,
+    required SgtpTransportFamily family,
+    required bool tls,
+  }) {
+    return switch (family) {
+      SgtpTransportFamily.tcp => TcpSgtpTransport(
+          host: host,
+          port: port,
+          useTls: tls,
+        ),
+      SgtpTransportFamily.http => HttpSgtpTransport(
+          host: host,
+          port: port,
+          useTls: tls,
+        ),
+      SgtpTransportFamily.websocket => WebSocketSgtpTransport(
+          host: host,
+          port: port,
+          useTls: tls,
+        ),
+    };
   }
 
   Future<void> sendMessage(
@@ -693,13 +802,13 @@ class SgtpClient {
     _processBuffer();
   }
 
-  void _onSocketError(Object e) {
-    AppLogger.e('Socket error: $e', tag: 'SGTP');
-    _eventController.add(SgtpError(error: 'Socket error: $e'));
+  void _onTransportError(Object e) {
+    AppLogger.e('Transport error: $e', tag: 'SGTP');
+    _eventController.add(SgtpError(error: 'Transport error: $e'));
     _cleanup();
   }
 
-  void _onSocketDone() {
+  void _onTransportDone() {
     if (_state != _ClientState.disconnected) {
       _cleanup();
       AppLogger.i('Disconnected from server', tag: 'SGTP');
@@ -1411,8 +1520,7 @@ class SgtpClient {
     if (_historyRequested || _peers.isEmpty) return;
     _historyRequested = true;
     _hsiReplies.clear();
-    signFrame(buildHsir(_roomUUID, _myUUID), _config.identityKeyPair)
-        .then((f) => _socket?.add(f));
+    unawaited(_sendFrame(buildHsir(_roomUUID, _myUUID)));
     _hsiTimer?.cancel();
     _hsiTimer = Timer(const Duration(seconds: 2), _sendHsr);
   }
@@ -1612,11 +1720,8 @@ class SgtpClient {
     } catch (_) {} // ignore errors from previous sends — don't block the queue
 
     try {
-      final sock = _socket;
-      if (sock != null) {
-        sock.add(signed); // buffer the bytes
-        await sock.flush(); // wait until they're actually sent
-      }
+      final t = _transport;
+      if (t != null) await t.send(signed);
     } catch (e) {
       if (!_eventController.isClosed) {
         AppLogger.e('Failed to send frame: $e', tag: 'SGTP');
@@ -1701,9 +1806,9 @@ class SgtpClient {
     _sendChain = Future.value(); // reset the send queue
     _lastReceiveAt = DateTime.now();
     try {
-      await _socket?.close();
+      await _transport?.close();
     } catch (_) {}
-    _socket = null;
+    _transport = null;
   }
 
   Future<void> close() async {

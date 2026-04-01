@@ -5,7 +5,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../domain/entities/chat_metadata.dart';
 import '../blocs/chat_list/chat_list_bloc.dart';
-import 'chat_metadata_edit_dialog.dart';
+import '../widgets/chat_metadata_edit_dialog.dart';
 
 class ChatListScreen extends StatefulWidget {
   final VoidCallback? onChatSelected;

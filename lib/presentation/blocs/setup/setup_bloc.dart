@@ -6,8 +6,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/crypto/ed25519_utils.dart';
 import '../../../core/openssh_parser.dart';
+import '../../../core/sgtp_transport.dart';
 import '../../../data/repositories/settings_repository.dart';
 import '../../../data/sgtp_client.dart';
+import '../../../data/transport/server_discovery.dart';
 import 'setup_event.dart';
 import 'setup_state.dart';
 
@@ -22,6 +24,9 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     on<SetupPickPrivateKey>(_onPickPrivateKey);
     on<SetupPickWhitelistFolder>(_onPickWhitelistFolder);
     on<SetupPickWhitelistFiles>(_onPickWhitelistFiles);
+    on<SetupTransportChanged>(_onTransportChanged);
+    on<SetupTlsChanged>(_onTlsChanged);
+    on<SetupFetchServerOptions>(_onFetchServerOptions);
     on<SetupConnect>(_onConnect);
     on<SetupClearConnection>(_onClearConnection);
   }
@@ -32,6 +37,12 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       SetupLoadData event, Emitter<SetupState> emit) async {
     final addresses = await _settings.getSavedAddresses();
     final last = await _settings.getLastAddress();
+    final preferredNode = await _settings.loadPreferredNode();
+    final nodeId = preferredNode?.id ?? '';
+    final nodeAddress =
+        preferredNode != null ? preferredNode.chatAddress : null;
+    final cachedOptions =
+        nodeId.trim().isNotEmpty ? await _settings.loadNodeServerOptions(nodeId) : null;
 
     // Restore private key
     final savedKey = await _settings.loadPrivateKey();
@@ -64,7 +75,11 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
 
     emit(state.copyWith(
       savedAddresses: addresses,
-      serverAddress: last ?? '',
+      nodeId: nodeId,
+      serverAddress: (nodeAddress ?? last ?? '').trim(),
+      transport: preferredNode?.transport ?? SgtpTransportFamily.tcp,
+      useTls: preferredNode?.useTls ?? false,
+      serverOptions: cachedOptions,
       privateKeyBytes: privKeyBytes,
       privateKeyPath: privKeyPath,
       myPublicKey: myPubKey,
@@ -80,6 +95,54 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
   void _onServerAddressChanged(
       SetupServerAddressChanged event, Emitter<SetupState> emit) {
     emit(state.copyWith(serverAddress: event.address, clearError: true));
+  }
+
+  void _onTransportChanged(
+      SetupTransportChanged event, Emitter<SetupState> emit) {
+    var tls = state.useTls;
+    final opts = state.serverOptions;
+    if (tls && opts != null && !opts.supports(event.transport, tls: true)) {
+      tls = false;
+    }
+    emit(state.copyWith(transport: event.transport, useTls: tls, clearError: true));
+  }
+
+  void _onTlsChanged(SetupTlsChanged event, Emitter<SetupState> emit) {
+    final opts = state.serverOptions;
+    if (event.useTls &&
+        opts != null &&
+        !opts.supports(state.transport, tls: true)) {
+      return;
+    }
+    emit(state.copyWith(useTls: event.useTls, clearError: true));
+  }
+
+  Future<void> _onFetchServerOptions(
+      SetupFetchServerOptions event, Emitter<SetupState> emit) async {
+    final parsed = _parseHostPort(state.serverAddress);
+    if (parsed == null) {
+      emit(state.copyWith(optionsError: 'Enter server as host:port'));
+      return;
+    }
+    final (host, port) = parsed;
+    emit(state.copyWith(isOptionsLoading: true, optionsError: null));
+    try {
+      final opts = await SgtpServerDiscovery.discover(host, port);
+      final nodeId = state.nodeId.trim();
+      if (nodeId.isNotEmpty) {
+        await _settings.saveNodeServerOptions(nodeId, opts);
+      }
+      var tls = state.useTls;
+      if (tls && !opts.supports(state.transport, tls: true)) tls = false;
+      emit(state.copyWith(
+        isOptionsLoading: false,
+        serverOptions: opts,
+        useTls: tls,
+      ));
+    } catch (e) {
+      emit(state.copyWith(
+          isOptionsLoading: false, optionsError: 'Failed: $e'));
+    }
   }
 
   // ── Private key ───────────────────────────────────────────────────────────
@@ -233,10 +296,28 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
         whitelist: whitelist,
+        transport: state.transport,
+        useTls: state.useTls,
+        nodeId: state.nodeId.trim().isEmpty ? null : state.nodeId.trim(),
         mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
       );
 
       await _settings.saveAddress(state.serverAddress.trim());
+      final nodeId = state.nodeId.trim();
+      if (nodeId.isNotEmpty) {
+        final updatedNode = await _settings.loadPreferredNode();
+        final parsedHostPort = _parseHostPort(state.serverAddress.trim());
+        if (updatedNode != null && parsedHostPort != null) {
+          final (h, p) = parsedHostPort;
+          await _settings.upsertNode(updatedNode.copyWith(
+            host: h,
+            chatPort: p,
+            voicePort: updatedNode.voicePort,
+            transport: state.transport,
+            useTls: state.useTls,
+          ));
+        }
+      }
       final updated = await _settings.getSavedAddresses();
 
       emit(state.copyWith(
@@ -248,6 +329,31 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     } catch (e) {
       emit(state.copyWith(isLoading: false, error: 'Setup error: $e'));
     }
+  }
+
+  (String host, int port)? _parseHostPort(String raw) {
+    final cleaned = raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    if (cleaned.isEmpty) return null;
+    if (cleaned.startsWith('[')) {
+      final end = cleaned.indexOf(']');
+      if (end <= 1) return null;
+      final host = cleaned.substring(1, end);
+      final rest = cleaned.substring(end + 1);
+      final port = (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
+      if (port <= 0 || port > 65535) return null;
+      return (host, port);
+    }
+    final parts = cleaned.split(':');
+    if (parts.length < 2) return null;
+    final port = int.tryParse(parts.last.trim()) ?? 0;
+    if (port <= 0 || port > 65535) return null;
+    final host = parts.sublist(0, parts.length - 1).join(':').trim();
+    if (host.isEmpty) return null;
+    return (host, port);
   }
 
   // ── Clear connection config after navigation ──────────────────────────────

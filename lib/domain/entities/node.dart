@@ -1,9 +1,13 @@
+import '../../core/sgtp_transport.dart';
+
 class NodeConfig {
   final String id;
   final String name;
   final String host; // domain or IP, without scheme
   final int chatPort;
   final int voicePort;
+  final SgtpTransportFamily transport;
+  final bool useTls;
 
   const NodeConfig({
     required this.id,
@@ -11,6 +15,8 @@ class NodeConfig {
     required this.host,
     required this.chatPort,
     required this.voicePort,
+    this.transport = SgtpTransportFamily.tcp,
+    this.useTls = false,
   });
 
   String get chatAddress => '$host:$chatPort';
@@ -21,6 +27,8 @@ class NodeConfig {
     String? host,
     int? chatPort,
     int? voicePort,
+    SgtpTransportFamily? transport,
+    bool? useTls,
   }) {
     return NodeConfig(
       id: id ?? this.id,
@@ -28,6 +36,8 @@ class NodeConfig {
       host: host ?? this.host,
       chatPort: chatPort ?? this.chatPort,
       voicePort: voicePort ?? this.voicePort,
+      transport: transport ?? this.transport,
+      useTls: useTls ?? this.useTls,
     );
   }
 
@@ -37,6 +47,8 @@ class NodeConfig {
         'host': host,
         'chatPort': chatPort,
         'voicePort': voicePort,
+        'transport': transport.id,
+        'tls': useTls,
       };
 
   static NodeConfig fromJson(Map<String, dynamic> json) {
@@ -49,6 +61,8 @@ class NodeConfig {
       chatPort: (json['chatPort'] as num?)?.toInt() ?? 7777,
       voicePort: (json['voicePort'] as num?)?.toInt() ??
           ((json['chatPort'] as num?)?.toInt() ?? 7777),
+      transport: SgtpTransportFamilyCodec.fromId(json['transport'] as String?),
+      useTls: (json['tls'] as bool?) ?? false,
       // 'usersPort' key is ignored for backward compatibility
     );
   }
@@ -72,4 +86,3 @@ class SavedChatRef {
     );
   }
 }
-

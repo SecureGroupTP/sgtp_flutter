@@ -57,7 +57,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
     Emitter<ChatListState> emit,
   ) async {
     try {
-      final uuid = generateUUIDv7();
+      final uuid = uuidBytesToHex(generateUUIDv7());
       final now = DateTime.now();
 
       final newChat = ChatMetadata(
