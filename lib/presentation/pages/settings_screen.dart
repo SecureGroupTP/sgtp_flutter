@@ -28,6 +28,7 @@ import '../../core/constants.dart';
 import '../widgets/pretty_qr_share_panel.dart';
 import '../widgets/qr_scanner_dialog.dart';
 import '../widgets/styled_dropdown.dart';
+import '../widgets/user_avatar.dart';
 import 'logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1694,23 +1695,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Stack(
               clipBehavior: Clip.none,
               children: [
-                Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: AppColors.bgSurface,
-                    border: Border.all(color: AppColors.border),
-                    image: _userAvatar != null
-                        ? DecorationImage(
-                            image: MemoryImage(_userAvatar!),
-                            fit: BoxFit.cover)
-                        : null,
-                  ),
-                  child: _userAvatar == null
-                      ? const Icon(Icons.person,
-                          size: 40, color: AppColors.textSecondary)
-                      : null,
+                UserAvatar(
+                  name: _nickname.isNotEmpty ? _nickname : 'Me',
+                  bytes: _userAvatar,
+                  size: 88,
                 ),
                 Positioned(
                   bottom: -2,
@@ -1889,11 +1877,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Row(
                 children: [
                   // Use profile avatar + nickname instead of node data
-                  _AccAvatarImage(
-                    avatar: _userAvatar,
+                  UserAvatar(
+                    bytes: _userAvatar,
                     name: _nickname.isNotEmpty
                         ? _nickname
-                        : (hasAccounts ? active.name : ''),
+                        : (hasAccounts ? active.name : 'Me'),
+                    size: 42,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -3297,71 +3286,6 @@ class _StyledField extends StatelessWidget {
 
 // ── Account switcher widgets ──────────────────────────────────────────────────
 
-/// Avatar that shows a profile image if available, otherwise a letter.
-class _AccAvatarImage extends StatelessWidget {
-  final Uint8List? avatar;
-  final String name;
-  const _AccAvatarImage({required this.avatar, required this.name});
-
-  @override
-  Widget build(BuildContext context) {
-    final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: AppColors.bgMain,
-        border: const Border.fromBorderSide(BorderSide(color: AppColors.border)),
-        image: avatar != null
-            ? DecorationImage(image: MemoryImage(avatar!), fit: BoxFit.cover)
-            : null,
-      ),
-      child: avatar == null
-          ? Center(
-              child: Text(
-                letter,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            )
-          : null,
-    );
-  }
-}
-
-/// Avatar showing first letter of a node name (no image support).
-class _AccAvatar extends StatelessWidget {
-  final String name;
-  const _AccAvatar({required this.name});
-
-  @override
-  Widget build(BuildContext context) {
-    final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        color: AppColors.bgMain,
-        border: Border.fromBorderSide(BorderSide(color: AppColors.border)),
-      ),
-      child: Center(
-        child: Text(
-          letter,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _AccountDropdownItem extends StatelessWidget {
   final NodeConfig node;
@@ -3394,7 +3318,7 @@ class _AccountDropdownItem extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Row(
           children: [
-            _AccAvatarImage(avatar: profileAvatar, name: displayName),
+            UserAvatar(bytes: profileAvatar, name: displayName, size: 42),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

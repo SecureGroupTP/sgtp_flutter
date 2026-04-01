@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/app_theme.dart';
 import '../../core/interaction_prefs.dart';
 import '../../domain/entities/message.dart';
+import 'user_avatar.dart';
 
 Size _fitSizeForAspectRatio({
   required double aspectRatio,
@@ -601,29 +602,12 @@ class MessageBubble extends StatelessWidget {
     if (isMe) return child;
 
     final avatarBytes = _senderAvatarBytes();
-    final initial = _senderInitial();
 
-    final avatar = Container(
-      width: 32,
-      height: 32,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: const Color(0xFF1F1F24),
-        border: Border.all(color: const Color(0xFF2C2C30)),
-      ),
-      child: ClipOval(
-        child: avatarBytes != null
-            ? Image.memory(avatarBytes, fit: BoxFit.cover)
-            : Center(
-                child: Text(
-                  initial,
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFFF5F5F5)),
-                ),
-              ),
-      ),
+    final avatar = UserAvatar(
+      name: _buildSenderLabel(),
+      bytes: avatarBytes,
+      size: 32,
+      border: Border.all(color: const Color(0xFF2C2C30)),
     );
 
     return Row(
@@ -639,10 +623,6 @@ class MessageBubble extends StatelessWidget {
     return peerAvatars[message.senderUUID];
   }
 
-  String _senderInitial() {
-    final label = _buildSenderLabel();
-    return label.isNotEmpty ? label[0].toUpperCase() : '?';
-  }
 
   /// Read receipts indicator widget (content only, no layout wrapper).
   Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {

@@ -8,6 +8,7 @@ import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../widgets/pretty_qr_share_panel.dart';
 import '../widgets/qr_scanner_dialog.dart';
+import '../widgets/user_avatar.dart';
 
 /// Contacts screen — shows the trusted-peer whitelist.
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
@@ -778,42 +779,9 @@ class _ContactTile extends StatelessWidget {
     this.avatar,
   });
 
-  // Returns 1 or 2 initials: two-word names → "JD", single-word → "J"
-  static String _initials(String name) {
-    final cleaned = name.trim();
-    if (cleaned.isEmpty) return '?';
-    final words = cleaned.split(RegExp(r'\s+'));
-    if (words.length >= 2) {
-      return (words[0][0] + words[1][0]).toUpperCase();
-    }
-    return cleaned[0].toUpperCase();
-  }
-
-  // Gradient palette matching pfps.html
-  static const List<List<Color>> _gradients = [
-    [Color(0xFFFF7676), Color(0xFFE53935)], // Red
-    [Color(0xFFFFAE34), Color(0xFFF57C00)], // Orange
-    [Color(0xFF66CC6C), Color(0xFF2E7D32)], // Green
-    [Color(0xFF4DD0E1), Color(0xFF0097A7)], // Teal
-    [Color(0xFF42A5F5), Color(0xFF1E88E5)], // Blue
-    [Color(0xFF7E57C2), Color(0xFF4527A0)], // Violet
-    [Color(0xFFAB47BC), Color(0xFF7B1FA2)], // Purple
-    [Color(0xFFEC407A), Color(0xFFC2185B)], // Pink
-  ];
-
-  List<Color> _avatarGradient(String name) {
-    int h = 0;
-    for (int i = 0; i < name.length; i++) {
-      h = name.codeUnitAt(i) + ((h << 5) - h);
-    }
-    return _gradients[h.abs() % _gradients.length];
-  }
 
   @override
   Widget build(BuildContext context) {
-    final initial = _initials(entry.name);
-    final gradient = _avatarGradient(entry.name);
-
     return InkWell(
       onTap: onTap,
       splashColor: AppColors.bgSurfaceActive,
@@ -825,44 +793,7 @@ class _ContactTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Row(
           children: [
-            // Avatar
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: avatar == null
-                    ? LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: gradient,
-                      )
-                    : null,
-                image: avatar != null
-                    ? DecorationImage(
-                        image: MemoryImage(avatar!),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withAlpha(13),
-                    blurRadius: 0,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: avatar == null
-                  ? Center(
-                      child: Text(initial,
-                          style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w500,
-                              color: Colors.white,
-                              height: 1.0)),
-                    )
-                  : null,
-            ),
+            UserAvatar(name: entry.name, bytes: avatar, size: 46),
             const SizedBox(width: 14),
 
             // Name + key
