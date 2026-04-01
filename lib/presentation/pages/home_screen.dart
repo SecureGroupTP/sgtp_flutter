@@ -217,49 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _registerSelf();
 
       if (_whitelist.isNotEmpty) {
-        final settings = SettingsRepository();
-        final cached = await settings.loadAllContactProfiles(_accountId);
-
-        // GET_META → compare sha256 → GET_PROFILE if stale
-        for (final contact in _whitelist) {
-          if (!mounted) break;
-          final meta = await client.getMeta(contact.bytes);
-          if (meta == null) continue;
-
-          final cachedProfile = cached[contact.hexKey];
-          if (cachedProfile == null ||
-              cachedProfile.avatarSha256Hex != meta.avatarSha256Hex ||
-              cachedProfile.avatarBytes == null) {
-            // Avatar stale or missing — fetch full profile
-            final profile = await client.getProfile(contact.bytes);
-            if (profile == null) continue;
-            final cp = ContactProfile(
-              pubkeyHex: contact.hexKey,
-              username: profile.username,
-              fullname: profile.fullname,
-              avatarBytes: profile.avatarBytes,
-              avatarSha256Hex: profile.avatarSha256Hex,
-              updatedAt: profile.updatedAt,
-            );
-            await settings.saveContactProfile(_accountId, cp);
-            if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
-          } else if (cachedProfile.username != meta.username ||
-              cachedProfile.fullname != meta.fullname) {
-            // Name/username changed, avatar is same
-            final cp = ContactProfile(
-              pubkeyHex: contact.hexKey,
-              username: meta.username,
-              fullname: meta.fullname,
-              avatarBytes: cachedProfile.avatarBytes,
-              avatarSha256Hex: meta.avatarSha256Hex,
-              updatedAt: meta.updatedAt,
-            );
-            await settings.saveContactProfile(_accountId, cp);
-            if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
-          } else if (mounted) {
-            setState(() => _contactProfiles[contact.hexKey] = cachedProfile);
-          }
-        }
+        await _syncContactsFromUserDir(client);
 
         // Subscribe to all contacts for live NOTIFY
         await client.subscribe(_whitelist.map((e) => e.bytes).toList());
@@ -272,6 +230,62 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e, st) {
       AppLogger.e('UDIR init failed: $e\n$st', tag: 'UDIR');
     }
+  }
+
+  Future<void> _syncContactsFromUserDir(UserDirClient client) async {
+    final settings = SettingsRepository();
+    final cached = await settings.loadAllContactProfiles(_accountId);
+
+    // GET_META -> compare sha256 -> GET_PROFILE if stale
+    for (final contact in _whitelist) {
+      if (!mounted) break;
+      final meta = await client.getMeta(contact.bytes);
+      if (meta == null) continue;
+
+      final cachedProfile = cached[contact.hexKey];
+      if (cachedProfile == null ||
+          cachedProfile.avatarSha256Hex != meta.avatarSha256Hex ||
+          cachedProfile.avatarBytes == null) {
+        // Avatar stale or missing: fetch full profile.
+        final profile = await client.getProfile(contact.bytes);
+        if (profile == null) continue;
+        final cp = ContactProfile(
+          pubkeyHex: contact.hexKey,
+          username: profile.username,
+          fullname: profile.fullname,
+          avatarBytes: profile.avatarBytes,
+          avatarSha256Hex: profile.avatarSha256Hex,
+          updatedAt: profile.updatedAt,
+        );
+        await settings.saveContactProfile(_accountId, cp);
+        if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
+      } else if (cachedProfile.username != meta.username ||
+          cachedProfile.fullname != meta.fullname) {
+        // Name/username changed, avatar is same.
+        final cp = ContactProfile(
+          pubkeyHex: contact.hexKey,
+          username: meta.username,
+          fullname: meta.fullname,
+          avatarBytes: cachedProfile.avatarBytes,
+          avatarSha256Hex: meta.avatarSha256Hex,
+          updatedAt: meta.updatedAt,
+        );
+        await settings.saveContactProfile(_accountId, cp);
+        if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
+      } else if (mounted) {
+        setState(() => _contactProfiles[contact.hexKey] = cachedProfile);
+      }
+    }
+  }
+
+  Future<void> _refreshContactsFromServer() async {
+    if (_whitelist.isEmpty) return;
+    final client = _userDirClient;
+    if (client == null) {
+      await _initUserDir();
+      return;
+    }
+    await _syncContactsFromUserDir(client);
   }
 
   Future<void> _handleNotify(UserDirMeta meta, UserDirClient client) async {
@@ -353,7 +367,12 @@ class _HomeScreenState extends State<HomeScreen> {
             _currentIndex == 0 ? _HomeFab(onPressed: _showAddSheet) : null,
         bottomNavigationBar: AppNavBar(
           selectedIndex: _currentIndex,
-          onTap: (i) => setState(() => _currentIndex = i),
+          onTap: (i) {
+            setState(() => _currentIndex = i);
+            if (i == 1) {
+              unawaited(_refreshContactsFromServer());
+            }
+          },
         ),
       ),
     );

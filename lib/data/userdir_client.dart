@@ -375,6 +375,47 @@ class UserDirClient {
     return ok;
   }
 
+  /// Searches userdir by username/fullname query.
+  /// Returns zero or more lightweight metadata entries.
+  Future<List<UserDirMeta>> search(String query, {int limit = 20}) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    final qBytes = utf8.encode(q);
+    final safeLimit = limit.clamp(1, 100).toInt();
+
+    // Common wire format used by server:
+    // version(1) + query_len(u16) + query + limit(u16)
+    final payload = Uint8List(1 + 2 + qBytes.length + 2);
+    var o = 0;
+    payload[o++] = 1; // version
+    payload[o++] = (qBytes.length >> 8) & 0xff;
+    payload[o++] = qBytes.length & 0xff;
+    payload.setRange(o, o + qBytes.length, qBytes);
+    o += qBytes.length;
+    payload[o++] = (safeLimit >> 8) & 0xff;
+    payload[o++] = safeLimit & 0xff;
+
+    var resp = await _send(0x02, payload);
+    if (resp == null || resp.isEmpty || resp[0] != 0x83) {
+      // Fallback for servers that expect payload without explicit limit.
+      final payloadNoLimit = Uint8List(1 + 2 + qBytes.length);
+      var p = 0;
+      payloadNoLimit[p++] = 1;
+      payloadNoLimit[p++] = (qBytes.length >> 8) & 0xff;
+      payloadNoLimit[p++] = qBytes.length & 0xff;
+      payloadNoLimit.setRange(p, p + qBytes.length, qBytes);
+      resp = await _send(0x02, payloadNoLimit);
+    }
+    if (resp == null || resp.isEmpty || resp[0] != 0x83) {
+      AppLogger.w(
+        'SEARCH failed "$q"  ${resp == null ? 'null' : _msgName(resp[0])}${_errorDetail(resp)}',
+        tag: _tag,
+      );
+      return const [];
+    }
+    return _parseSearchResults(resp.sublist(1));
+  }
+
   UserDirMeta? _parseMeta(Uint8List data) {
     try {
       var o = 0;
@@ -463,6 +504,68 @@ class UserDirClient {
       result = (result << 8) | data[offset + i];
     }
     return result;
+  }
+
+  int _readU16(Uint8List data, int offset) =>
+      (data[offset] << 8) | data[offset + 1];
+
+  List<UserDirMeta> _parseSearchResults(Uint8List data) {
+    // Fast-path: some servers may return a single META-like payload.
+    final single = _parseMeta(data);
+    if (single != null) return [single];
+
+    // SEARCH_RESULTS list format:
+    // version(1) + count(u16) + count * entry
+    // entry is meta-like body without leading version byte:
+    // pubkey(32) + username_len(u16) + username + fullname_len(u16) + fullname
+    // + avatar_sha256(32) [+ updated_at(u64, optional on some servers)]
+    try {
+      if (data.length < 3) return const [];
+      var o = 0;
+      final version = data[o++];
+      if (version != 1) return const [];
+      final count = _readU16(data, o);
+      o += 2;
+
+      final out = <UserDirMeta>[];
+      for (var i = 0; i < count; i++) {
+        if (o + 32 + 2 > data.length) break;
+        final pubkey = Uint8List.fromList(data.sublist(o, o + 32));
+        o += 32;
+
+        final usernameLen = _readU16(data, o);
+        o += 2;
+        if (o + usernameLen + 2 > data.length) break;
+        final username = utf8.decode(data.sublist(o, o + usernameLen));
+        o += usernameLen;
+
+        final fullnameLen = _readU16(data, o);
+        o += 2;
+        if (o + fullnameLen + 32 > data.length) break;
+        final fullname = utf8.decode(data.sublist(o, o + fullnameLen));
+        o += fullnameLen;
+
+        final avatarSha256 = Uint8List.fromList(data.sublist(o, o + 32));
+        o += 32;
+        var updatedAt = 0;
+        // Some server builds omit updatedAt in SEARCH_RESULTS entries.
+        if (o + 8 <= data.length) {
+          updatedAt = _readU64(data, o);
+          o += 8;
+        }
+
+        out.add(UserDirMeta(
+          pubkey: pubkey,
+          username: username,
+          fullname: fullname,
+          avatarSha256: avatarSha256,
+          updatedAt: updatedAt,
+        ));
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
   }
 
   void close() {

@@ -67,9 +67,9 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = SettingsRepository();
-  final _serverCtrl = TextEditingController();
   final _nicknameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
+  String _standaloneServerAddress = '';
 
   String? _privateKeyPath;
   Uint8List? _privateKeyBytes;
@@ -115,7 +115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _loadFromConfig() {
     final cfg = widget.initialConfig;
     if (cfg != null) {
-      _serverCtrl.text = cfg.serverAddr;
+      _standaloneServerAddress = cfg.serverAddr.trim();
       _myPublicKey = cfg.myPublicKey;
     }
     _nicknames = Map.from(widget.initialNicknames ?? {});
@@ -139,7 +139,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _nodes = nodes;
         _nodesLoading = false;
         _preferredNodeId = preferredId;
-        if (preferredNode != null) _serverCtrl.text = preferredNode.chatAddress;
       });
     }
 
@@ -148,8 +147,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _loadAccountData(preferredId, applyConfig: false);
     } else {
       final lastAddr = await _settings.getLastAddress();
-      if (lastAddr != null && _serverCtrl.text.isEmpty) {
-        setState(() => _serverCtrl.text = lastAddr);
+      if (lastAddr != null && _standaloneServerAddress.isEmpty) {
+        setState(() => _standaloneServerAddress = lastAddr.trim());
       }
     }
 
@@ -178,7 +177,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
-    _serverCtrl.dispose();
     _nicknameCtrl.dispose();
     _usernameCtrl.dispose();
     super.dispose();
@@ -1015,29 +1013,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _tryApplyConfig() {
     if (_privateKeyBytes == null || _myPublicKey == null) return;
-    var server = _serverCtrl.text.trim();
-    // Strip any scheme the mobile keyboard may have auto-inserted
-    server = server
-        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
-        .trim();
-    // Sync the controller text silently if it changed
-    if (server != _serverCtrl.text) {
-      _serverCtrl.value = _serverCtrl.value.copyWith(
-        text: server,
-        selection: TextSelection.collapsed(offset: server.length),
-      );
-    }
+    final server = _effectiveServerAddress();
     try {
       final parsed = parseOpenSshPrivateKey(_privateKeyBytes!);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
       final accountId = _preferredNodeId;
       if (accountId == null || accountId.trim().isEmpty) return;
-      final node =
-          _nodes.where((n) => n.id == accountId).firstOrNull;
+      final node = _activeNode();
       final newConfig = SgtpConfig(
-        serverAddr: server.isEmpty ? 'localhost:7777' : server,
+        serverAddr: server,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
@@ -1057,59 +1042,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _setError(String msg) => setState(() => _error = msg);
 
-  // ── Connection address ────────────────────────────────────────────────────
+  NodeConfig? _activeNode() {
+    if (_preferredNodeId != null) {
+      for (final node in _nodes) {
+        if (node.id == _preferredNodeId) return node;
+      }
+    }
+    if (_nodes.isNotEmpty) return _nodes.first;
+    return null;
+  }
 
-  Future<void> _saveConnectionAddress(String value) async {
-    _tryApplyConfig();
-    if (_preferredNodeId == null) return;
-    final raw = value.trim()
+  String _effectiveServerAddress() {
+    final active = _activeNode();
+    if (active != null) return active.chatAddress;
+    final normalized = _standaloneServerAddress
+        .trim()
         .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
         .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
         .trim();
-    final parsed = _parseHostPort(raw);
-    if (parsed == null) return;
-    final (host, port) = parsed;
-    final nodeIdx = _nodes.indexWhere((n) => n.id == _preferredNodeId);
-    if (nodeIdx < 0) return;
-    final updated = _nodes[nodeIdx].copyWith(
-      host: host,
-      chatPort: port ?? _nodes[nodeIdx].chatPort,
-      voicePort: port ?? _nodes[nodeIdx].voicePort,
-    );
-    await _settings.upsertNode(updated);
-    await _reloadNodes();
-  }
-
-  InputDecoration _darkFieldDeco({
-    required String label,
-    required String hint,
-    required IconData icon,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: AppColors.textSecondary),
-      hintText: hint,
-      hintStyle: const TextStyle(color: AppColors.textSecondary),
-      prefixIcon: Icon(icon, color: AppColors.textSecondary),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.border),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.accentBlue),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.statusRed),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.statusRed),
-      ),
-      filled: true,
-      fillColor: AppColors.bgSurfaceActive,
-    );
+    return normalized.isEmpty ? 'localhost:7777' : normalized;
   }
 
   // ── Nodes ────────────────────────────────────────────────────────────────
@@ -1296,7 +1247,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           _buildAccountSwitcher(),
           _buildProfileSection(),
-          _SettingsGroup(title: 'Connection', child: _buildConnectionCard()),
           _SettingsGroup(
               title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
           _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
@@ -1929,6 +1879,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+          if (!_nodesLoading && hasAccounts)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Server: ${active.chatAddress}',
+                      style: const TextStyle(
+                          fontSize: 13, color: AppColors.textSecondary),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _ActionButton(
+                    icon: Icons.edit_outlined,
+                    label: 'Edit Server',
+                    onPressed: () => _editNode(active),
+                  ),
+                ],
+              ),
+            ),
           // ── Dropdown ───────────────────────────────────────────────────
           if (_accountsExpanded) ...[
             const Divider(height: 1, thickness: 1, color: AppColors.border),
@@ -1989,7 +1961,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _selectAccount(NodeConfig node) async {
     setState(() {
       _preferredNodeId = node.id;
-      _serverCtrl.text = node.chatAddress;
       _accountsExpanded = false;
     });
     await _settings.setLastNodeId(node.id);
@@ -2043,39 +2014,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  // ── Connection card ───────────────────────────────────────────────────────
-
-  Widget _buildConnectionCard() {
-    return Row(
-      children: [
-        const Icon(Icons.dns_outlined, size: 22, color: AppColors.textSecondary),
-        const SizedBox(width: 12),
-        Expanded(
-          child: TextField(
-            controller: _serverCtrl,
-            onChanged: (_) => _tryApplyConfig(),
-            onSubmitted: _saveConnectionAddress,
-            style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
-            autocorrect: false,
-            enableSuggestions: false,
-            textCapitalization: TextCapitalization.none,
-            decoration: const InputDecoration(
-              hintText: 'host:port',
-              hintStyle:
-                  TextStyle(color: AppColors.textSecondary, fontSize: 15),
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              filled: false,
-              isDense: true,
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        ),
-      ],
     );
   }
 

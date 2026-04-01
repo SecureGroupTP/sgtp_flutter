@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../core/app_theme.dart';
 import '../../core/qr_data.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../data/userdir_client.dart';
 import '../widgets/pretty_qr_share_panel.dart';
 import '../widgets/qr_scanner_dialog.dart';
 import '../widgets/user_avatar.dart';
@@ -37,7 +38,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
   final _repo = SettingsRepository();
   late List<WhitelistEntry> _entries;
   final _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
   String _search = '';
+  _ServerSearchHit? _serverSearchHit;
+  String? _recentlyAddedUsername;
+  Timer? _recentlyAddedTimer;
+  int _searchRequestId = 0;
 
   @override
   void initState() {
@@ -49,16 +55,22 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void didUpdateWidget(covariant ContactsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.accountId != widget.accountId) {
+      _searchDebounce?.cancel();
+      _searchRequestId++;
       setState(() {
         _entries = List.from(widget.initialEntries);
         _search = '';
         _searchCtrl.clear();
+        _serverSearchHit = null;
+        _recentlyAddedUsername = null;
       });
     }
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _recentlyAddedTimer?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -85,6 +97,112 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
     scored.sort((a, b) => a.score.compareTo(b.score));
     return scored.map((s) => s.entry).toList();
+  }
+
+  String? _normalizeSearchUsername(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return null;
+    final base = t.startsWith('@') ? t.substring(1) : t;
+    if (!RegExp(r'^[A-Za-z0-9_]{1,32}$').hasMatch(base)) return null;
+    return '@$base';
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _search = value);
+    _searchDebounce?.cancel();
+    final normalized = _normalizeSearchUsername(value);
+    if (normalized == null) {
+      _searchRequestId++;
+      setState(() {
+        _serverSearchHit = null;
+      });
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_searchOnServer(normalized));
+    });
+  }
+
+  void _showAddedUsernameBanner(String username) {
+    _recentlyAddedTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _recentlyAddedUsername = username;
+    });
+    _recentlyAddedTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      setState(() => _recentlyAddedUsername = null);
+    });
+  }
+
+  Future<(String, int)?> _resolveUserDirEndpoint() async {
+    final nodes = await _repo.loadNodes();
+    final node = nodes.where((n) => n.id == widget.accountId).firstOrNull;
+    if (node == null) return null;
+
+    final opts = await _repo.loadNodeServerOptions(widget.accountId);
+    if (opts == null) return null;
+
+    final useTls = node.useTls;
+    int? port;
+    if (!useTls && opts.tcp && opts.tcpPort > 0) {
+      port = opts.tcpPort;
+    } else if (useTls && opts.tcpTls && opts.tcpTlsPort > 0) {
+      port = opts.tcpTlsPort;
+    } else if (!useTls && opts.tcp) {
+      port = opts.tcpPort;
+    }
+    if (port == null || port <= 0) return null;
+    return (node.host, port);
+  }
+
+  Future<void> _searchOnServer(String normalizedUsername) async {
+    final reqId = ++_searchRequestId;
+    if (mounted) setState(() => _serverSearchHit = null);
+
+    try {
+      final endpoint = await _resolveUserDirEndpoint();
+      if (endpoint == null) {
+        if (!mounted || reqId != _searchRequestId) return;
+        setState(() {
+          _serverSearchHit = null;
+        });
+        return;
+      }
+
+      final client = UserDirClient(host: endpoint.$1, port: endpoint.$2);
+      try {
+        await client.connect();
+        final items = await client.search(normalizedUsername, limit: 20);
+        final lower = normalizedUsername.toLowerCase();
+        final exact = items.where((m) => m.username.toLowerCase() == lower).firstOrNull;
+        if (!mounted || reqId != _searchRequestId) return;
+        if (exact == null) {
+          setState(() {
+            _serverSearchHit = null;
+          });
+          return;
+        }
+        final alreadyTrusted = _entries
+            .any((e) => e.hexKey.toLowerCase() == exact.pubkeyHex.toLowerCase());
+        setState(() {
+          _serverSearchHit = alreadyTrusted
+              ? null
+              : _ServerSearchHit(
+                  username: exact.username,
+                  pubkeyHex: exact.pubkeyHex,
+                  fullname: exact.fullname,
+                );
+        });
+      } finally {
+        client.close();
+      }
+    } catch (_) {
+      if (!mounted || reqId != _searchRequestId) return;
+      setState(() {
+        _serverSearchHit = null;
+      });
+    }
   }
 
   // ── Persistence ───────────────────────────────────────────────────────────
@@ -269,7 +387,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   void _addContact() => _showAddSheetWithKey('');
 
-  void _showAddSheetWithKey(String prefilledKey, {String? suggestedName}) {
+  void _showAddSheetWithKey(
+    String prefilledKey, {
+    String? suggestedName,
+    VoidCallback? onAdded,
+  }) {
     final nameCtrl = TextEditingController(text: suggestedName ?? '');
     final keyCtrl = TextEditingController(text: prefilledKey);
     String? keyError;
@@ -352,6 +474,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     ));
                   });
                   _save();
+                  onAdded?.call();
                   Navigator.pop(ctx);
                 },
               ),
@@ -367,6 +490,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void _editContact(WhitelistEntry entry) {
     final nameCtrl = TextEditingController(text: entry.name);
     final keyCtrl = TextEditingController(text: entry.hexKey);
+    final profile = widget.contactProfiles[entry.hexKey];
+    final username = profile?.username?.trim() ?? '';
+    final hasUsername = username.isNotEmpty;
     String? keyError;
 
     showModalBottomSheet<void>(
@@ -405,6 +531,37 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 icon: Icons.person_outline,
                 hint: 'Display Name',
               ),
+              if (hasUsername) ...[
+                const SizedBox(height: 12),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.bgSurfaceActive,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.alternate_email,
+                        size: 22,
+                        color: AppColors.textSecondary,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          username,
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 15,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               _StyledInput(
                 controller: keyCtrl,
@@ -666,7 +823,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
-                            onChanged: (v) => setState(() => _search = v),
+                            onChanged: _onSearchChanged,
                             style: const TextStyle(
                                 color: AppColors.textPrimary, fontSize: 14),
                             decoration: const InputDecoration(
@@ -685,8 +842,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         if (_search.isNotEmpty)
                           GestureDetector(
                             onTap: () {
+                              _searchDebounce?.cancel();
+                              _searchRequestId++;
                               _searchCtrl.clear();
-                              setState(() => _search = '');
+                              setState(() {
+                                _search = '';
+                                _serverSearchHit = null;
+                              });
                             },
                             child: const Padding(
                               padding: EdgeInsets.symmetric(horizontal: 8),
@@ -730,6 +892,39 @@ class _ContactsScreenState extends State<ContactsScreen> {
               ),
             ),
 
+            if (_recentlyAddedUsername != null)
+              _AddedUsernameBanner(
+                username: _recentlyAddedUsername!,
+                onClose: () => setState(() => _recentlyAddedUsername = null),
+              ),
+
+            if (_serverSearchHit != null) ...[
+              const _SectionTitle(label: 'Search Results'),
+              _ServerAddTile(
+                username: _serverSearchHit!.username,
+                onTap: () {
+                  final hit = _serverSearchHit!;
+                  final suggested = hit.fullname.trim().isNotEmpty
+                      ? hit.fullname.trim()
+                      : hit.username.replaceFirst('@', '');
+                  _showAddSheetWithKey(
+                    hit.pubkeyHex,
+                    suggestedName: suggested,
+                    onAdded: () {
+                      _searchDebounce?.cancel();
+                      _searchRequestId++;
+                      _searchCtrl.clear();
+                      setState(() {
+                        _search = '';
+                        _serverSearchHit = null;
+                      });
+                      _showAddedUsernameBanner(hit.username);
+                    },
+                  );
+                },
+              ),
+            ],
+
             // ── Section Divider ──────────────────────────────────────────
             _SectionDivider(label: 'Trusted Peers', count: _entries.length),
 
@@ -744,7 +939,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         final e = filtered[i];
                         return _ContactTile(
                           entry: e,
-                          avatar: widget.contactProfiles[e.hexKey]?.avatarBytes,
+                          profile: widget.contactProfiles[e.hexKey],
                           shortKey: _shortKey(e.hexKey),
                           onTap: () => _editContact(e),
                           onShare: () => _shareContact(e),
@@ -760,11 +955,171 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 }
 
+class _AddedUsernameBanner extends StatelessWidget {
+  final String username;
+  final VoidCallback onClose;
+
+  const _AddedUsernameBanner({
+    required this.username,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF183127),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF2E6C4D)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Color(0xFF72D69C), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$username added to contacts',
+                style: const TextStyle(
+                  color: Color(0xFFD9F7E6),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            GestureDetector(
+              onTap: onClose,
+              child: const Icon(
+                Icons.close,
+                size: 16,
+                color: Color(0xFF72D69C),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ServerSearchHit {
+  final String username;
+  final String pubkeyHex;
+  final String fullname;
+
+  const _ServerSearchHit({
+    required this.username,
+    required this.pubkeyHex,
+    required this.fullname,
+  });
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String label;
+  const _SectionTitle({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Row(
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.0,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(child: Divider(color: AppColors.border, height: 1)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ServerAddTile extends StatelessWidget {
+  final String username;
+  final VoidCallback onTap;
+
+  const _ServerAddTile({
+    required this.username,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      splashColor: AppColors.bgSurfaceActive,
+      highlightColor: AppColors.bgSurfaceActive.withAlpha(80),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(8),
+          border: const Border(
+            top: BorderSide(color: AppColors.border),
+            bottom: BorderSide(color: AppColors.border),
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+              ),
+              child: const Icon(Icons.person_add, size: 22, color: Colors.black),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Add "$username"',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Click to create and add to trusted peers',
+                    style: TextStyle(
+                        fontSize: 11, color: AppColors.textSecondary),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.chevron_right,
+              size: 22,
+              color: AppColors.textSecondary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ─── Contact Tile ─────────────────────────────────────────────────────────────
 
 class _ContactTile extends StatelessWidget {
   final WhitelistEntry entry;
-  final Uint8List? avatar;
+  final ContactProfile? profile;
   final String shortKey;
   final VoidCallback onTap;
   final VoidCallback onShare;
@@ -776,7 +1131,7 @@ class _ContactTile extends StatelessWidget {
     required this.onTap,
     required this.onShare,
     required this.onDelete,
-    this.avatar,
+    this.profile,
   });
 
 
@@ -793,7 +1148,7 @@ class _ContactTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Row(
           children: [
-            UserAvatar(name: entry.name, bytes: avatar, size: 46),
+            UserAvatar(name: entry.name, bytes: profile?.avatarBytes, size: 46),
             const SizedBox(width: 14),
 
             // Name + key
@@ -807,6 +1162,17 @@ class _ContactTile extends StatelessWidget {
                           fontWeight: FontWeight.w500,
                           color: AppColors.textPrimary),
                       overflow: TextOverflow.ellipsis),
+                  if ((profile?.username?.trim().isNotEmpty ?? false)) ...[
+                    const SizedBox(height: 1),
+                    Text(
+                      profile!.username!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                   const SizedBox(height: 2),
                   Text(shortKey,
                       style: const TextStyle(
