@@ -139,6 +139,15 @@ class ChatUpdateNicknames extends ChatEvent {
   List<Object?> get props => [nicknames];
 }
 
+/// Hot-update contact avatars (ed25519PubHex -> avatar bytes).
+/// Chat UI maps them to peers via peerPublicKeys.
+class ChatUpdateContactAvatars extends ChatEvent {
+  final Map<String, Uint8List> avatarsByPubkey;
+  const ChatUpdateContactAvatars(this.avatarsByPubkey);
+  @override
+  List<Object?> get props => [avatarsByPubkey];
+}
+
 class ChatInternalSgtpEvent extends ChatEvent {
   final SgtpEvent sgtpEvent;
   /// The session generation counter at the time this event was dispatched.

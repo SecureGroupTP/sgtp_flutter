@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'sgtp_transport.dart';
 
 /// Data that can be encoded in QR code for sharing room/profile
 class QrShareData {
@@ -35,6 +36,8 @@ class QrShareData {
 
   /// Node voice port (for type='node')
   final int? nodeVoicePort;
+  final String? nodeTransport;
+  final bool? nodeUseTls;
 
   const QrShareData({
     required this.type,
@@ -47,6 +50,8 @@ class QrShareData {
     this.nodeHost,
     this.nodeChatPort,
     this.nodeVoicePort,
+    this.nodeTransport,
+    this.nodeUseTls,
     required this.timestamp,
   });
 
@@ -77,6 +82,8 @@ class QrShareData {
       if (nodeHost != null) 'host': nodeHost,
       if (nodeChatPort != null) 'chat': nodeChatPort,
       if (nodeVoicePort != null) 'voice': nodeVoicePort,
+      if (nodeTransport != null) 'transport': nodeTransport,
+      if (nodeUseTls != null) 'tls': nodeUseTls,
       'ts': timestamp,
     };
     final jsonStr = jsonEncode(json);
@@ -130,9 +137,17 @@ class QrShareData {
       nodeHost: json['host'] as String?,
       nodeChatPort: (json['chat'] as num?)?.toInt(),
       nodeVoicePort: (json['voice'] as num?)?.toInt(),
+      nodeTransport: (json['transport'] as String?)?.trim(),
+      nodeUseTls: json['tls'] as bool?,
       // 'users' key is ignored for backward compatibility
       timestamp: json['ts'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     );
+  }
+
+  SgtpTransportFamily? get nodeTransportFamily {
+    final raw = (nodeTransport ?? '').trim();
+    if (raw.isEmpty) return null;
+    return SgtpTransportFamilyCodec.fromId(raw);
   }
 
   /// Generate QR content string

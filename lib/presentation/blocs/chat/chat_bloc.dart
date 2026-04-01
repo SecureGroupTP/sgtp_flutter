@@ -26,6 +26,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   /// SgtpPeerJoined / SgtpPeerLeft events from polluting peerUUIDs after a
   /// reconnect.
   int _sessionId = 0;
+  Map<String, Uint8List> _contactAvatarsByPub = const {};
 
   ChatBloc({required String accountId})
       : _metaRepo = ChatMetadataRepository(accountId: accountId),
@@ -46,6 +47,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatClearReply>(_onClearReply);
     on<ChatToggleReaction>(_onToggleReaction);
     on<ChatUpdateNicknames>(_onUpdateNicknames);
+    on<ChatUpdateContactAvatars>(_onUpdateContactAvatars);
     on<ChatUpdateWhitelist>((event, emit) {
       _client?.updateWhitelist(event.whitelist);
     });
@@ -190,6 +192,25 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       peerNicknames: updatedPeerNicks,
       peerNicknamesHistory: updatedHistory,
     ));
+  }
+
+  void _onUpdateContactAvatars(
+      ChatUpdateContactAvatars event, Emitter<ChatState> emit) {
+    _contactAvatarsByPub = Map<String, Uint8List>.from(event.avatarsByPubkey);
+    emit(state.copyWith(
+      peerAvatars: _peerAvatarsFor(state.peerPublicKeys),
+    ));
+  }
+
+  Map<String, Uint8List> _peerAvatarsFor(Map<String, String> peerPublicKeys) {
+    final out = <String, Uint8List>{};
+    for (final entry in peerPublicKeys.entries) {
+      final avatar = _contactAvatarsByPub[entry.value];
+      if (avatar != null && avatar.isNotEmpty) {
+        out[entry.key] = avatar;
+      }
+    }
+    return out;
   }
 
   void _onSetReply(ChatSetReply event, Emitter<ChatState> emit) {
@@ -378,11 +399,6 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         _saveMetadata(roomUUIDHex, state.chatName, state.chatAvatarBytes);
 
       case SgtpMessageReceived(:final message):
-        // Track peer avatar from incoming message
-        Map<String, Uint8List> updatedAvatars = Map.from(state.peerAvatars);
-        if (!message.isFromMe && message.senderAvatarBytes != null) {
-          updatedAvatars[message.senderUUID] = message.senderAvatarBytes!;
-        }
         // Track peer public key from message
         Map<String, String> updatedPubKeys = Map.from(state.peerPublicKeys);
         if (!message.isFromMe && message.senderPublicKeyHex != null) {
@@ -406,8 +422,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         }
         emit(state.copyWith(
           messages: updated,
-          peerAvatars: updatedAvatars,
           peerPublicKeys: updatedPubKeys,
+          peerAvatars: _peerAvatarsFor(updatedPubKeys),
         ));
         _touchChatActivity();
 
@@ -431,6 +447,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             peerNicknames: updatedNick,
             peerNicknamesHistory: updatedHistory,
             peerPublicKeys: updatedPubKeys,
+            peerAvatars: _peerAvatarsFor(updatedPubKeys),
           ));
         } else {
           emit(state.copyWith(
@@ -438,6 +455,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             peerNicknames: updatedNick,
             peerNicknamesHistory: updatedHistory,
             peerPublicKeys: updatedPubKeys,
+            peerAvatars: _peerAvatarsFor(updatedPubKeys),
           ));
         }
 

@@ -112,6 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _whitelist = List.from(whitelistEntries);
       _nicknames = {for (final e in whitelistEntries) e.hexKey: e.name};
       _serverAddress = newServer;
+      _contactProfiles = {};
     });
     _roomsBloc.close();
     _roomsBloc = RoomsBloc(
@@ -121,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
       serverAddress: newServer,
       userAvatar: _userAvatar,
     );
+    _pushContactAvatarsToRooms();
     unawaited(_loadNicknameAndInitUserDir());
   }
 
@@ -150,7 +152,25 @@ class _HomeScreenState extends State<HomeScreen> {
     _roomsBloc.add(RoomsUpdateNicknames(
       {for (final e in entries) e.hexKey: e.name},
     ));
+    _pushContactAvatarsToRooms();
     unawaited(_initUserDir());
+  }
+
+  Map<String, Uint8List> _buildContactAvatarsByPubkey() {
+    final allowed = _whitelist.map((e) => e.hexKey).toSet();
+    final out = <String, Uint8List>{};
+    for (final entry in _contactProfiles.entries) {
+      if (!allowed.contains(entry.key)) continue;
+      final avatar = entry.value.avatarBytes;
+      if (avatar != null && avatar.isNotEmpty) {
+        out[entry.key] = avatar;
+      }
+    }
+    return out;
+  }
+
+  void _pushContactAvatarsToRooms() {
+    _roomsBloc.add(RoomsUpdateContactAvatars(_buildContactAvatarsByPubkey()));
   }
 
   /// Returns `@username` if the user has set one, otherwise null.
@@ -276,6 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => _contactProfiles[contact.hexKey] = cachedProfile);
       }
     }
+    _pushContactAvatarsToRooms();
   }
 
   Future<void> _refreshContactsFromServer() async {
@@ -321,6 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await settings.saveContactProfile(_accountId, cp);
       if (mounted) setState(() => _contactProfiles[meta.pubkeyHex] = cp);
     }
+    _pushContactAvatarsToRooms();
   }
 
   void _showAddSheet() {
@@ -542,7 +564,9 @@ class _AppStartScreenState extends State<AppStartScreen> {
         _sshStr('sgtp-generated');
     final padded = List<int>.from(privBlock);
     int pad = 1;
-    while (padded.length % 8 != 0) padded.add(pad++);
+    while (padded.length % 8 != 0) {
+      padded.add(pad++);
+    }
     final body = magic.codeUnits + header + pubWrapped + _sshStr(padded);
     final b64 = base64Encode(body);
     final sb = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');

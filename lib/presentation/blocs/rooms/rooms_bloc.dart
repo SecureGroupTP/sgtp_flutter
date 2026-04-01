@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../core/sgtp_transport.dart';
+import '../../../data/repositories/settings_repository.dart';
 import '../../../core/uuid_v7.dart';
 import '../../../data/sgtp_client.dart';
 import '../chat/chat_bloc.dart';
@@ -21,8 +23,10 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   final String _accountId;
   SgtpConfig _baseConfig;
   final Map<String, String> _nicknames;
+  Map<String, Uint8List> _contactAvatarsByPub = const {};
   Uint8List? _userAvatar;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
+  final SettingsRepository _settings = SettingsRepository();
 
   RoomsBloc({
     required String accountId,
@@ -40,6 +44,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     on<RoomsRemoveRoom>(_onRemove);
     on<RoomsUpdateWhitelist>(_onUpdateWhitelist);
     on<RoomsUpdateNicknames>(_onUpdateNicknames);
+    on<RoomsUpdateContactAvatars>(_onUpdateContactAvatars);
     on<_RoomsRefresh>(_onRefresh);
   }
 
@@ -53,16 +58,18 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
   // ── Event handlers ────────────────────────────────────────────────────────
 
-  void _onCreate(RoomsCreateRoom event, Emitter<RoomsState> emit) {
+  Future<void> _onCreate(
+      RoomsCreateRoom event, Emitter<RoomsState> emit) async {
     final roomUUID = generateUUIDv7();
-    final configOverride = (event.serverAddress != null &&
-            event.serverAddress!.trim().isNotEmpty)
-        ? _baseConfig.copyWith(serverAddr: event.serverAddress!.trim())
-        : null;
+    final configOverride = await _configOverrideForTarget(
+      serverAddress: event.serverAddress,
+      transport: event.transport,
+      useTls: event.useTls,
+    );
     _addRoom(roomUUID, emit, configOverride: configOverride);
   }
 
-  void _onJoin(RoomsJoinRoom event, Emitter<RoomsState> emit) {
+  Future<void> _onJoin(RoomsJoinRoom event, Emitter<RoomsState> emit) async {
     final hexClean = event.uuidHex.trim().replaceAll('-', '');
     if (hexClean.length != 32) {
       emit(state.copyWith(error: 'UUID must be 32 hex chars (without dashes)'));
@@ -70,18 +77,71 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
     try {
       final bytes = hexToBytes(hexClean);
-      // Use the server from the QR/invite if provided, otherwise fall back to
-      // the configured default server.
-      final configOverride = (event.serverAddress != null && event.serverAddress!.isNotEmpty)
-          ? _baseConfig.copyWith(serverAddr: event.serverAddress)
-          : null;
+      final configOverride = await _configOverrideForTarget(
+        serverAddress: event.serverAddress,
+        transport: event.transport,
+        useTls: event.useTls,
+      );
       _addRoom(bytes, emit, configOverride: configOverride);
     } catch (_) {
       emit(state.copyWith(error: 'Invalid UUID format'));
     }
   }
 
-  void _onUpdateWhitelist(RoomsUpdateWhitelist event, Emitter<RoomsState> emit) {
+  Future<SgtpConfig?> _configOverrideForTarget({
+    String? serverAddress,
+    SgtpTransportFamily? transport,
+    bool? useTls,
+  }) async {
+    final addr = serverAddress?.trim();
+    if ((transport == null || useTls == null) &&
+        addr != null &&
+        addr.isNotEmpty) {
+      final resolved = await _resolveServerTransport(addr);
+      transport ??= resolved?.$1;
+      useTls ??= resolved?.$2;
+    }
+
+    if ((addr == null || addr.isEmpty) && transport == null && useTls == null) {
+      return null;
+    }
+
+    var cfg = _baseConfig;
+    if (addr != null && addr.isNotEmpty) {
+      cfg = cfg.copyWith(serverAddr: addr);
+    }
+    if (transport != null) {
+      cfg = cfg.copyWith(transport: transport);
+    }
+    if (useTls != null) {
+      cfg = cfg.copyWith(useTls: useTls);
+    }
+    return cfg;
+  }
+
+  Future<(SgtpTransportFamily, bool)?> _resolveServerTransport(
+      String serverAddress) async {
+    final target = _normalizeAddress(serverAddress);
+    if (target.isEmpty) return null;
+    final nodes = await _settings.loadNodes();
+    for (final node in nodes) {
+      if (_normalizeAddress(node.chatAddress) == target) {
+        return (node.transport, node.useTls);
+      }
+    }
+    return null;
+  }
+
+  String _normalizeAddress(String raw) {
+    return raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .toLowerCase();
+  }
+
+  void _onUpdateWhitelist(
+      RoomsUpdateWhitelist event, Emitter<RoomsState> emit) {
     // Update base config so future rooms use the new whitelist.
     _baseConfig = _baseConfig.copyWith(whitelist: event.whitelist);
     // Hot-push to all already-running rooms — no reconnect needed.
@@ -90,7 +150,8 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
   }
 
-  void _onUpdateNicknames(RoomsUpdateNicknames event, Emitter<RoomsState> emit) {
+  void _onUpdateNicknames(
+      RoomsUpdateNicknames event, Emitter<RoomsState> emit) {
     // Store locally so new rooms created later get the latest nicknames.
     _nicknames
       ..clear()
@@ -101,20 +162,33 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
   }
 
-  void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit, {SgtpConfig? configOverride}) {
+  void _onUpdateContactAvatars(
+      RoomsUpdateContactAvatars event, Emitter<RoomsState> emit) {
+    _contactAvatarsByPub =
+        Map<String, Uint8List>.from(event.avatarsByPubkey);
+    for (final room in state.rooms) {
+      room.chatBloc.add(ChatUpdateContactAvatars(event.avatarsByPubkey));
+    }
+  }
+
+  void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
+      {SgtpConfig? configOverride}) {
     final hexUUID = uuidBytesToHex(roomUUID);
     if (state.rooms.any((r) => r.roomUUID == hexUUID)) {
       emit(state.copyWith(error: 'Already joined this room'));
       return;
     }
 
-    final config   = (configOverride ?? _baseConfig).copyWithRoomUUID(roomUUID);
+    final config = (configOverride ?? _baseConfig).copyWithRoomUUID(roomUUID);
     final chatBloc = ChatBloc(accountId: _accountId)
       ..add(ChatConnect(config, nicknames: _nicknames));
 
     // Push user avatar into the new bloc
     if (_userAvatar != null) {
       chatBloc.add(ChatSetUserAvatar(_userAvatar));
+    }
+    if (_contactAvatarsByPub.isNotEmpty) {
+      chatBloc.add(ChatUpdateContactAvatars(_contactAvatarsByPub));
     }
 
     _chatSubs[hexUUID] = chatBloc.stream.listen((_) {
@@ -135,7 +209,8 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   void _onRemove(RoomsRemoveRoom event, Emitter<RoomsState> emit) {
     _chatSubs[event.roomUUID]?.cancel();
     _chatSubs.remove(event.roomUUID);
-    final room = state.rooms.where((r) => r.roomUUID == event.roomUUID).firstOrNull;
+    final room =
+        state.rooms.where((r) => r.roomUUID == event.roomUUID).firstOrNull;
     room?.chatBloc.close();
     emit(state.copyWith(
       rooms: state.rooms.where((r) => r.roomUUID != event.roomUUID).toList(),

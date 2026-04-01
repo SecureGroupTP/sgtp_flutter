@@ -299,9 +299,6 @@ class SgtpClient {
   /// Maps sessionUUID → ed25519PubHex for all ever-seen peers (survives leave).
   final Map<String, String> _peerPublicKeys = {};
 
-  /// User's own avatar bytes (shown next to own messages and shared in messages).
-  Uint8List? _myUserAvatar;
-
   bool _isMaster = false;
   Timer? _ckRotationTimer;
   Timer?
@@ -355,8 +352,8 @@ class SgtpClient {
   /// When the socket last received any data. Used to detect dead TCP connections.
   DateTime get lastReceiveAt => _lastReceiveAt;
 
-  /// Set the user's own avatar to attach to outgoing messages.
-  void setUserAvatar(Uint8List? avatar) => _myUserAvatar = avatar;
+  /// User avatar is local UI-only and is not exchanged in SGTP MESSAGE payloads.
+  void setUserAvatar(Uint8List? avatar) {}
 
   /// Hot-update the peer whitelist without reconnecting.
   /// Newly added keys are accepted on the next ping/pong; removed keys are
@@ -468,7 +465,8 @@ class SgtpClient {
       if (end <= 1) throw ArgumentError('Invalid IPv6 address: $raw');
       final host = s.substring(1, end);
       final rest = s.substring(end + 1);
-      final port = (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
+      final port =
+          (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
       if (port <= 0 || port > 65535) {
         throw ArgumentError('Invalid port in server address: $raw');
       }
@@ -484,7 +482,8 @@ class SgtpClient {
       throw ArgumentError('Invalid port in server address: $raw');
     }
     final host = parts.sublist(0, parts.length - 1).join(':').trim();
-    if (host.isEmpty) throw ArgumentError('Invalid host in server address: $raw');
+    if (host.isEmpty)
+      throw ArgumentError('Invalid host in server address: $raw');
     return (host, port);
   }
 
@@ -528,12 +527,11 @@ class SgtpClient {
       'type': 'text',
       'text': text,
       'pub': myPubHex,
-      if (_myUserAvatar != null && _myUserAvatar!.isNotEmpty)
-        'avatar': base64.encode(_myUserAvatar!),
       if (replyToId != null) 'reply_to_id': replyToId,
       if (replyToContent != null) 'reply_to_content': replyToContent,
       if (replyToSender != null) 'reply_to_sender': replyToSender,
     };
+    _attachChatAvatar(payload);
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
     try {
       final cipher = await encrypt(plaintext, _chatKey!, nonce);
@@ -555,7 +553,6 @@ class SgtpClient {
         receivedAt: DateTime.now(),
         isFromHistory: false,
         isFromMe: true,
-        senderAvatarBytes: _myUserAvatar,
         replyToId: replyToId,
         replyToContent: replyToContent,
         replyToSender: replyToSender,
@@ -578,6 +575,7 @@ class SgtpClient {
         'add': add,
         'pub': _hex(_config.myPublicKey),
       };
+      _attachChatAvatar(payload);
       final msgUUID = generateUUIDv7();
       final nonce = _myNonce++;
       final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
@@ -597,6 +595,7 @@ class SgtpClient {
         'msg_id': messageId,
         'pub': _hex(_config.myPublicKey),
       };
+      _attachChatAvatar(payload);
       final msgUUID = generateUUIDv7();
       final nonce = _myNonce++;
       final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
@@ -661,6 +660,9 @@ class SgtpClient {
           'size': bytes.length,
           'data': base64.encode(bytes.sublist(start, end)),
         };
+        if (i == 0) {
+          _attachChatAvatar(payload);
+        }
         if (totalChunks > 1) {
           payload['chunk'] = i;
           payload['chunks'] = totalChunks;
@@ -780,11 +782,14 @@ class SgtpClient {
   Future<void> probeConnection() async {
     if (_state == _ClientState.disconnected) return;
     try {
-      await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       if (_state == _ClientState.ready) {
         for (final peer in _peers.values.toList()) {
           await _sendPing(peer.uuidBytes, version: peer.protocolVersion);
         }
+      } else {
+        // Before ready we may still need an announce frame to trigger initial
+        // peer discovery in the room.
+        await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       }
       AppLogger.d('Sent connection probe on existing socket', tag: 'SGTP');
     } catch (e) {
@@ -912,6 +917,14 @@ class SgtpClient {
   Future<void> _onIntent(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
+    // INTENT is a join/announce signal. Existing peers may occasionally
+    // re-send it as a liveness probe; answering every repeated INTENT with a
+    // fresh PING causes handshake storms under heavy traffic.
+    final known = _peers[h];
+    if (known != null && known.handshakeComplete) {
+      _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
+      return;
+    }
     // Use configurable threshold (not hardcoded 30s) to avoid kicking
     // peers whose last ping happened to be at the interval boundary
     await _pruneStale(thresholdMs: _config.pingIntervalSeconds * 4 * 1000);
@@ -1260,10 +1273,9 @@ class SgtpClient {
                 isFromMe: false)));
         return;
       }
-      // Extract optional sender pub key and avatar embedded in message
+      _maybeApplyChatAvatarFromPayload(p, sH, history);
+      // Extract optional sender pub key embedded in message
       final senderPub = p['pub'] as String?;
-      final avatarB64 = p['avatar'] as String?;
-      final senderAvatar = avatarB64 != null ? base64.decode(avatarB64) : null;
       if (senderPub != null && !history) _peerPublicKeys[sH] = senderPub;
 
       switch (p['type'] as String?) {
@@ -1277,26 +1289,25 @@ class SgtpClient {
             receivedAt: recvAt,
             isFromHistory: history,
             isFromMe: false,
-            senderAvatarBytes: senderAvatar,
             replyToId: p['reply_to_id'] as String?,
             replyToContent: p['reply_to_content'] as String?,
             replyToSender: p['reply_to_sender'] as String?,
           )));
         case 'image':
           await _mediaPayload(msgId, sH, p, 'image', history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar);
+              senderPub: senderPub);
         case 'gif':
           await _mediaPayload(msgId, sH, p, 'gif', history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar);
+              senderPub: senderPub);
         case 'video':
           await _mediaPayload(msgId, sH, p, 'video', history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar);
+              senderPub: senderPub);
         case 'video_note':
           await _mediaPayload(msgId, sH, p, 'video_note', history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar);
+              senderPub: senderPub);
         case 'voice':
           await _mediaPayload(msgId, sH, p, 'voice', history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar);
+              senderPub: senderPub);
         case 'message_read':
           if (!history) {
             final readMsgId = p['msg_id'] as String?;
@@ -1348,7 +1359,6 @@ class SgtpClient {
     bool history,
     DateTime recvAt, {
     String? senderPub,
-    Uint8List? senderAvatar,
   }) async {
     final fileId = p['file_id'] as String? ?? id;
     final name = p['name'] as String? ?? 'file';
@@ -1360,7 +1370,7 @@ class SgtpClient {
       _eventController.add(SgtpMessageReceived(
           message: _media(
               fileId, sender, name, mime, type, chunk, history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar)));
+              senderPub: senderPub)));
       return;
     }
     final ci = (p['chunk'] as num).toInt();
@@ -1382,13 +1392,13 @@ class SgtpClient {
       _eventController.add(SgtpMessageReceived(
           message: _media(
               fileId, sender, name, mime, type, pf.assemble(), history, recvAt,
-              senderPub: senderPub, senderAvatar: senderAvatar)));
+              senderPub: senderPub)));
     }
   }
 
   ChatMessage _media(String id, String sender, String name, String mime,
           String type, Uint8List bytes, bool history, DateTime recvAt,
-          {String? senderPub, Uint8List? senderAvatar}) =>
+          {String? senderPub}) =>
       switch (type) {
         'gif' => ChatMessage(
             id: id,
@@ -1401,8 +1411,7 @@ class SgtpClient {
             type: MessageType.gif,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false,
-            senderAvatarBytes: senderAvatar),
+            isFromMe: false),
         'video' => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1414,8 +1423,7 @@ class SgtpClient {
             type: MessageType.video,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false,
-            senderAvatarBytes: senderAvatar),
+            isFromMe: false),
         'video_note' => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1427,8 +1435,7 @@ class SgtpClient {
             type: MessageType.videoNote,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false,
-            senderAvatarBytes: senderAvatar),
+            isFromMe: false),
         'voice' => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1440,8 +1447,7 @@ class SgtpClient {
             type: MessageType.voice,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false,
-            senderAvatarBytes: senderAvatar),
+            isFromMe: false),
         _ => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1453,9 +1459,45 @@ class SgtpClient {
             type: MessageType.image,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false,
-            senderAvatarBytes: senderAvatar),
+            isFromMe: false),
       };
+
+  void _attachChatAvatar(Map<String, dynamic> payload) {
+    final avatar = _currentChatAvatar;
+    if (avatar != null && avatar.isNotEmpty) {
+      payload['chat_avatar'] = base64.encode(avatar);
+    }
+  }
+
+  void _maybeApplyChatAvatarFromPayload(
+      Map<String, dynamic> payload, String senderUUID, bool history) {
+    final b64 = payload['chat_avatar'] as String?;
+    if (b64 == null || b64.isEmpty) return;
+    Uint8List avatar;
+    try {
+      avatar = Uint8List.fromList(base64.decode(b64));
+    } catch (_) {
+      return;
+    }
+    if (_bytesEqual(_currentChatAvatar, avatar)) return;
+    _currentChatAvatar = avatar;
+    if (!history) {
+      _eventController.add(SgtpChatMetadataReceived(
+        chatName: _currentChatName,
+        avatarBytes: avatar,
+        senderUUID: senderUUID,
+      ));
+    }
+  }
+
+  bool _bytesEqual(Uint8List? a, Uint8List? b) {
+    if (a == null || b == null) return a == b;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   // ---------------------------------------------------------------------------
   // History: serve
@@ -1655,27 +1697,31 @@ class SgtpClient {
     return bd.getUint64(0, Endian.big);
   }
 
-  Future<void> _sendPing(Uint8List r, {int version = SgtpConstants.version}) async {
+  Future<void> _sendPing(Uint8List r,
+      {int version = SgtpConstants.version}) async {
     if (_ephemeralX25519Pub == null) return;
     await _sendFrame(buildPingFrame(
         _roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey,
         version: version));
   }
 
-  /// Proactively ping every connected peer to keep connections alive,
-  /// and always re-send an INTENT frame so the server-side TCP connection
-  /// stays alive even when there are no peers (prevents NAT/server timeout).
+  /// Proactively ping every connected peer to keep connections alive.
+  /// INTENT is sent only when we have no peers, so we avoid re-triggering
+  /// handshake flows for already connected peers.
   Future<void> _sendKeepalive() async {
     if (_state != _ClientState.ready) return;
-    // Always announce ourselves to keep the server TCP connection alive.
-    await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
-    // Also ping known peers so their last-seen timestamps stay fresh.
+    if (_peers.isEmpty) {
+      // Keep an idle room connection active without causing peer ping loops.
+      await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
+      return;
+    }
     for (final peer in _peers.values.toList()) {
       await _sendPing(peer.uuidBytes, version: peer.protocolVersion);
     }
   }
 
-  Future<void> _sendPong(Uint8List r, {int version = SgtpConstants.version}) async {
+  Future<void> _sendPong(Uint8List r,
+      {int version = SgtpConstants.version}) async {
     if (_ephemeralX25519Pub == null) return;
     await _sendFrame(buildPongFrame(
         _roomUUID, r, _myUUID, _ephemeralX25519Pub!, _config.myPublicKey,

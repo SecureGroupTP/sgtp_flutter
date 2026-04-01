@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'package:equatable/equatable.dart';
+import '../../../core/sgtp_transport.dart';
 
 abstract class RoomsEvent extends Equatable {
   const RoomsEvent();
@@ -11,9 +13,11 @@ class RoomsCreateRoom extends RoomsEvent {
   /// Optional — if provided, this room will connect to that server instead of
   /// the default one.
   final String? serverAddress;
-  const RoomsCreateRoom({this.serverAddress});
+  final SgtpTransportFamily? transport;
+  final bool? useTls;
+  const RoomsCreateRoom({this.serverAddress, this.transport, this.useTls});
   @override
-  List<Object?> get props => [serverAddress];
+  List<Object?> get props => [serverAddress, transport, useTls];
 }
 
 /// Joins an existing room by its hex UUID string (32 chars, no dashes).
@@ -22,9 +26,12 @@ class RoomsCreateRoom extends RoomsEvent {
 class RoomsJoinRoom extends RoomsEvent {
   final String uuidHex;
   final String? serverAddress;
-  const RoomsJoinRoom(this.uuidHex, {this.serverAddress});
+  final SgtpTransportFamily? transport;
+  final bool? useTls;
+  const RoomsJoinRoom(this.uuidHex,
+      {this.serverAddress, this.transport, this.useTls});
   @override
-  List<Object?> get props => [uuidHex, serverAddress];
+  List<Object?> get props => [uuidHex, serverAddress, transport, useTls];
 }
 
 /// Disconnects and removes a room from the list.
@@ -52,4 +59,13 @@ class RoomsUpdateNicknames extends RoomsEvent {
   const RoomsUpdateNicknames(this.nicknames);
   @override
   List<Object?> get props => [nicknames];
+}
+
+/// Hot-updates contact avatars (ed25519PubHex -> avatar bytes)
+/// in all active rooms.
+class RoomsUpdateContactAvatars extends RoomsEvent {
+  final Map<String, Uint8List> avatarsByPubkey;
+  const RoomsUpdateContactAvatars(this.avatarsByPubkey);
+  @override
+  List<Object?> get props => [avatarsByPubkey];
 }

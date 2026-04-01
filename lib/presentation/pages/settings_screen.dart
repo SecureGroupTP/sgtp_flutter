@@ -190,7 +190,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return result;
   }
 
-  Future<void> _loadAccountData(String nodeId, {bool applyConfig = true}) async {
+  Future<void> _loadAccountData(String nodeId,
+      {bool applyConfig = true}) async {
     // Profile (nickname + username + avatar)
     final nickname = await _settings.loadUserNicknameForNode(nodeId);
     final username = await _settings.loadUserUsernameForNode(nodeId);
@@ -312,8 +313,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close,
-                        color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                     onPressed: () => Navigator.pop(ctx),
                   ),
                 ],
@@ -369,8 +370,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     backgroundColor:
                         const WidgetStatePropertyAll(AppColors.accent),
-                    foregroundColor:
-                        const WidgetStatePropertyAll(Colors.black),
+                    foregroundColor: const WidgetStatePropertyAll(Colors.black),
                     overlayColor:
                         WidgetStatePropertyAll(Colors.white.withAlpha(20)),
                   ),
@@ -421,7 +421,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final bytes = Uint8List.fromList(text.codeUnits);
       final parsed = parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(nodeId, bytes, 'clipboard_identity');
+      await _settings.savePrivateKeyForNode(
+          nodeId, bytes, 'clipboard_identity');
       if (!mounted) return;
       setState(() {
         _privateKeyBytes = bytes;
@@ -659,8 +660,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         fontFamily: 'monospace',
                       ),
                       decoration: const InputDecoration(
-                        hintText:
-                            '-----BEGIN OPENSSH PRIVATE KEY-----\n…',
+                        hintText: '-----BEGIN OPENSSH PRIVATE KEY-----\n…',
                         hintStyle: TextStyle(
                             color: AppColors.textSecondary, fontSize: 13),
                         border: InputBorder.none,
@@ -689,15 +689,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: () async {
                       final text = pasteCtrl.text.trim();
                       if (text.isEmpty) return;
-                      final ok =
-                          await _pastePrivateKeyForAccount(nodeId, text);
+                      final ok = await _pastePrivateKeyForAccount(nodeId, text);
                       if (!ctx.mounted) return;
                       if (ok) {
                         saved = true;
                         Navigator.pop(ctx);
                       } else {
-                        setS(
-                            () => error = 'Invalid private key (OpenSSH format)');
+                        setS(() =>
+                            error = 'Invalid private key (OpenSSH format)');
                       }
                     },
                   ),
@@ -1104,7 +1103,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _nodes = nodes;
       _nodesLoading = false;
-      _preferredNodeId = preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
+      _preferredNodeId =
+          preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
     });
     unawaited(_refreshProfilesCache(nodes));
   }
@@ -1279,11 +1279,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (nodeId == null || nodeId.trim().isEmpty) return;
     // Strip leading @ if user typed it, sanitize
     final stripped = value.trim().replaceFirst(RegExp(r'^@'), '');
-    final sanitized =
-        stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').substring(
-              0,
-              stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
-            );
+    final sanitized = stripped
+        .replaceAll(RegExp(r'[^A-Za-z0-9_]'), '')
+        .substring(
+          0,
+          stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
+        );
     await _settings.saveUserUsernameForNode(nodeId, sanitized);
     if (!mounted) return;
     widget.onUsernameChanged?.call(sanitized);
@@ -1338,6 +1339,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       nodeHost: node.host,
       nodeChatPort: node.chatPort,
       nodeVoicePort: node.voicePort,
+      nodeTransport: node.transport.id,
+      nodeUseTls: node.useTls,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
@@ -1489,8 +1492,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         final (host, port) = parsed;
                         final chatPort = port ?? 7777;
                         if (chatPort <= 0 || chatPort > 65535) {
-                          setS(() =>
-                              errorMsg = 'Port must be in range 1–65535');
+                          setS(
+                              () => errorMsg = 'Port must be in range 1–65535');
                           return;
                         }
                         final node = NodeConfig(
@@ -1506,18 +1509,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         if (ctx.mounted) Navigator.pop(ctx);
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                              content: Text('Node imported: ${node.chatAddress}')),
+                              content:
+                                  Text('Node imported: ${node.chatAddress}')),
                         );
-                        final ok =
-                            await _promptPrivateKeyForAccount(node.id);
+                        final ok = await _promptPrivateKeyForAccount(node.id);
                         if (!mounted) return;
                         if (ok) {
                           await _selectAccount(node);
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content:
-                                    Text('Account imported without private key')),
+                                content: Text(
+                                    'Account imported without private key')),
                           );
                         }
                       },
@@ -1630,6 +1633,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       host: host,
       chatPort: chatPort,
       voicePort: voicePort,
+      transport: data.nodeTransportFamily ?? SgtpTransportFamily.tcp,
+      useTls: data.nodeUseTls ?? false,
     );
   }
 
@@ -1806,8 +1811,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       orElse: () => _nodes.isNotEmpty
           ? _nodes.first
           : NodeConfig(
-              id: '', name: '', host: '', chatPort: 7777,
-              voicePort: 7777),
+              id: '', name: '', host: '', chatPort: 7777, voicePort: 7777),
     );
     final hasAccounts = _nodes.isNotEmpty;
 
@@ -1846,7 +1850,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               Text(
                                 _nickname.isNotEmpty
                                     ? _nickname
-                                    : (hasAccounts ? active.name : 'No accounts'),
+                                    : (hasAccounts
+                                        ? active.name
+                                        : 'No accounts'),
                                 style: const TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -2060,8 +2066,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _ActionButton(
               icon: Icons.upload_outlined,
               label: 'Export',
-              onPressed:
-                  (_isLoading || _privateKeyBytes == null) ? null : _showPrivateKeyExportSheet,
+              onPressed: (_isLoading || _privateKeyBytes == null)
+                  ? null
+                  : _showPrivateKeyExportSheet,
             ),
           ],
         ),
@@ -2752,7 +2759,6 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-
 // ── OR divider ───────────────────────────────────────────────────────────────
 
 class _OrDivider extends StatelessWidget {
@@ -2837,8 +2843,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
 
   void _scheduleFetch() {
     _fetchTimer?.cancel();
-    _fetchTimer =
-        Timer(const Duration(milliseconds: 600), _refreshOptions);
+    _fetchTimer = Timer(const Duration(milliseconds: 600), _refreshOptions);
   }
 
   Future<void> _refreshOptions() async {
@@ -2985,13 +2990,11 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               StyledDropdown<SgtpTransportFamily>(
                 icon: Icons.cable_outlined,
                 options: const [
-                  DropdownOption(
-                      value: SgtpTransportFamily.tcp, label: 'TCP'),
+                  DropdownOption(value: SgtpTransportFamily.tcp, label: 'TCP'),
                   DropdownOption(
                       value: SgtpTransportFamily.http, label: 'HTTP'),
                   DropdownOption(
-                      value: SgtpTransportFamily.websocket,
-                      label: 'WebSocket'),
+                      value: SgtpTransportFamily.websocket, label: 'WebSocket'),
                 ],
                 value: _transport,
                 onChanged: (v) => setState(() {
@@ -3044,8 +3047,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppColors.textSecondary),
+                          strokeWidth: 2, color: AppColors.textSecondary),
                     ),
                     const SizedBox(width: 8),
                     const Text(
@@ -3059,8 +3061,8 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
                 const SizedBox(height: 10),
                 Text(
                   _optionsError!,
-                  style: const TextStyle(
-                      color: AppColors.statusRed, fontSize: 12),
+                  style:
+                      const TextStyle(color: AppColors.statusRed, fontSize: 12),
                 ),
               ] else if (_serverOptions != null) ...[
                 const SizedBox(height: 10),
@@ -3130,7 +3132,9 @@ class _SheetBtn extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text(label,
                       style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600, color: fg)),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: fg)),
                 ],
               )
             : Text(
@@ -3200,8 +3204,7 @@ class _StyledField extends StatelessWidget {
                     focusedBorder: InputBorder.none,
                     filled: false,
                     isDense: true,
-                    contentPadding:
-                        const EdgeInsets.symmetric(vertical: 14),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
               ),
@@ -3213,8 +3216,8 @@ class _StyledField extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(left: 4),
             child: Text(error!,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.statusRed)),
+                style:
+                    const TextStyle(fontSize: 12, color: AppColors.statusRed)),
           ),
         ],
       ],
@@ -3223,7 +3226,6 @@ class _StyledField extends StatelessWidget {
 }
 
 // ── Account switcher widgets ──────────────────────────────────────────────────
-
 
 class _AccountDropdownItem extends StatelessWidget {
   final NodeConfig node;
@@ -3294,8 +3296,7 @@ class _AccountDropdownItem extends StatelessWidget {
             const SizedBox(width: 4),
             // Active check OR delete
             if (isActive)
-              const Icon(Icons.check_circle,
-                  size: 20, color: Color(0xFF0A84FF))
+              const Icon(Icons.check_circle, size: 20, color: Color(0xFF0A84FF))
             else
               GestureDetector(
                 onTap: onDelete,

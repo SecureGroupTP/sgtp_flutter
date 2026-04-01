@@ -180,11 +180,10 @@ class RoomsPageState extends State<RoomsPage> {
           ...savedNotActive.map((ref) => SavedChatTile(
                 uuid: ref.uuid,
                 metadata: _savedChatMetadata[ref.uuid],
-                onConnect: () =>
-                    context.read<RoomsBloc>().add(RoomsJoinRoom(
-                          ref.uuid,
-                          serverAddress: ref.serverAddress,
-                        )),
+                onConnect: () => context.read<RoomsBloc>().add(RoomsJoinRoom(
+                      ref.uuid,
+                      serverAddress: ref.serverAddress,
+                    )),
                 onRemove: () => _unsaveChat(ref.uuid),
               )),
         ],
@@ -233,7 +232,8 @@ class RoomsPageState extends State<RoomsPage> {
 
       // Backfill server address for legacy saved chats (uuid-only).
       final savedRef = savedByUuid[room.roomUUID];
-      if ((savedRef?.serverAddress == null || savedRef!.serverAddress!.isEmpty) &&
+      if ((savedRef?.serverAddress == null ||
+              savedRef!.serverAddress!.isEmpty) &&
           room.serverAddress.trim().isNotEmpty) {
         await _settingsRepo.addSavedChatForNode(
           widget.accountId,
@@ -295,7 +295,9 @@ class RoomsPageState extends State<RoomsPage> {
       ].join(':');
     }).toList()
       ..sort();
-    final saved = _savedChats.map((r) => '${r.uuid}@${r.serverAddress ?? ''}').toList()
+    final saved = _savedChats
+        .map((r) => '${r.uuid}@${r.serverAddress ?? ''}')
+        .toList()
       ..sort();
     return [...saved, ...activeSaved].join('|');
   }
@@ -931,16 +933,32 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   }
 
   String? get _selectedChatServer {
+    return _selectedNode?.chatAddress;
+  }
+
+  NodeConfig? get _selectedNode {
     if (_selectedNodeId == null) return null;
-    final node = _nodes.where((n) => n.id == _selectedNodeId).firstOrNull;
-    return node?.chatAddress;
+    return _nodes.where((n) => n.id == _selectedNodeId).firstOrNull;
+  }
+
+  NodeConfig? _nodeByServerAddress(String? serverAddress) {
+    final target = (serverAddress ?? '').trim().toLowerCase();
+    if (target.isEmpty) return null;
+    for (final n in _nodes) {
+      if (n.chatAddress.trim().toLowerCase() == target) return n;
+    }
+    return null;
   }
 
   void _handleQrScanned(QrShareData data) {
     if (data.type == 'room' && data.roomUUID != null) {
+      final targetServer = data.serverAddress ?? _selectedChatServer;
+      final targetNode = _nodeByServerAddress(targetServer) ?? _selectedNode;
       widget.roomsBloc.add(RoomsJoinRoom(
         data.roomUUID!,
-        serverAddress: data.serverAddress ?? _selectedChatServer,
+        serverAddress: targetServer,
+        transport: targetNode?.transport,
+        useTls: targetNode?.useTls,
       ));
       Navigator.of(context).pop();
     } else {
@@ -952,6 +970,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   void _joinFromInput() async {
     String? uuid;
     String? serverAddress = _selectedChatServer;
+    NodeConfig? targetNode = _selectedNode;
     if (_showBase64Input) {
       final raw = _shareHexCtrl.text.trim();
       if (raw.isEmpty) return;
@@ -959,6 +978,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       if (data != null && data.type == 'room' && data.roomUUID != null) {
         uuid = data.roomUUID;
         serverAddress = data.serverAddress ?? serverAddress;
+        targetNode = _nodeByServerAddress(serverAddress) ?? targetNode;
       } else {
         final hex = raw.replaceAll('-', '');
         if (hex.length == 32) uuid = hex;
@@ -972,7 +992,12 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       uuid = _uuidCtrl.text.trim();
       if (uuid.isEmpty) return;
     }
-    widget.roomsBloc.add(RoomsJoinRoom(uuid, serverAddress: serverAddress));
+    widget.roomsBloc.add(RoomsJoinRoom(
+      uuid,
+      serverAddress: serverAddress,
+      transport: targetNode?.transport,
+      useTls: targetNode?.useTls,
+    ));
     if (_saveAfterJoin) {
       await widget.onSaveChat?.call(uuid, serverAddress: serverAddress);
     }
@@ -1014,7 +1039,11 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
               filled: true,
               onPressed: () {
                 widget.roomsBloc.add(
-                  RoomsCreateRoom(serverAddress: _selectedChatServer),
+                  RoomsCreateRoom(
+                    serverAddress: _selectedChatServer,
+                    transport: _selectedNode?.transport,
+                    useTls: _selectedNode?.useTls,
+                  ),
                 );
                 Navigator.of(context).pop();
               },
