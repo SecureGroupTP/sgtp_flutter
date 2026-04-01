@@ -124,6 +124,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadFromDisk() async {
     // Load nodes first so we know which account is active.
     final nodes = await _settings.loadNodes();
+    unawaited(_logCachedDiscovery(nodes));
     final preferredNode = await _settings.loadPreferredNode();
     final preferredId =
         preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
@@ -1111,6 +1112,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ── Nodes ────────────────────────────────────────────────────────────────
+
+  Future<void> _logCachedDiscovery(List<NodeConfig> nodes) async {
+    if (nodes.isEmpty) {
+      AppLogger.i('Discovery cache: no accounts configured', tag: 'DISC');
+      return;
+    }
+    for (final node in nodes) {
+      final opts = await _settings.loadNodeServerOptions(node.id);
+      final at = await _settings.loadNodeServerOptionsSavedAt(node.id);
+      if (opts == null) {
+        AppLogger.i(
+            'Discovery cache [${node.name}] ${node.chatAddress}: no cache',
+            tag: 'DISC');
+      } else {
+        final age = at != null
+            ? '${DateTime.now().difference(at).inMinutes}m ago'
+            : 'unknown age';
+        final labels = [
+          if (opts.tcp) 'TCP:${opts.tcpPort}',
+          if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
+          if (opts.http) 'HTTP:${opts.httpPort}',
+          if (opts.httpTls) 'HTTP+TLS:${opts.httpTlsPort}',
+          if (opts.websocket) 'WebSocket:${opts.websocketPort}',
+          if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
+        ];
+        AppLogger.i(
+            'Discovery cache [${node.name}] ${node.chatAddress}: '
+            '${labels.join(", ")} ($age)',
+            tag: 'DISC');
+      }
+    }
+  }
 
   Future<void> _reloadNodes() async {
     final nodes = await _settings.loadNodes();

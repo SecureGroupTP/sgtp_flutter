@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../core/app_logger.dart';
 import '../../core/app_theme.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/userdir_client.dart';
@@ -152,18 +153,10 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_initUserDir());
   }
 
-  /// Returns the @username: user-set value, or auto-derived from nickname,
-  /// or falls back to pubkey prefix.
-  String _buildUsername() {
+  /// Returns `@username` if the user has set one, otherwise null.
+  String? _buildUsername() {
     if (_username.isNotEmpty) return '@$_username';
-    final sanitized = _nickname.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '');
-    if (sanitized.isNotEmpty) {
-      return '@${sanitized.substring(0, sanitized.length.clamp(0, 32))}';
-    }
-    final pubHex = _config.myPublicKey
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
-    return '@${pubHex.substring(0, 16)}';
+    return null;
   }
 
   Future<void> _registerSelf() async {
@@ -179,13 +172,40 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initUserDir() async {
-    if (_accountId.trim().isEmpty || _whitelist.isEmpty) return;
+    if (_accountId.trim().isEmpty) {
+      AppLogger.w('UDIR skip: no accountId', tag: 'UDIR');
+      return;
+    }
     final parts = _serverAddress.split(':');
-    if (parts.length < 2) return;
+    if (parts.length < 2) {
+      AppLogger.w('UDIR skip: bad serverAddress "$_serverAddress"', tag: 'UDIR');
+      return;
+    }
     final host = parts.sublist(0, parts.length - 1).join(':');
-    final port = int.tryParse(parts.last);
-    if (port == null) return;
 
+    // Userdir is multiplexed on the TCP relay port (not the discovery port).
+    // Look up the actual relay port from cached SgtpServerOptions.
+    final opts = await SettingsRepository().loadNodeServerOptions(_accountId);
+    final useTls = _config.useTls;
+    int? port;
+    if (opts != null) {
+      if (!useTls && opts.tcp && opts.tcpPort > 0) {
+        port = opts.tcpPort;
+      } else if (useTls && opts.tcpTls && opts.tcpTlsPort > 0) {
+        port = opts.tcpTlsPort;
+      } else if (!useTls && opts.tcp) {
+        port = opts.tcpPort;
+      }
+    }
+    if (port == null) {
+      AppLogger.w(
+          'UDIR skip: no cached TCP port for "$_serverAddress" '
+          '(run discovery first)',
+          tag: 'UDIR');
+      return;
+    }
+
+    AppLogger.i('UDIR connecting to $host:$port (relay port)', tag: 'UDIR');
     try {
       final client = UserDirClient(host: host, port: port);
       await client.connect();
@@ -196,59 +216,61 @@ class _HomeScreenState extends State<HomeScreen> {
       // Register/update our own profile on the server
       await _registerSelf();
 
-      final settings = SettingsRepository();
-      final cached = await settings.loadAllContactProfiles(_accountId);
+      if (_whitelist.isNotEmpty) {
+        final settings = SettingsRepository();
+        final cached = await settings.loadAllContactProfiles(_accountId);
 
-      // GET_META → compare sha256 → GET_PROFILE if stale
-      for (final contact in _whitelist) {
-        if (!mounted) break;
-        final meta = await client.getMeta(contact.bytes);
-        if (meta == null) continue;
+        // GET_META → compare sha256 → GET_PROFILE if stale
+        for (final contact in _whitelist) {
+          if (!mounted) break;
+          final meta = await client.getMeta(contact.bytes);
+          if (meta == null) continue;
 
-        final cachedProfile = cached[contact.hexKey];
-        if (cachedProfile == null ||
-            cachedProfile.avatarSha256Hex != meta.avatarSha256Hex ||
-            cachedProfile.avatarBytes == null) {
-          // Avatar stale or missing — fetch full profile
-          final profile = await client.getProfile(contact.bytes);
-          if (profile == null) continue;
-          final cp = ContactProfile(
-            pubkeyHex: contact.hexKey,
-            username: profile.username,
-            fullname: profile.fullname,
-            avatarBytes: profile.avatarBytes,
-            avatarSha256Hex: profile.avatarSha256Hex,
-            updatedAt: profile.updatedAt,
-          );
-          await settings.saveContactProfile(_accountId, cp);
-          if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
-        } else if (cachedProfile.username != meta.username ||
-            cachedProfile.fullname != meta.fullname) {
-          // Name/username changed, avatar is same
-          final cp = ContactProfile(
-            pubkeyHex: contact.hexKey,
-            username: meta.username,
-            fullname: meta.fullname,
-            avatarBytes: cachedProfile.avatarBytes,
-            avatarSha256Hex: meta.avatarSha256Hex,
-            updatedAt: meta.updatedAt,
-          );
-          await settings.saveContactProfile(_accountId, cp);
-          if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
-        } else if (mounted) {
-          setState(() => _contactProfiles[contact.hexKey] = cachedProfile);
+          final cachedProfile = cached[contact.hexKey];
+          if (cachedProfile == null ||
+              cachedProfile.avatarSha256Hex != meta.avatarSha256Hex ||
+              cachedProfile.avatarBytes == null) {
+            // Avatar stale or missing — fetch full profile
+            final profile = await client.getProfile(contact.bytes);
+            if (profile == null) continue;
+            final cp = ContactProfile(
+              pubkeyHex: contact.hexKey,
+              username: profile.username,
+              fullname: profile.fullname,
+              avatarBytes: profile.avatarBytes,
+              avatarSha256Hex: profile.avatarSha256Hex,
+              updatedAt: profile.updatedAt,
+            );
+            await settings.saveContactProfile(_accountId, cp);
+            if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
+          } else if (cachedProfile.username != meta.username ||
+              cachedProfile.fullname != meta.fullname) {
+            // Name/username changed, avatar is same
+            final cp = ContactProfile(
+              pubkeyHex: contact.hexKey,
+              username: meta.username,
+              fullname: meta.fullname,
+              avatarBytes: cachedProfile.avatarBytes,
+              avatarSha256Hex: meta.avatarSha256Hex,
+              updatedAt: meta.updatedAt,
+            );
+            await settings.saveContactProfile(_accountId, cp);
+            if (mounted) setState(() => _contactProfiles[contact.hexKey] = cp);
+          } else if (mounted) {
+            setState(() => _contactProfiles[contact.hexKey] = cachedProfile);
+          }
         }
+
+        // Subscribe to all contacts for live NOTIFY
+        await client.subscribe(_whitelist.map((e) => e.bytes).toList());
+
+        // Queue NOTIFY handling serially to avoid concurrent GET_PROFILE calls
+        _userDirSub = client.notifyStream.listen((meta) {
+          _notifyQueue = _notifyQueue.then((_) => _handleNotify(meta, client));
+        });
       }
-
-      // Subscribe to all contacts for live NOTIFY
-      await client.subscribe(_whitelist.map((e) => e.bytes).toList());
-
-      // Queue NOTIFY handling serially to avoid concurrent GET_PROFILE calls
-      _userDirSub = client.notifyStream.listen((meta) {
-        _notifyQueue = _notifyQueue.then((_) => _handleNotify(meta, client));
-      });
-    } catch (_) {
-      // Userdir unavailable — non-critical, proceed without profile sync
+    } catch (e, st) {
+      AppLogger.e('UDIR init failed: $e\n$st', tag: 'UDIR');
     }
   }
 

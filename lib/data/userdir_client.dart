@@ -219,13 +219,13 @@ class UserDirClient {
   /// [username] must match `^@[A-Za-z0-9_]{1,32}$`.
   /// The payload is signed with [identityKeyPair] using Ed25519.
   Future<bool> register({
-    required String username,
+    required String? username,
     required String fullname,
     required Uint8List pubkey,
     required Uint8List avatarBytes,
     required SimpleKeyPairData identityKeyPair,
   }) async {
-    final usernameBytes = utf8.encode(username);
+    final usernameBytes = utf8.encode(username ?? '');
     final fullnameBytes = utf8.encode(fullname);
     final avatarLen = avatarBytes.length;
 
