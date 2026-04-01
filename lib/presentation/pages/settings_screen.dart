@@ -27,6 +27,7 @@ import '../../core/app_logger.dart';
 import '../../core/constants.dart';
 import '../widgets/pretty_qr_share_panel.dart';
 import '../widgets/qr_scanner_dialog.dart';
+import '../widgets/styled_dropdown.dart';
 import 'logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1125,24 +1126,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<NodeConfig?> _openNodeEditor({NodeConfig? existing}) async {
     final baseId = existing?.id ?? uuidBytesToHex(generateUUIDv7());
-
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final hostCtrl = TextEditingController(text: existing?.host ?? '');
-    final chatCtrl = TextEditingController(
-        text: existing != null ? existing.chatPort.toString() : '');
-    final voiceCtrl = TextEditingController(
-        text: existing != null ? existing.voicePort.toString() : '');
-
-    var transport = existing?.transport ?? SgtpTransportFamily.tcp;
-    var useTls = existing?.useTls ?? false;
-    SgtpServerOptions? serverOptions =
-        existing != null ? await _settings.loadNodeServerOptions(baseId) : null;
-    DateTime? serverOptionsAt = existing != null
-        ? await _settings.loadNodeServerOptionsSavedAt(baseId)
-        : null;
-    var optionsLoading = false;
-    String? optionsError;
-
     NodeConfig? result;
     await showModalBottomSheet<void>(
       context: context,
@@ -1151,277 +1134,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-              20, 20, 20, MediaQuery.of(ctx).viewInsets.bottom + 20),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        existing == null ? 'Add Account' : 'Edit Account',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () => Navigator.of(ctx).pop(),
-                      child: const Icon(Icons.close,
-                          color: AppColors.textSecondary, size: 22),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _StyledField(
-                  controller: nameCtrl,
-                  icon: Icons.badge_outlined,
-                  hint: 'Account name',
-                ),
-                const SizedBox(height: 12),
-                _StyledField(
-                  controller: hostCtrl,
-                  icon: Icons.dns_outlined,
-                  hint: 'example.com',
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StyledField(
-                        controller: chatCtrl,
-                        icon: Icons.chat_bubble_outline,
-                        hint: 'Discovery port',
-                        keyboardType: TextInputType.number,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _StyledField(
-                        controller: voiceCtrl,
-                        icon: Icons.mic_none_outlined,
-                        hint: 'Voice port',
-                        keyboardType: TextInputType.number,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                StatefulBuilder(builder: (ctx, setModalState) {
-                  bool tlsAvailable() =>
-                      serverOptions?.supports(transport, tls: true) == true;
-                  if (useTls && !tlsAvailable()) useTls = false;
-
-                  Future<void> refreshOptions() async {
-                    final host = hostCtrl.text
-                        .trim()
-                        .replaceAll(
-                            RegExp(r'^https?://', caseSensitive: false), '')
-                        .replaceAll(
-                            RegExp(r'^wss?://', caseSensitive: false), '')
-                        .trim();
-                    final discoveryPort = int.tryParse(chatCtrl.text.trim());
-                    if (host.isEmpty ||
-                        discoveryPort == null ||
-                        discoveryPort <= 0 ||
-                        discoveryPort > 65535) {
-                      setModalState(() {
-                        optionsError = 'Enter a valid host and discovery port';
-                      });
-                      return;
-                    }
-
-                    setModalState(() {
-                      optionsLoading = true;
-                      optionsError = null;
-                    });
-                    try {
-                      final opts = await SgtpServerDiscovery.discover(
-                          host, discoveryPort);
-                      await _settings.saveNodeServerOptions(baseId, opts);
-                      final savedAt =
-                          await _settings.loadNodeServerOptionsSavedAt(baseId);
-                      setModalState(() {
-                        serverOptions = opts;
-                        serverOptionsAt = savedAt ?? DateTime.now();
-                        optionsLoading = false;
-                        optionsError = null;
-                        if (useTls && !tlsAvailable()) useTls = false;
-                      });
-                    } catch (e) {
-                      setModalState(() {
-                        optionsLoading = false;
-                        optionsError = 'Failed to fetch options: $e';
-                      });
-                    }
-                  }
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: DropdownButtonFormField<SgtpTransportFamily>(
-                              value: transport,
-                              items: const [
-                                DropdownMenuItem(
-                                  value: SgtpTransportFamily.tcp,
-                                  child: Text('TCP'),
-                                ),
-                                DropdownMenuItem(
-                                  value: SgtpTransportFamily.http,
-                                  child: Text('HTTP'),
-                                ),
-                                DropdownMenuItem(
-                                  value: SgtpTransportFamily.websocket,
-                                  child: Text('WebSocket'),
-                                ),
-                              ],
-                              onChanged: (v) {
-                                if (v == null) return;
-                                setModalState(() {
-                                  transport = v;
-                                  if (useTls && !tlsAvailable()) useTls = false;
-                                });
-                              },
-                              decoration: const InputDecoration(
-                                labelText: 'Transport',
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: CheckboxListTile(
-                              value: useTls,
-                              onChanged: tlsAvailable()
-                                  ? (v) =>
-                                      setModalState(() => useTls = v ?? false)
-                                  : null,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('TLS'),
-                              controlAffinity: ListTileControlAffinity.leading,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: optionsLoading ? null : refreshOptions,
-                              icon: optionsLoading
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.sync),
-                              label: const Text('Fetch server options'),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (optionsError != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          optionsError!,
-                          style: const TextStyle(color: AppColors.statusRed),
-                        ),
-                      ],
-                      if (serverOptions != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'Available: ${serverOptions!.availableLabels().join(", ")}'
-                          '${serverOptionsAt != null ? " (cached)" : ""}',
-                          style: const TextStyle(
-                              color: AppColors.textSecondary, fontSize: 12),
-                        ),
-                      ],
-                    ],
-                  );
-                }),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _SheetBtn(
-                        label: 'Cancel',
-                        secondary: true,
-                        onTap: () => Navigator.of(ctx).pop(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _SheetBtn(
-                        label: 'Save',
-                        onTap: () {
-                          final name = nameCtrl.text.trim();
-                          final host = hostCtrl.text
-                              .trim()
-                              .replaceAll(
-                                  RegExp(r'^https?://', caseSensitive: false),
-                                  '')
-                              .replaceAll(
-                                  RegExp(r'^wss?://', caseSensitive: false), '')
-                              .trim();
-                          int? parsePort(String s) => int.tryParse(s.trim());
-
-                          final chatPort = parsePort(chatCtrl.text);
-                          final voicePort = parsePort(voiceCtrl.text);
-
-                          bool validPort(int? p) =>
-                              p != null && p > 0 && p <= 65535;
-                          if (name.isEmpty ||
-                              host.isEmpty ||
-                              !validPort(chatPort) ||
-                              !validPort(voicePort)) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                    'Please fill in all fields with valid values'),
-                              ),
-                            );
-                            return;
-                          }
-
-                          result = NodeConfig(
-                            id: baseId,
-                            name: name,
-                            host: host,
-                            chatPort: chatPort!,
-                            voicePort: voicePort!,
-                            transport: transport,
-                            useTls: useTls,
-                          );
-                          Navigator.of(ctx).pop();
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
+      builder: (ctx) => _NodeEditorSheet(
+        existing: existing,
+        baseId: baseId,
+        settings: _settings,
+        onSave: (node) {
+          result = node;
+          Navigator.of(ctx).pop();
+        },
       ),
     );
-
-    nameCtrl.dispose();
-    hostCtrl.dispose();
-    chatCtrl.dispose();
-    voiceCtrl.dispose();
     return result;
   }
 
@@ -3085,6 +2807,316 @@ class _OrDivider extends StatelessWidget {
       ),
       Expanded(child: Divider(color: AppColors.border)),
     ]);
+  }
+}
+
+// ── Node editor bottom sheet ──────────────────────────────────────────────────
+
+class _NodeEditorSheet extends StatefulWidget {
+  final NodeConfig? existing;
+  final String baseId;
+  final SettingsRepository settings;
+  final void Function(NodeConfig) onSave;
+
+  const _NodeEditorSheet({
+    required this.existing,
+    required this.baseId,
+    required this.settings,
+    required this.onSave,
+  });
+
+  @override
+  State<_NodeEditorSheet> createState() => _NodeEditorSheetState();
+}
+
+class _NodeEditorSheetState extends State<_NodeEditorSheet> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _hostCtrl;
+  late final TextEditingController _chatCtrl;
+  late final TextEditingController _voiceCtrl;
+
+  SgtpTransportFamily _transport = SgtpTransportFamily.tcp;
+  bool _useTls = false;
+  SgtpServerOptions? _serverOptions;
+  DateTime? _serverOptionsAt;
+  bool _optionsLoading = false;
+  String? _optionsError;
+  Timer? _fetchTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    _nameCtrl = TextEditingController(text: e?.name ?? '');
+    _hostCtrl = TextEditingController(text: e?.host ?? '');
+    _chatCtrl =
+        TextEditingController(text: e != null ? e.chatPort.toString() : '');
+    _voiceCtrl =
+        TextEditingController(text: e != null ? e.voicePort.toString() : '');
+    _transport = e?.transport ?? SgtpTransportFamily.tcp;
+    _useTls = e?.useTls ?? false;
+
+    _hostCtrl.addListener(_scheduleFetch);
+    _chatCtrl.addListener(_scheduleFetch);
+
+    if (e != null) unawaited(_loadCachedOptions());
+  }
+
+  Future<void> _loadCachedOptions() async {
+    final opts = await widget.settings.loadNodeServerOptions(widget.baseId);
+    final at =
+        await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
+    if (!mounted || opts == null) return;
+    setState(() {
+      _serverOptions = opts;
+      _serverOptionsAt = at;
+    });
+  }
+
+  void _scheduleFetch() {
+    _fetchTimer?.cancel();
+    _fetchTimer =
+        Timer(const Duration(milliseconds: 600), _refreshOptions);
+  }
+
+  Future<void> _refreshOptions() async {
+    final host = _hostCtrl.text
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    final discoveryPort = int.tryParse(_chatCtrl.text.trim());
+    if (host.isEmpty ||
+        discoveryPort == null ||
+        discoveryPort <= 0 ||
+        discoveryPort > 65535) return;
+
+    if (!mounted) return;
+    setState(() {
+      _optionsLoading = true;
+      _optionsError = null;
+    });
+    try {
+      final opts = await SgtpServerDiscovery.discover(host, discoveryPort);
+      await widget.settings.saveNodeServerOptions(widget.baseId, opts);
+      final savedAt =
+          await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
+      if (!mounted) return;
+      setState(() {
+        _serverOptions = opts;
+        _serverOptionsAt = savedAt ?? DateTime.now();
+        _optionsLoading = false;
+        if (_useTls && !_tlsAvailable()) _useTls = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _optionsLoading = false;
+        _optionsError = 'Failed to fetch: $e';
+      });
+    }
+  }
+
+  bool _tlsAvailable() =>
+      _serverOptions?.supports(_transport, tls: true) == true;
+
+  void _save() {
+    final name = _nameCtrl.text.trim();
+    final host = _hostCtrl.text
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    final chatPort = int.tryParse(_chatCtrl.text.trim());
+    final voicePort = int.tryParse(_voiceCtrl.text.trim());
+
+    bool validPort(int? p) => p != null && p > 0 && p <= 65535;
+    if (name.isEmpty ||
+        host.isEmpty ||
+        !validPort(chatPort) ||
+        !validPort(voicePort)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Please fill in all fields with valid values')),
+      );
+      return;
+    }
+    widget.onSave(NodeConfig(
+      id: widget.baseId,
+      name: name,
+      host: host,
+      chatPort: chatPort!,
+      voicePort: voicePort!,
+      transport: _transport,
+      useTls: _useTls,
+    ));
+  }
+
+  @override
+  void dispose() {
+    _fetchTimer?.cancel();
+    _nameCtrl.dispose();
+    _hostCtrl.dispose();
+    _chatCtrl.dispose();
+    _voiceCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+            20, 24, 20, MediaQuery.of(context).viewInsets.bottom + 24),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                widget.existing == null ? 'Add Account' : 'Edit Account',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              _StyledField(
+                controller: _nameCtrl,
+                icon: Icons.badge_outlined,
+                hint: 'Account Name',
+              ),
+              const SizedBox(height: 12),
+
+              _StyledField(
+                controller: _hostCtrl,
+                icon: Icons.dns_outlined,
+                hint: 'Server Address (IP or Domain)',
+              ),
+              const SizedBox(height: 12),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: _StyledField(
+                      controller: _chatCtrl,
+                      icon: Icons.settings_ethernet,
+                      hint: 'Discovery',
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _StyledField(
+                      controller: _voiceCtrl,
+                      icon: Icons.mic_none_outlined,
+                      hint: 'Voice',
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              StyledDropdown<SgtpTransportFamily>(
+                icon: Icons.cable_outlined,
+                options: const [
+                  DropdownOption(
+                      value: SgtpTransportFamily.tcp, label: 'TCP'),
+                  DropdownOption(
+                      value: SgtpTransportFamily.http, label: 'HTTP'),
+                  DropdownOption(
+                      value: SgtpTransportFamily.websocket,
+                      label: 'WebSocket'),
+                ],
+                value: _transport,
+                onChanged: (v) => setState(() {
+                  _transport = v;
+                  if (_useTls && !_tlsAvailable()) _useTls = false;
+                }),
+              ),
+              const SizedBox(height: 12),
+
+              // TLS toggle row
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B1B1F),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock_outline,
+                        size: 22, color: AppColors.textSecondary),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'TLS',
+                        style: TextStyle(
+                            color: AppColors.textPrimary, fontSize: 15),
+                      ),
+                    ),
+                    Switch(
+                      value: _useTls,
+                      onChanged: _tlsAvailable()
+                          ? (v) => setState(() => _useTls = v)
+                          : null,
+                      activeColor: Colors.white,
+                      activeTrackColor: const Color(0xFF34C759),
+                      inactiveTrackColor: AppColors.border,
+                      inactiveThumbColor: Colors.white,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Status line
+              if (_optionsLoading) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Fetching server options…',
+                      style: TextStyle(
+                          color: AppColors.textSecondary, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ] else if (_optionsError != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _optionsError!,
+                  style: const TextStyle(
+                      color: AppColors.statusRed, fontSize: 12),
+                ),
+              ] else if (_serverOptions != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Available: ${_serverOptions!.availableLabels().join(", ")}'
+                  '${_serverOptionsAt != null ? " (cached)" : ""}',
+                  style: const TextStyle(
+                      color: AppColors.textSecondary, fontSize: 12),
+                ),
+              ],
+
+              const SizedBox(height: 24),
+              _SheetBtn(label: 'Save Account', onTap: _save),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
