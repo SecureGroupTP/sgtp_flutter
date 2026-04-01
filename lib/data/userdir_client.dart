@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import '../core/app_logger.dart';
+import '../core/sgtp_server_options.dart';
 
 const _tag = 'UDIR';
 
@@ -80,6 +81,7 @@ class UserDirClient {
   final _pending = <Completer<Uint8List?>>[];
   StreamController<UserDirMeta>? _notifyCtrl;
   var _closed = false;
+  int _bannerBytesRemaining = SgtpServerOptions.wireBytesLength;
 
   UserDirClient({required this.host, required this.port});
 
@@ -116,7 +118,22 @@ class UserDirClient {
   }
 
   void _onData(List<int> data) {
-    _buf.addAll(data);
+    final hex = data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+    AppLogger.d('← RAW  ${data.length}B: $hex', tag: _tag);
+
+    var start = 0;
+    if (_bannerBytesRemaining > 0) {
+      final skip = data.length.clamp(0, _bannerBytesRemaining);
+      _bannerBytesRemaining -= skip;
+      start = skip;
+      AppLogger.d(
+        'BANNER skip ${skip}B  remaining=${_bannerBytesRemaining}B',
+        tag: _tag,
+      );
+      if (start >= data.length) return;
+    }
+
+    _buf.addAll(data.sublist(start));
     _processBuffer();
   }
 
@@ -124,6 +141,10 @@ class UserDirClient {
     while (_buf.length >= 4) {
       final frameLen =
           (_buf[0] << 24) | (_buf[1] << 16) | (_buf[2] << 8) | _buf[3];
+      AppLogger.d(
+          'PARSE buf=${_buf.length}B  frameLen=$frameLen  '
+          'need=${4 + frameLen}B',
+          tag: _tag);
       if (_buf.length < 4 + frameLen) break;
       final frame = Uint8List.fromList(_buf.sublist(4, 4 + frameLen));
       _buf.removeRange(0, 4 + frameLen);
