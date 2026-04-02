@@ -24,6 +24,7 @@ dependencies:
   pretty_qr_code: ^3.5.0
   image: ^4.5.4
   image_picker: ^1.1.2
+  http: ^1.2.2
   window_manager: ^0.4.3
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3

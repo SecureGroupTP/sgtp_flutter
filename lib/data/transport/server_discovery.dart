@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:io';
 
 import '../../core/sgtp_server_options.dart';
+import 'server_discovery_http_client.dart';
 
 class SgtpServerDiscovery {
   static final _ipv4Re = RegExp(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$');
@@ -40,25 +40,10 @@ class SgtpServerDiscovery {
       port: port,
       path: '/sgtp/discovery',
     );
-    final client = HttpClient()
-      ..connectionTimeout = timeout
-      ..badCertificateCallback = (_, __, ___) => true; // accept self-signed
-
-    try {
-      final req = await client.getUrl(uri).timeout(timeout);
-      req.headers.set('Accept', 'application/json');
-      final res = await req.close().timeout(timeout);
-      if (res.statusCode != 200) {
-        await res.drain<void>();
-        throw HttpException('HTTP ${res.statusCode}', uri: uri);
-      }
-      final body = await res
-          .transform(const SystemEncoding().decoder)
-          .join()
-          .timeout(timeout);
-      return SgtpServerOptions.fromJsonString(body);
-    } finally {
-      client.close(force: true);
+    final res = await httpGetDiscovery(uri, timeout: timeout);
+    if (res.statusCode != 200) {
+      throw StateError('Discovery HTTP ${res.statusCode} for $uri');
     }
+    return SgtpServerOptions.fromJsonString(res.body);
   }
 }
