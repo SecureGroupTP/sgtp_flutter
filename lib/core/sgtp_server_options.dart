@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'sgtp_transport.dart';
@@ -33,6 +34,32 @@ class SgtpServerOptions {
   });
 
   static const int wireBytesLength = 25;
+
+  static SgtpServerOptions fromJson(Map<String, dynamic> json) {
+    final ports = (json['ports'] as Map<String, dynamic>?) ?? {};
+    final enabled = (json['enabled'] as Map<String, dynamic>?) ?? {};
+
+    int p(String key) => (ports[key] as num?)?.toInt() ?? 0;
+    bool e(String key) => (enabled[key] as bool?) ?? false;
+
+    return SgtpServerOptions(
+      tcp: e('tcp'),
+      tcpTls: e('tcp_tls'),
+      http: e('http'),
+      httpTls: e('http_tls'),
+      websocket: e('ws'),
+      websocketTls: e('ws_tls'),
+      tcpPort: p('tcp'),
+      tcpTlsPort: p('tcp_tls'),
+      httpPort: p('http'),
+      httpTlsPort: p('http_tls'),
+      websocketPort: p('ws'),
+      websocketTlsPort: p('ws_tls'),
+    );
+  }
+
+  static SgtpServerOptions fromJsonString(String body) =>
+      fromJson(json.decode(body) as Map<String, dynamic>);
 
   static SgtpServerOptions fromBytes(Uint8List bytes) {
     if (bytes.length != wireBytesLength) {

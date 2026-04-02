@@ -374,11 +374,12 @@ class SgtpClient {
     try {
       _ephemeralX25519 = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
-      final (host, discoveryPort) = _parseHostPortOrThrow(_config.serverAddr);
+      final (host, _) = _parseHostPortOrThrow(_config.serverAddr);
 
       SgtpServerOptions? options;
       try {
-        options = await SgtpServerDiscovery.discover(host, discoveryPort);
+        final result = await SgtpServerDiscovery.discover(host);
+        options = result.opts;
         final nodeId = (_config.nodeId ?? '').trim();
         if (nodeId.isNotEmpty) {
           await SettingsRepository().saveNodeServerOptions(nodeId, options);

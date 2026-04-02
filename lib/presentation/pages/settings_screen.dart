@@ -126,6 +126,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Load nodes first so we know which account is active.
     final nodes = await _settings.loadNodes();
     unawaited(_logCachedDiscovery(nodes));
+    for (final node in nodes) {
+      unawaited(_runDiscoveryForNode(node));
+    }
     final preferredNode = await _settings.loadPreferredNode();
     final preferredId =
         preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
@@ -1064,6 +1067,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Nodes ────────────────────────────────────────────────────────────────
 
+  Future<void> _runDiscoveryForNode(NodeConfig node) async {
+    try {
+      final (:opts, :port, :tls) =
+          await SgtpServerDiscovery.discover(node.host);
+      await _settings.saveNodeServerOptions(node.id, opts);
+      final labels = [
+        if (opts.tcp) 'TCP:${opts.tcpPort}',
+        if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
+        if (opts.http) 'HTTP:${opts.httpPort}',
+        if (opts.httpTls) 'HTTP+TLS:${opts.httpTlsPort}',
+        if (opts.websocket) 'WebSocket:${opts.websocketPort}',
+        if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
+      ];
+      AppLogger.i(
+          'Discovery [${node.name}] ${node.host} via '
+          '${tls ? 'https' : 'http'}:$port: ${labels.join(", ")}',
+          tag: 'DISC');
+    } catch (e) {
+      AppLogger.w(
+          'Discovery [${node.name}] ${node.host}: failed — $e', tag: 'DISC');
+    }
+  }
+
   Future<void> _logCachedDiscovery(List<NodeConfig> nodes) async {
     if (nodes.isEmpty) {
       AppLogger.i('Discovery cache: no accounts configured', tag: 'DISC');
@@ -1138,6 +1164,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settings.upsertNode(node);
     // Pre-seed nickname with the account name so the profile field isn't blank
     await _settings.saveUserNicknameForNode(node.id, node.name);
+    unawaited(_runDiscoveryForNode(node));
     await _reloadNodes();
     _tryApplyConfig();
     if (!mounted) return;
@@ -1156,6 +1183,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final updated = await _openNodeEditor(existing: node);
     if (updated == null) return;
     await _settings.upsertNode(updated);
+    unawaited(_runDiscoveryForNode(updated));
     await _reloadNodes();
     _tryApplyConfig();
   }
@@ -2825,7 +2853,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     _useTls = e?.useTls ?? false;
 
     _hostCtrl.addListener(_scheduleFetch);
-    _chatCtrl.addListener(_scheduleFetch);
 
     if (e != null) unawaited(_loadCachedOptions());
   }
@@ -2852,11 +2879,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
         .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
         .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
         .trim();
-    final discoveryPort = int.tryParse(_chatCtrl.text.trim());
-    if (host.isEmpty ||
-        discoveryPort == null ||
-        discoveryPort <= 0 ||
-        discoveryPort > 65535) return;
+    if (host.isEmpty) return;
 
     if (!mounted) return;
     setState(() {
@@ -2864,11 +2887,16 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       _optionsError = null;
     });
     try {
-      final opts = await SgtpServerDiscovery.discover(host, discoveryPort);
+      final (:opts, :port, tls: _) =
+          await SgtpServerDiscovery.discover(host);
       await widget.settings.saveNodeServerOptions(widget.baseId, opts);
       final savedAt =
           await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
       if (!mounted) return;
+      // Auto-fill chat port with the discovered port if field is empty.
+      if (_chatCtrl.text.trim().isEmpty) {
+        _chatCtrl.text = port.toString();
+      }
       setState(() {
         _serverOptions = opts;
         _serverOptionsAt = savedAt ?? DateTime.now();

@@ -1,12 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
 import '../core/app_logger.dart';
 import '../core/sgtp_server_options.dart';
+import '../core/sgtp_transport.dart';
+import '../domain/entities/node.dart';
+import 'transport/http_sgtp_transport.dart';
+import 'transport/sgtp_transport.dart';
+import 'transport/tcp_sgtp_transport.dart';
+import 'transport/websocket_sgtp_transport.dart';
+
+export 'transport/sgtp_transport.dart' show SgtpTransport;
 
 const _tag = 'UDIR';
 
@@ -65,75 +72,98 @@ class UserDirProfile extends UserDirMeta {
 
 /// Binary protocol client for the SGTP user directory service.
 ///
-/// The userdir is multiplexed on the same TCP port as the chat relay.
-/// A client signals userdir intent by sending exactly 32 zero bytes
-/// before the first protocol frame.
+/// Transport-agnostic: works over any [SgtpTransport] (TCP, WebSocket, …).
+/// The userdir multiplexing signal is 32 zero bytes sent immediately after
+/// [connect]; the relay server routes the connection to the user directory
+/// upon receiving them.
 ///
 /// All frames are: u32 frame_len (big-endian) | u8 msg_type | payload.
 /// Requests are sequential (no concurrent in-flight messages).
 /// NOTIFY (0x86) is unsolicited and handled via [notifyStream].
 class UserDirClient {
-  final String host;
-  final int port;
+  /// Human-readable label used in log output (e.g. "tcp://host:port").
+  final String label;
+  final SgtpTransport _transport;
 
-  Socket? _socket;
   final _buf = <int>[];
   final _pending = <Completer<Uint8List?>>[];
   StreamController<UserDirMeta>? _notifyCtrl;
+  StreamSubscription<Uint8List>? _sub;
   var _closed = false;
-  int _bannerBytesRemaining = SgtpServerOptions.wireBytesLength;
 
-  UserDirClient({required this.host, required this.port});
+  UserDirClient({required SgtpTransport transport, required this.label})
+      : _transport = transport;
+
+  /// Creates a [UserDirClient] for the given [node] using its configured
+  /// transport and TLS settings. Returns null if no suitable transport is
+  /// available in [opts] (run discovery first).
+  static UserDirClient? forNode(NodeConfig node, SgtpServerOptions opts) {
+    final useTls = node.useTls;
+    // Use the user's selected transport; fall back to TCP if unavailable.
+    final preferred = node.transport;
+    final family = opts.supports(preferred, tls: useTls)
+        ? preferred
+        : (opts.supports(SgtpTransportFamily.tcp, tls: useTls)
+            ? SgtpTransportFamily.tcp
+            : null);
+    if (family == null) return null;
+
+    final port = opts.portFor(family, tls: useTls);
+    if (port <= 0) return null;
+
+    final scheme = switch (family) {
+      SgtpTransportFamily.tcp => useTls ? 'tcps' : 'tcp',
+      SgtpTransportFamily.websocket => useTls ? 'wss' : 'ws',
+      SgtpTransportFamily.http => useTls ? 'https' : 'http',
+    };
+    final transport = switch (family) {
+      SgtpTransportFamily.tcp =>
+        TcpSgtpTransport(host: node.host, port: port, useTls: useTls),
+      SgtpTransportFamily.websocket =>
+        WebSocketSgtpTransport(host: node.host, port: port, useTls: useTls),
+      SgtpTransportFamily.http =>
+        HttpSgtpTransport(host: node.host, port: port, useTls: useTls),
+    };
+    return UserDirClient(
+        transport: transport, label: '$scheme://${node.host}:$port');
+  }
 
   Stream<UserDirMeta> get notifyStream {
     _notifyCtrl ??= StreamController<UserDirMeta>.broadcast();
     return _notifyCtrl!.stream;
   }
 
-  /// Connect to the relay port and send the 32-byte zero magic prefix.
+  /// Connect via the underlying transport and send the 32-byte zero magic
+  /// prefix that signals userdir intent to the relay server.
   Future<void> connect() async {
-    AppLogger.i('Connecting to $host:$port', tag: _tag);
-    _socket = await Socket.connect(host, port,
-        timeout: const Duration(seconds: 10));
-    _socket!.add(Uint8List(32)); // userdir routing magic
-    AppLogger.d('→ OUTBOUND  MAGIC          32B (zero routing prefix)', tag: _tag);
-    _socket!.listen(
+    AppLogger.i('Connecting to $label', tag: _tag);
+    await _transport.connect();
+
+    _sub = _transport.inbound.listen(
       _onData,
       onError: (e) {
-        AppLogger.e('Disconnected from $host:$port — socket error: $e',
-            tag: _tag);
+        AppLogger.e('$label — transport error: $e', tag: _tag);
         _fail();
       },
       onDone: () {
         if (!_closed) {
-          AppLogger.w(
-              'Disconnected from $host:$port — server closed the connection',
-              tag: _tag);
+          AppLogger.w('$label — server closed the connection', tag: _tag);
         }
         _fail();
       },
       cancelOnError: true,
     );
-    AppLogger.i('Connected to $host:$port', tag: _tag);
+
+    await _transport.send(Uint8List(32)); // userdir routing magic
+    AppLogger.d('→ OUTBOUND  MAGIC          32B (zero routing prefix)',
+        tag: _tag);
+    AppLogger.i('Connected to $label', tag: _tag);
   }
 
-  void _onData(List<int> data) {
+  void _onData(Uint8List data) {
     final hex = data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
     AppLogger.d('← RAW  ${data.length}B: $hex', tag: _tag);
-
-    var start = 0;
-    if (_bannerBytesRemaining > 0) {
-      final skip = data.length.clamp(0, _bannerBytesRemaining);
-      _bannerBytesRemaining -= skip;
-      start = skip;
-      AppLogger.d(
-        'BANNER skip ${skip}B  remaining=${_bannerBytesRemaining}B',
-        tag: _tag,
-      );
-      if (start >= data.length) return;
-    }
-
-    _buf.addAll(data.sublist(start));
+    _buf.addAll(data);
     _processBuffer();
   }
 
@@ -205,7 +235,7 @@ class UserDirClient {
   }
 
   Future<Uint8List?> _send(int msgType, Uint8List payload) async {
-    if (_closed || _socket == null) return null;
+    if (_closed || !_transport.isConnected) return null;
 
     final body = Uint8List(1 + payload.length);
     body[0] = msgType;
@@ -226,7 +256,7 @@ class UserDirClient {
 
     final c = Completer<Uint8List?>();
     _pending.add(c);
-    _socket!.add(frame);
+    await _transport.send(frame);
 
     return c.future.timeout(const Duration(seconds: 15), onTimeout: () {
       AppLogger.w('${_msgName(msgType)} timed out', tag: _tag);
@@ -237,7 +267,7 @@ class UserDirClient {
 
   /// Registers (or updates) the caller's own profile on the server.
   ///
-  /// [username] must match `^@[A-Za-z0-9_]{1,32}$`.
+  /// [username] is optional; pass null to omit it.
   /// The payload is signed with [identityKeyPair] using Ed25519.
   Future<bool> register({
     required String? username,
@@ -284,8 +314,7 @@ class UserDirClient {
     final toSign = Uint8List(1 + payloadSize - 64);
     toSign[0] = 0x01; // msg_type
     toSign.setRange(1, toSign.length, payload.sublist(0, payloadSize - 64));
-    final sig =
-        await Ed25519().sign(toSign, keyPair: identityKeyPair);
+    final sig = await Ed25519().sign(toSign, keyPair: identityKeyPair);
     payload.setRange(payloadSize - 64, payloadSize, sig.bytes);
 
     AppLogger.d(
@@ -309,7 +338,8 @@ class UserDirClient {
   /// Fetches lightweight metadata (no avatar bytes) for [pubkey].
   /// Returns null on error or if the profile is not found.
   Future<UserDirMeta?> getMeta(Uint8List pubkey) async {
-    final pk8 = pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
+    final pk8 =
+        pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
     AppLogger.d('GET_META pubkey=$pk8…', tag: _tag);
     final payload = Uint8List(33);
     payload[0] = 1; // version
@@ -326,7 +356,8 @@ class UserDirClient {
 
   /// Fetches the full profile including avatar bytes for [pubkey].
   Future<UserDirProfile?> getProfile(Uint8List pubkey) async {
-    final pk8 = pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
+    final pk8 =
+        pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
     AppLogger.d('GET_PROFILE pubkey=$pk8…', tag: _tag);
     final payload = Uint8List(33);
     payload[0] = 1; // version
@@ -383,8 +414,7 @@ class UserDirClient {
     final qBytes = utf8.encode(q);
     final safeLimit = limit.clamp(1, 100).toInt();
 
-    // Common wire format used by server:
-    // version(1) + query_len(u16) + query + limit(u16)
+    // Common wire format: version(1) + query_len(u16) + query + limit(u16)
     final payload = Uint8List(1 + 2 + qBytes.length + 2);
     var o = 0;
     payload[o++] = 1; // version
@@ -482,33 +512,6 @@ class UserDirClient {
     }
   }
 
-  /// Returns " code=0xNNNN msg" if [resp] is an ERROR frame, otherwise "".
-  String _errorDetail(Uint8List? resp) {
-    if (resp == null || resp.isEmpty || resp[0] != 0x82) return '';
-    try {
-      final payload = resp.sublist(1);
-      if (payload.length < 4) return '';
-      final code = (payload[0] << 8) | payload[1];
-      final msgLen = (payload[2] << 8) | payload[3];
-      final msg =
-          msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
-      return '  code=0x${code.toRadixString(16).padLeft(4, '0')} "$msg"';
-    } catch (_) {
-      return '';
-    }
-  }
-
-  int _readU64(Uint8List data, int offset) {
-    var result = 0;
-    for (var i = 0; i < 8; i++) {
-      result = (result << 8) | data[offset + i];
-    }
-    return result;
-  }
-
-  int _readU16(Uint8List data, int offset) =>
-      (data[offset] << 8) | data[offset + 1];
-
   List<UserDirMeta> _parseSearchResults(Uint8List data) {
     // Fast-path: some servers may return a single META-like payload.
     final single = _parseMeta(data);
@@ -516,9 +519,8 @@ class UserDirClient {
 
     // SEARCH_RESULTS list format:
     // version(1) + count(u16) + count * entry
-    // entry is meta-like body without leading version byte:
-    // pubkey(32) + username_len(u16) + username + fullname_len(u16) + fullname
-    // + avatar_sha256(32) [+ updated_at(u64, optional on some servers)]
+    // entry: pubkey(32) + username_len(u16) + username + fullname_len(u16)
+    //        + fullname + avatar_sha256(32) [+ updated_at(u64, optional)]
     try {
       if (data.length < 3) return const [];
       var o = 0;
@@ -548,7 +550,6 @@ class UserDirClient {
         final avatarSha256 = Uint8List.fromList(data.sublist(o, o + 32));
         o += 32;
         var updatedAt = 0;
-        // Some server builds omit updatedAt in SEARCH_RESULTS entries.
         if (o + 8 <= data.length) {
           updatedAt = _readU64(data, o);
           o += 8;
@@ -568,11 +569,39 @@ class UserDirClient {
     }
   }
 
+  /// Returns " code=0xNNNN msg" if [resp] is an ERROR frame, otherwise "".
+  String _errorDetail(Uint8List? resp) {
+    if (resp == null || resp.isEmpty || resp[0] != 0x82) return '';
+    try {
+      final payload = resp.sublist(1);
+      if (payload.length < 4) return '';
+      final code = (payload[0] << 8) | payload[1];
+      final msgLen = (payload[2] << 8) | payload[3];
+      final msg =
+          msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
+      return '  code=0x${code.toRadixString(16).padLeft(4, '0')} "$msg"';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  int _readU64(Uint8List data, int offset) {
+    var result = 0;
+    for (var i = 0; i < 8; i++) {
+      result = (result << 8) | data[offset + i];
+    }
+    return result;
+  }
+
+  int _readU16(Uint8List data, int offset) =>
+      (data[offset] << 8) | data[offset + 1];
+
   void close() {
     if (_closed) return;
-    AppLogger.i('Disconnected from $host:$port — closed by client', tag: _tag);
+    AppLogger.i('$label — closed by client', tag: _tag);
     _closed = true;
-    _socket?.destroy();
+    _sub?.cancel();
+    _transport.close();
     _notifyCtrl?.close();
   }
 }

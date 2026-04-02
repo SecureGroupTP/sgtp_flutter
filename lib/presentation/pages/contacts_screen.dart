@@ -135,25 +135,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
-  Future<(String, int)?> _resolveUserDirEndpoint() async {
+  Future<UserDirClient?> _buildUserDirClient() async {
     final nodes = await _repo.loadNodes();
     final node = nodes.where((n) => n.id == widget.accountId).firstOrNull;
     if (node == null) return null;
-
     final opts = await _repo.loadNodeServerOptions(widget.accountId);
     if (opts == null) return null;
-
-    final useTls = node.useTls;
-    int? port;
-    if (!useTls && opts.tcp && opts.tcpPort > 0) {
-      port = opts.tcpPort;
-    } else if (useTls && opts.tcpTls && opts.tcpTlsPort > 0) {
-      port = opts.tcpTlsPort;
-    } else if (!useTls && opts.tcp) {
-      port = opts.tcpPort;
-    }
-    if (port == null || port <= 0) return null;
-    return (node.host, port);
+    return UserDirClient.forNode(node, opts);
   }
 
   Future<void> _searchOnServer(String normalizedUsername) async {
@@ -161,16 +149,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
     if (mounted) setState(() => _serverSearchHit = null);
 
     try {
-      final endpoint = await _resolveUserDirEndpoint();
-      if (endpoint == null) {
+      final client = await _buildUserDirClient();
+      if (client == null) {
         if (!mounted || reqId != _searchRequestId) return;
         setState(() {
           _serverSearchHit = null;
         });
         return;
       }
-
-      final client = UserDirClient(host: endpoint.$1, port: endpoint.$2);
       try {
         await client.connect();
         final items = await client.search(normalizedUsername, limit: 20);

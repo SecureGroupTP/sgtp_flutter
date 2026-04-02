@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../../core/app_logger.dart';
 import '../../core/sgtp_server_options.dart';
 import 'sgtp_transport.dart';
+
+const _tag = 'TCP';
 
 class TcpSgtpTransport implements SgtpTransport {
   final String host;
@@ -30,9 +33,41 @@ class TcpSgtpTransport implements SgtpTransport {
   @override
   Future<void> connect() async {
     if (_socket != null) return;
-    final s = useTls
-        ? await SecureSocket.connect(host, port)
-        : await Socket.connect(host, port);
+    AppLogger.d('Connecting to $host:$port (tls=$useTls)', tag: _tag);
+    Socket s;
+    try {
+      if (useTls) {
+        AppLogger.d('Starting TLS handshake with $host:$port', tag: _tag);
+        s = await SecureSocket.connect(
+          host,
+          port,
+          onBadCertificate: (cert) {
+            AppLogger.e(
+              'TLS cert rejected by Dart: subject="${cert.subject}" '
+              'issuer="${cert.issuer}" '
+              'valid=${cert.startValidity}–${cert.endValidity}',
+              tag: _tag,
+            );
+            return false;
+          },
+        );
+        final secure = s as SecureSocket;
+        AppLogger.d(
+          'TLS handshake OK: '
+          'cert-subject=${secure.peerCertificate?.subject ?? "none"}',
+          tag: _tag,
+        );
+      } else {
+        s = await Socket.connect(host, port);
+      }
+    } catch (e) {
+      AppLogger.e(
+        'Connect failed to $host:$port (tls=$useTls) [${e.runtimeType}]: $e',
+        tag: _tag,
+      );
+      rethrow;
+    }
+    AppLogger.d('Socket established $host:$port (tls=$useTls)', tag: _tag);
 
     // Reduce latency: send small frames immediately without Nagle buffering.
     try {
@@ -93,15 +128,16 @@ class TcpSgtpTransport implements SgtpTransport {
         }
       },
       onError: (e, st) {
+        AppLogger.e('Socket error on $host:$port (tls=$useTls): $e', tag: _tag);
         if (!headerDone.isCompleted) headerDone.completeError(e, st);
         _inbound.addError(e, st);
       },
       onDone: () {
         if (!headerDone.isCompleted) {
-          headerDone.completeError(StateError(
-              'TCP connection closed before the 25-byte discovery header '
-              'was received. Ensure the server is running and you are '
-              'connecting to the correct TCP relay port.'));
+          final err = StateError(
+              'Connection closed before 25-byte banner on $host:$port');
+          AppLogger.e('$err', tag: _tag);
+          headerDone.completeError(err);
         }
         if (!_inbound.isClosed) _inbound.close();
       },
@@ -109,13 +145,18 @@ class TcpSgtpTransport implements SgtpTransport {
     );
 
     // Wait up to 3 s for the server to send its discovery header.
-    await headerDone.future.timeout(
-      const Duration(seconds: 3),
-      onTimeout: () => throw TimeoutException(
-          'Server did not send the 25-byte discovery header within 3 s. '
-          'Check that the server is running and that multi.go serveTCP '
-          'sends the discovery response on every connection.'),
-    );
+    try {
+      await headerDone.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => throw TimeoutException(
+            'Banner timeout on $host:$port (tls=$useTls) after 3s'),
+      );
+    } catch (e) {
+      AppLogger.e('Banner wait failed on $host:$port (tls=$useTls): $e',
+          tag: _tag);
+      rethrow;
+    }
+    AppLogger.d('Banner received on $host:$port (tls=$useTls)', tag: _tag);
   }
 
   @override

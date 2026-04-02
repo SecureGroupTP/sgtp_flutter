@@ -8,12 +8,12 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/app_theme.dart';
-import '../../data/repositories/settings_repository.dart';
-import '../../data/userdir_client.dart';
+import '../../core/sgtp_transport.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
-import '../../core/sgtp_transport.dart';
+import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
+import '../../data/userdir_client.dart';
 import '../blocs/rooms/rooms_bloc.dart';
 import '../blocs/rooms/rooms_event.dart';
 import '../widgets/app_nav_bar.dart';
@@ -196,38 +196,31 @@ class _HomeScreenState extends State<HomeScreen> {
       AppLogger.w('UDIR skip: no accountId', tag: 'UDIR');
       return;
     }
-    final parts = _serverAddress.split(':');
-    if (parts.length < 2) {
-      AppLogger.w('UDIR skip: bad serverAddress "$_serverAddress"', tag: 'UDIR');
+    final repo = SettingsRepository();
+    final nodes = await repo.loadNodes();
+    final node = nodes.where((n) => n.id == _accountId).firstOrNull;
+    if (node == null) {
+      AppLogger.w('UDIR skip: node not found for accountId=$_accountId',
+          tag: 'UDIR');
       return;
     }
-    final host = parts.sublist(0, parts.length - 1).join(':');
-
-    // Userdir is multiplexed on the TCP relay port (not the discovery port).
-    // Look up the actual relay port from cached SgtpServerOptions.
-    final opts = await SettingsRepository().loadNodeServerOptions(_accountId);
-    final useTls = _config.useTls;
-    int? port;
-    if (opts != null) {
-      if (!useTls && opts.tcp && opts.tcpPort > 0) {
-        port = opts.tcpPort;
-      } else if (useTls && opts.tcpTls && opts.tcpTlsPort > 0) {
-        port = opts.tcpTlsPort;
-      } else if (!useTls && opts.tcp) {
-        port = opts.tcpPort;
-      }
-    }
-    if (port == null) {
+    final opts = await repo.loadNodeServerOptions(_accountId);
+    if (opts == null) {
       AppLogger.w(
-          'UDIR skip: no cached TCP port for "$_serverAddress" '
+          'UDIR skip: no cached server options for "$_serverAddress" '
           '(run discovery first)',
           tag: 'UDIR');
       return;
     }
 
-    AppLogger.i('UDIR connecting to $host:$port (relay port)', tag: 'UDIR');
+    final client = UserDirClient.forNode(node, opts);
+    if (client == null) {
+      AppLogger.w('UDIR skip: no usable transport (opts=$opts)', tag: 'UDIR');
+      return;
+    }
+
+    AppLogger.i('UDIR connecting via ${client.label}', tag: 'UDIR');
     try {
-      final client = UserDirClient(host: host, port: port);
       await client.connect();
       _userDirClient?.close();
       _userDirSub?.cancel();

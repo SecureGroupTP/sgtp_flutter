@@ -124,10 +124,10 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       emit(state.copyWith(optionsError: 'Enter server as host:port'));
       return;
     }
-    final (host, port) = parsed;
+    final (host, _) = parsed;
     emit(state.copyWith(isOptionsLoading: true, optionsError: null));
     try {
-      final opts = await SgtpServerDiscovery.discover(host, port);
+      final (:opts, port: _, tls: _) = await SgtpServerDiscovery.discover(host);
       final nodeId = state.nodeId.trim();
       if (nodeId.isNotEmpty) {
         await _settings.saveNodeServerOptions(nodeId, opts);
