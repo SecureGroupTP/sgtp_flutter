@@ -198,13 +198,16 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final repo = SettingsRepository();
     final nodes = await repo.loadNodes();
-    final node = nodes.where((n) => n.id == _accountId).firstOrNull;
+    final currentNodeId = (_config.nodeId ?? '').trim();
+    final node = currentNodeId.isNotEmpty
+        ? nodes.where((n) => n.id == currentNodeId).firstOrNull
+        : await repo.loadPreferredNode();
     if (node == null) {
-      AppLogger.w('UDIR skip: node not found for accountId=$_accountId',
+      AppLogger.w('UDIR skip: node not found (nodeId=$currentNodeId)',
           tag: 'UDIR');
       return;
     }
-    final opts = await repo.loadNodeServerOptions(_accountId);
+    final opts = await repo.loadNodeServerOptions(node.id);
     if (opts == null) {
       AppLogger.w(
           'UDIR skip: no cached server options for "$_serverAddress" '
@@ -452,7 +455,9 @@ class _AppStartScreenState extends State<AppStartScreen> {
     final settings = SettingsRepository();
     final lastAddr = await settings.getLastAddress() ?? '';
     final preferredNode = await settings.loadPreferredNode();
-    final accountId = preferredNode?.id ?? (await settings.loadLastNodeId()) ?? '';
+    final accountId = preferredNode?.effectiveAccountId ??
+        (await settings.loadLastNodeId()) ??
+        '';
     final chatServer =
         preferredNode?.chatAddress ?? (lastAddr.isEmpty ? 'localhost:7777' : lastAddr);
 
@@ -495,7 +500,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
         whitelist: whitelist,
         transport: preferredNode?.transport ?? SgtpTransportFamily.tcp,
         useTls: preferredNode?.useTls ?? false,
-        nodeId: accountId.trim().isEmpty ? null : accountId,
+        nodeId: preferredNode?.id,
         mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
       );
 

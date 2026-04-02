@@ -132,9 +132,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final preferredNode = await _settings.loadPreferredNode();
     final preferredId =
         preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
+    final preferredAccountId = preferredNode?.effectiveAccountId ??
+        (nodes.isNotEmpty ? nodes.first.effectiveAccountId : null);
 
-    if (preferredId != null && preferredId.trim().isNotEmpty) {
-      await _settings.migrateLegacyAccountDataToNodeIfNeeded(preferredId);
+    if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
+      await _settings.migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
     }
 
     if (mounted) {
@@ -146,8 +148,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     // Load account-scoped identity/profile/contacts for the active account.
-    if (preferredId != null && preferredId.trim().isNotEmpty) {
-      await _loadAccountData(preferredId, applyConfig: false);
+    if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
+      await _loadAccountData(preferredAccountId, applyConfig: false);
     } else {
       final lastAddr = await _settings.getLastAddress();
       if (lastAddr != null && _standaloneServerAddress.isEmpty) {
@@ -193,18 +195,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return result;
   }
 
-  Future<void> _loadAccountData(String nodeId,
+  Future<void> _loadAccountData(String accountId,
       {bool applyConfig = true}) async {
     // Profile (nickname + username + avatar)
-    final nickname = await _settings.loadUserNicknameForNode(nodeId);
-    final username = await _settings.loadUserUsernameForNode(nodeId);
-    final avatar = await _settings.loadUserAvatarForNode(nodeId);
+    final nickname = await _settings.loadUserNicknameForNode(accountId);
+    final username = await _settings.loadUserUsernameForNode(accountId);
+    final avatar = await _settings.loadUserAvatarForNode(accountId);
 
     // Identity key
     Uint8List? privBytes;
     String? privName;
     Uint8List? pubKey;
-    final savedKey = await _settings.loadPrivateKeyForNode(nodeId);
+    final savedKey = await _settings.loadPrivateKeyForNode(accountId);
     if (savedKey != null) {
       try {
         final parsed = parseOpenSshPrivateKey(savedKey.bytes);
@@ -215,7 +217,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     // Contacts (whitelist)
-    final entries = await _settings.loadWhitelistEntriesForNode(nodeId);
+    final entries = await _settings.loadWhitelistEntriesForNode(accountId);
 
     if (!mounted) return;
     setState(() {
@@ -223,8 +225,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _nicknameCtrl.text = nickname;
       _usernameCtrl.text = username;
       _userAvatar = avatar;
-      _avatarsByNodeId[nodeId] = avatar;
-      _nicknamesByNodeId[nodeId] = nickname;
+      for (final n in _nodes) {
+        if (n.effectiveAccountId == accountId) {
+          _avatarsByNodeId[n.id] = avatar;
+          _nicknamesByNodeId[n.id] = nickname;
+        }
+      }
 
       _privateKeyBytes = privBytes;
       _privateKeyPath = privName;
@@ -242,8 +248,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final nextAvatars = <String, Uint8List?>{};
     final nextNicks = <String, String>{};
     for (final n in nodes) {
-      nextAvatars[n.id] = await _settings.loadUserAvatarForNode(n.id);
-      nextNicks[n.id] = await _settings.loadUserNicknameForNode(n.id);
+      final accountId = n.effectiveAccountId;
+      nextAvatars[n.id] = await _settings.loadUserAvatarForNode(accountId);
+      nextNicks[n.id] = await _settings.loadUserNicknameForNode(accountId);
     }
     if (!mounted) return;
     setState(() {
@@ -259,8 +266,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Private key: browse ──────────────────────────────────────────────────
 
   Future<void> _pickPrivateKey() async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
     try {
       final result = await FilePicker.platform
           .pickFiles(type: FileType.any, withData: true, allowMultiple: false);
@@ -272,7 +279,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
       final parsed = parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(nodeId, bytes, file.name);
+      await _settings.savePrivateKeyForNode(accountId, bytes, file.name);
       setState(() {
         _privateKeyBytes = bytes;
         _privateKeyPath = file.name;
@@ -387,8 +394,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _importPrivateKeyFromClipboard() async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -425,7 +432,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final bytes = Uint8List.fromList(text.codeUnits);
       final parsed = parseOpenSshPrivateKey(bytes);
       await _settings.savePrivateKeyForNode(
-          nodeId, bytes, 'clipboard_identity');
+          accountId, bytes, 'clipboard_identity');
       if (!mounted) return;
       setState(() {
         _privateKeyBytes = bytes;
@@ -445,7 +452,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<bool> _pickPrivateKeyForAccount(String nodeId) async {
+  Future<bool> _pickPrivateKeyForAccount(String accountId) async {
     try {
       final result = await FilePicker.platform
           .pickFiles(type: FileType.any, withData: true, allowMultiple: false);
@@ -455,7 +462,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (bytes == null) return false;
       // Validate
       parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(nodeId, bytes, file.name);
+      await _settings.savePrivateKeyForNode(accountId, bytes, file.name);
       return true;
     } catch (_) {
       return false;
@@ -465,8 +472,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Private key: generate ────────────────────────────────────────────────
 
   Future<void> _generatePrivateKey() async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -500,7 +507,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Encode as OpenSSH private key
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
       const name = 'identity';
-      await _settings.savePrivateKeyForNode(nodeId, opensshBytes, name);
+      await _settings.savePrivateKeyForNode(accountId, opensshBytes, name);
 
       setState(() {
         _privateKeyBytes = opensshBytes;
@@ -524,7 +531,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<bool> _generatePrivateKeyForAccount(String nodeId) async {
+  Future<bool> _generatePrivateKeyForAccount(String accountId) async {
     try {
       final algorithm = Ed25519();
       final keyPair = await algorithm.newKeyPair();
@@ -532,27 +539,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final privBytes = await keyPair.extractPrivateKeyBytes();
       final pubBytes = Uint8List.fromList(pubKey.bytes);
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      await _settings.savePrivateKeyForNode(nodeId, opensshBytes, 'identity');
+      await _settings.savePrivateKeyForNode(accountId, opensshBytes, 'identity');
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  Future<bool> _pastePrivateKeyForAccount(String nodeId, String text) async {
+  Future<bool> _pastePrivateKeyForAccount(String accountId, String text) async {
     try {
       final bytes = Uint8List.fromList(text.codeUnits);
       // Validate
       parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(nodeId, bytes, 'pasted_identity');
+      await _settings.savePrivateKeyForNode(accountId, bytes, 'pasted_identity');
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  Future<bool> _promptPrivateKeyForAccount(String nodeId) async {
-    final existing = await _settings.loadPrivateKeyForNode(nodeId);
+  Future<bool> _promptPrivateKeyForAccount(String accountId) async {
+    final existing = await _settings.loadPrivateKeyForNode(accountId);
     if (existing != null) return true;
 
     bool saved = false;
@@ -609,7 +616,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: 'Browse file',
                     icon: Icons.folder_open_outlined,
                     onTap: () async {
-                      final ok = await _pickPrivateKeyForAccount(nodeId);
+                      final ok = await _pickPrivateKeyForAccount(accountId);
                       if (!ctx.mounted) return;
                       if (ok) {
                         saved = true;
@@ -629,7 +636,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.key_outlined,
                     secondary: true,
                     onTap: () async {
-                      final ok = await _generatePrivateKeyForAccount(nodeId);
+                      final ok = await _generatePrivateKeyForAccount(accountId);
                       if (!ctx.mounted) return;
                       if (ok) {
                         saved = true;
@@ -692,7 +699,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: () async {
                       final text = pasteCtrl.text.trim();
                       if (text.isEmpty) return;
-                      final ok = await _pastePrivateKeyForAccount(nodeId, text);
+                      final ok = await _pastePrivateKeyForAccount(accountId, text);
                       if (!ctx.mounted) return;
                       if (ok) {
                         saved = true;
@@ -802,9 +809,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _setError('No valid ed25519 keys found in folder');
         return;
       }
-      final nodeId = _preferredNodeId;
-      if (nodeId == null || nodeId.trim().isEmpty) return;
-      await _settings.saveWhitelistEntriesForNode(nodeId, entries);
+      final accountId = _activeAccountId();
+      if (accountId == null) return;
+      await _settings.saveWhitelistEntriesForNode(accountId, entries);
       setState(() {
         _wlEntries = entries;
         _nicknames = _buildNicknames(entries);
@@ -843,9 +850,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       for (final e in entries) {
         if (!combined.any((x) => x.hexKey == e.hexKey)) combined.add(e);
       }
-      final nodeId = _preferredNodeId;
-      if (nodeId == null || nodeId.trim().isEmpty) return;
-      await _settings.saveWhitelistEntriesForNode(nodeId, combined);
+      final accountId = _activeAccountId();
+      if (accountId == null) return;
+      await _settings.saveWhitelistEntriesForNode(accountId, combined);
       setState(() {
         _wlEntries = combined;
         _nicknames = _buildNicknames(combined);
@@ -905,9 +912,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     final combined = [..._wlEntries, entry];
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
-    await _settings.saveWhitelistEntriesForNode(nodeId, combined);
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    await _settings.saveWhitelistEntriesForNode(accountId, combined);
     setState(() {
       _wlEntries = combined;
       _nicknames = _buildNicknames(combined);
@@ -950,9 +957,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (newName == null || newName.isEmpty) return;
     final updated = List<WhitelistEntry>.from(_wlEntries);
     updated[index] = entry.copyWithName(newName);
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
-    await _settings.saveWhitelistEntriesForNode(nodeId, updated);
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    await _settings.saveWhitelistEntriesForNode(accountId, updated);
     setState(() {
       _wlEntries = updated;
       _nicknames = _buildNicknames(updated);
@@ -964,9 +971,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _removeEntry(int index) async {
     final newList = List<WhitelistEntry>.from(_wlEntries)..removeAt(index);
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
-    await _settings.saveWhitelistEntriesForNode(nodeId, newList);
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    await _settings.saveWhitelistEntriesForNode(accountId, newList);
     setState(() {
       _wlEntries = newList;
       _nicknames = _buildNicknames(newList);
@@ -977,8 +984,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── User avatar ───────────────────────────────────────────────────────────
 
   Future<void> _pickUserAvatar() async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
     final picker = ImagePicker();
     final file = await picker.pickImage(
       source: ImageSource.gallery,
@@ -988,13 +995,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (file == null) return;
     final bytes = await file.readAsBytes();
-    await _settings.saveUserAvatarForNode(nodeId, bytes);
+    await _settings.saveUserAvatarForNode(accountId, bytes);
     setState(() {
       _userAvatar = bytes;
       _error = null;
     });
     widget.onUserAvatarChanged?.call(bytes);
-    _avatarsByNodeId[nodeId] = bytes;
+    final activeNode = _activeNode();
+    if (activeNode != null) {
+      _avatarsByNodeId[activeNode.id] = bytes;
+    }
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Avatar saved')),
@@ -1003,12 +1013,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _removeUserAvatar() async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
-    await _settings.clearUserAvatarForNode(nodeId);
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    await _settings.clearUserAvatarForNode(accountId);
     setState(() => _userAvatar = null);
     widget.onUserAvatarChanged?.call(null);
-    _avatarsByNodeId[nodeId] = null;
+    final activeNode = _activeNode();
+    if (activeNode != null) {
+      _avatarsByNodeId[activeNode.id] = null;
+    }
   }
 
   // ── Config apply ──────────────────────────────────────────────────────────
@@ -1020,18 +1033,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final parsed = parseOpenSshPrivateKey(_privateKeyBytes!);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
-      final accountId = _preferredNodeId;
-      if (accountId == null || accountId.trim().isEmpty) return;
       final node = _activeNode();
+      if (node == null) return;
+      final accountId = node.effectiveAccountId;
+      if (accountId.trim().isEmpty) return;
       final newConfig = SgtpConfig(
         serverAddr: server,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
         whitelist: whitelist,
-        transport: node?.transport ?? SgtpTransportFamily.tcp,
-        useTls: node?.useTls ?? false,
-        nodeId: accountId,
+        transport: node.transport,
+        useTls: node.useTls,
+        nodeId: node.id,
         pingIntervalSeconds: _pingIntervalSeconds,
         mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
@@ -1052,6 +1066,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     if (_nodes.isNotEmpty) return _nodes.first;
     return null;
+  }
+
+  String? _activeAccountId() {
+    final node = _activeNode();
+    if (node == null) return null;
+    final id = node.effectiveAccountId.trim();
+    return id.isEmpty ? null : id;
   }
 
   String _effectiveServerAddress() {
@@ -1135,7 +1156,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     unawaited(_refreshProfilesCache(nodes));
   }
 
-  Future<NodeConfig?> _openNodeEditor({NodeConfig? existing}) async {
+  Future<NodeConfig?> _openNodeEditor(
+      {NodeConfig? existing, String? accountIdForNew}) async {
     final baseId = existing?.id ?? uuidBytesToHex(generateUUIDv7());
     NodeConfig? result;
     await showModalBottomSheet<void>(
@@ -1148,6 +1170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (ctx) => _NodeEditorSheet(
         existing: existing,
         baseId: baseId,
+        accountIdForNew: accountIdForNew,
         settings: _settings,
         onSave: (node) {
           result = node;
@@ -1163,12 +1186,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (node == null) return;
     await _settings.upsertNode(node);
     // Pre-seed nickname with the account name so the profile field isn't blank
-    await _settings.saveUserNicknameForNode(node.id, node.name);
+    await _settings.saveUserNicknameForNode(node.effectiveAccountId, node.name);
     unawaited(_runDiscoveryForNode(node));
     await _reloadNodes();
     _tryApplyConfig();
     if (!mounted) return;
-    final ok = await _promptPrivateKeyForAccount(node.id);
+    final ok = await _promptPrivateKeyForAccount(node.effectiveAccountId);
     if (!mounted) return;
     if (ok) {
       await _selectAccount(node);
@@ -1177,6 +1200,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SnackBar(content: Text('Account added without private key')),
       );
     }
+  }
+
+  Future<void> _addServerForCurrentAccount() async {
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    final node = await _openNodeEditor(accountIdForNew: accountId);
+    if (node == null) return;
+    await _settings.upsertNode(node);
+    unawaited(_runDiscoveryForNode(node));
+    await _reloadNodes();
+    _tryApplyConfig();
+    if (!mounted) return;
+    await _selectAccount(node);
   }
 
   Future<void> _editNode(NodeConfig node) async {
@@ -1292,19 +1328,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Profile section ───────────────────────────────────────────────────────
 
   Future<void> _saveNickname(String value) async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
     final next = value.trim();
-    await _settings.saveUserNicknameForNode(nodeId, next);
+    await _settings.saveUserNicknameForNode(accountId, next);
     if (!mounted) return;
     setState(() => _nickname = next);
-    _nicknamesByNodeId[nodeId] = next;
+    final activeNode = _activeNode();
+    if (activeNode != null) {
+      _nicknamesByNodeId[activeNode.id] = next;
+    }
     widget.onNicknameChanged?.call(next);
   }
 
   Future<void> _saveUsername(String value) async {
-    final nodeId = _preferredNodeId;
-    if (nodeId == null || nodeId.trim().isEmpty) return;
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
     // Strip leading @ if user typed it, sanitize
     final stripped = value.trim().replaceFirst(RegExp(r'^@'), '');
     final sanitized = stripped
@@ -1313,7 +1352,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           0,
           stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
         );
-    await _settings.saveUserUsernameForNode(nodeId, sanitized);
+    await _settings.saveUserUsernameForNode(accountId, sanitized);
     if (!mounted) return;
     widget.onUsernameChanged?.call(sanitized);
   }
@@ -1409,7 +1448,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted || data == null) return;
     final node = await _importNodeFromShareData(data);
     if (!mounted || node == null) return;
-    final ok = await _promptPrivateKeyForAccount(node.id);
+    final ok = await _promptPrivateKeyForAccount(node.effectiveAccountId);
     if (!mounted) return;
     if (ok) {
       await _selectAccount(node);
@@ -1495,7 +1534,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (node != null) {
                             Navigator.pop(ctx);
                             final ok =
-                                await _promptPrivateKeyForAccount(node.id);
+                                await _promptPrivateKeyForAccount(
+                                    node.effectiveAccountId);
                             if (!mounted) return;
                             if (ok) {
                               await _selectAccount(node);
@@ -1540,7 +1580,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               content:
                                   Text('Node imported: ${node.chatAddress}')),
                         );
-                        final ok = await _promptPrivateKeyForAccount(node.id);
+                        final ok =
+                            await _promptPrivateKeyForAccount(node.effectiveAccountId);
                         if (!mounted) return;
                         if (ok) {
                           await _selectAccount(node);
@@ -1998,7 +2039,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _accountsExpanded = false;
     });
     await _settings.setLastNodeId(node.id);
-    await _loadAccountData(node.id, applyConfig: true);
+    await _loadAccountData(node.effectiveAccountId, applyConfig: true);
   }
 
   void _showAddAccountSheet() {
@@ -2044,6 +2085,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _addNode();
                 },
               ),
+              if (_activeAccountId() != null) ...[
+                const SizedBox(height: 12),
+                _AddAccountOption(
+                  icon: Icons.hub_outlined,
+                  title: 'Add Server To Current Account',
+                  subtitle:
+                      'Use the same profile/key on another server connection',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _addServerForCurrentAccount();
+                  },
+                ),
+              ],
             ],
           ),
         ),
@@ -2087,7 +2141,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _ActionButton(
               icon: Icons.content_paste_outlined,
               label: 'Import',
-              onPressed: (_isLoading || _preferredNodeId == null)
+              onPressed: (_isLoading || _activeAccountId() == null)
                   ? null
                   : _importPrivateKeyFromClipboard,
             ),
@@ -2811,12 +2865,14 @@ class _OrDivider extends StatelessWidget {
 class _NodeEditorSheet extends StatefulWidget {
   final NodeConfig? existing;
   final String baseId;
+  final String? accountIdForNew;
   final SettingsRepository settings;
   final void Function(NodeConfig) onSave;
 
   const _NodeEditorSheet({
     required this.existing,
     required this.baseId,
+    this.accountIdForNew,
     required this.settings,
     required this.onSave,
   });
@@ -2939,6 +2995,8 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     }
     widget.onSave(NodeConfig(
       id: widget.baseId,
+      accountId:
+          widget.existing?.effectiveAccountId ?? widget.accountIdForNew ?? '',
       name: name,
       host: host,
       chatPort: chatPort!,

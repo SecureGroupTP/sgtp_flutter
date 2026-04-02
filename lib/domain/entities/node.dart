@@ -2,6 +2,7 @@ import '../../core/sgtp_transport.dart';
 
 class NodeConfig {
   final String id;
+  final String accountId; // scoped profile/identity id
   final String name;
   final String host; // domain or IP, without scheme
   final int chatPort;
@@ -11,6 +12,7 @@ class NodeConfig {
 
   const NodeConfig({
     required this.id,
+    this.accountId = '',
     required this.name,
     required this.host,
     required this.chatPort,
@@ -19,10 +21,16 @@ class NodeConfig {
     this.useTls = false,
   });
 
+  String get effectiveAccountId {
+    final v = accountId.trim();
+    return v.isEmpty ? id : v;
+  }
+
   String get chatAddress => '$host:$chatPort';
 
   NodeConfig copyWith({
     String? id,
+    String? accountId,
     String? name,
     String? host,
     int? chatPort,
@@ -32,6 +40,7 @@ class NodeConfig {
   }) {
     return NodeConfig(
       id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
       name: name ?? this.name,
       host: host ?? this.host,
       chatPort: chatPort ?? this.chatPort,
@@ -43,6 +52,7 @@ class NodeConfig {
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        if (accountId.trim().isNotEmpty) 'accountId': accountId.trim(),
         'name': name,
         'host': host,
         'chatPort': chatPort,
@@ -54,6 +64,7 @@ class NodeConfig {
   static NodeConfig fromJson(Map<String, dynamic> json) {
     return NodeConfig(
       id: json['id'] as String,
+      accountId: (json['accountId'] as String?)?.trim() ?? '',
       name: (json['name'] as String?)?.trim().isNotEmpty == true
           ? (json['name'] as String).trim()
           : 'Node',

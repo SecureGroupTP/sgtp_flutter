@@ -26,11 +26,11 @@ extension SgtpTransportFamilyCodec on SgtpTransportFamily {
     };
   }
 
-  /// Returns the transport family to use, falling back to WebSocket on web
+  /// Returns the transport family to use, falling back to HTTP on web
   /// if TCP was selected (since dart:io is unavailable there).
   static SgtpTransportFamily resolve(SgtpTransportFamily preferred) {
     if (kIsWeb && preferred == SgtpTransportFamily.tcp) {
-      return SgtpTransportFamily.websocket;
+      return SgtpTransportFamily.http;
     }
     return preferred;
   }
