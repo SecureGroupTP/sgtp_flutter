@@ -2849,7 +2849,8 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
         TextEditingController(text: e != null ? e.chatPort.toString() : '');
     _voiceCtrl =
         TextEditingController(text: e != null ? e.voicePort.toString() : '');
-    _transport = e?.transport ?? SgtpTransportFamily.tcp;
+    _transport = SgtpTransportFamilyCodec.resolve(
+        e?.transport ?? SgtpTransportFamily.tcp);
     _useTls = e?.useTls ?? false;
 
     _hostCtrl.addListener(_scheduleFetch);
@@ -3017,12 +3018,16 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
 
               StyledDropdown<SgtpTransportFamily>(
                 icon: Icons.cable_outlined,
-                options: const [
-                  DropdownOption(value: SgtpTransportFamily.tcp, label: 'TCP'),
-                  DropdownOption(
-                      value: SgtpTransportFamily.http, label: 'HTTP'),
-                  DropdownOption(
-                      value: SgtpTransportFamily.websocket, label: 'WebSocket'),
+                options: [
+                  for (final f in availableTransportFamilies)
+                    DropdownOption(
+                      value: f,
+                      label: switch (f) {
+                        SgtpTransportFamily.tcp => 'TCP',
+                        SgtpTransportFamily.http => 'HTTP',
+                        SgtpTransportFamily.websocket => 'WebSocket',
+                      },
+                    ),
                 ],
                 value: _transport,
                 onChanged: (v) => setState(() {

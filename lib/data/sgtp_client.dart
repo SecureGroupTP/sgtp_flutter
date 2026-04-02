@@ -396,7 +396,7 @@ class SgtpClient {
         throw StateError('Server returned no transport options');
       }
 
-      final family = _config.transport;
+      final family = SgtpTransportFamilyCodec.resolve(_config.transport);
       var tls = _config.useTls;
       if (tls && !options.supports(family, tls: true)) tls = false;
       if (!options.supports(family, tls: tls)) {

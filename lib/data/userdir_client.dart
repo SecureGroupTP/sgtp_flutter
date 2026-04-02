@@ -99,8 +99,8 @@ class UserDirClient {
   /// available in [opts] (run discovery first).
   static UserDirClient? forNode(NodeConfig node, SgtpServerOptions opts) {
     final useTls = node.useTls;
-    // Use the user's selected transport; fall back to TCP if unavailable.
-    final preferred = node.transport;
+    // Resolve platform constraints (e.g. TCP → WebSocket on web).
+    final preferred = SgtpTransportFamilyCodec.resolve(node.transport);
     final family = opts.supports(preferred, tls: useTls)
         ? preferred
         : (opts.supports(SgtpTransportFamily.tcp, tls: useTls)
