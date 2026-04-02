@@ -48,7 +48,8 @@ class SettingsScreen extends StatefulWidget {
   final UserAvatarChangedCallback? onUserAvatarChanged;
   final Uint8List? currentUserAvatar;
   final void Function(String nickname)? onNicknameChanged;
-  final void Function(String username)? onUsernameChanged;
+  final Future<String?> Function(String username)? onUsernameChanged;
+  final VoidCallback? onAllDataDeleted;
 
   const SettingsScreen({
     super.key,
@@ -59,6 +60,7 @@ class SettingsScreen extends StatefulWidget {
     this.currentUserAvatar,
     this.onNicknameChanged,
     this.onUsernameChanged,
+    this.onAllDataDeleted,
   });
 
   @override
@@ -86,6 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = false;
   bool _isGenerating = false;
   String? _error;
+  String? _usernameError;
 
   /// Ping interval in seconds. Saved via SettingsRepository.
   int _pingIntervalSeconds = 30;
@@ -101,9 +104,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Accounts (formerly Nodes)
   List<NodeConfig> _nodes = const [];
+  List<String> _accountIdsList = const [];
   bool _nodesLoading = true;
   bool _accountsExpanded = false;
+  bool _serversExpanded = false;
   String? _preferredNodeId;
+  String? _preferredAccountId;
 
   @override
   void initState() {
@@ -125,6 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadFromDisk() async {
     // Load nodes first so we know which account is active.
     final nodes = await _settings.loadNodes();
+    final accountIds = await _settings.loadAccountIds();
     unawaited(_logCachedDiscovery(nodes));
     for (final node in nodes) {
       unawaited(_runDiscoveryForNode(node));
@@ -132,8 +139,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final preferredNode = await _settings.loadPreferredNode();
     final preferredId =
         preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
-    final preferredAccountId = preferredNode?.effectiveAccountId ??
-        (nodes.isNotEmpty ? nodes.first.effectiveAccountId : null);
+    final savedAccountId = await _settings.loadLastAccountId();
+    final preferredAccountId =
+        (savedAccountId != null && accountIds.contains(savedAccountId))
+            ? savedAccountId
+            : (accountIds.isNotEmpty ? accountIds.first : null);
 
     if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
       await _settings.migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
@@ -142,8 +152,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       setState(() {
         _nodes = nodes;
+        _accountIdsList = accountIds;
         _nodesLoading = false;
         _preferredNodeId = preferredId;
+        _preferredAccountId = preferredAccountId;
       });
     }
 
@@ -177,7 +189,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     InteractionPrefs.swipeToReply = _swipeToReply;
     InteractionPrefs.longPressShowsMenu = _longPressMenu;
 
-    unawaited(_refreshProfilesCache(nodes));
+    unawaited(_refreshProfilesCache(accountIds));
   }
 
   @override
@@ -224,13 +236,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _nickname = nickname;
       _nicknameCtrl.text = nickname;
       _usernameCtrl.text = username;
+      _usernameError = null;
       _userAvatar = avatar;
-      for (final n in _nodes) {
-        if (n.effectiveAccountId == accountId) {
-          _avatarsByNodeId[n.id] = avatar;
-          _nicknamesByNodeId[n.id] = nickname;
-        }
-      }
+      _avatarsByNodeId[accountId] = avatar;
+      _nicknamesByNodeId[accountId] = nickname;
 
       _privateKeyBytes = privBytes;
       _privateKeyPath = privName;
@@ -244,13 +253,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (applyConfig) _tryApplyConfig();
   }
 
-  Future<void> _refreshProfilesCache(List<NodeConfig> nodes) async {
+  Future<void> _refreshProfilesCache(List<String> accountIds) async {
     final nextAvatars = <String, Uint8List?>{};
     final nextNicks = <String, String>{};
-    for (final n in nodes) {
-      final accountId = n.effectiveAccountId;
-      nextAvatars[n.id] = await _settings.loadUserAvatarForNode(accountId);
-      nextNicks[n.id] = await _settings.loadUserNicknameForNode(accountId);
+    for (final accountId in accountIds) {
+      nextAvatars[accountId] =
+          await _settings.loadUserAvatarForNode(accountId);
+      nextNicks[accountId] = await _settings.loadUserNicknameForNode(accountId);
     }
     if (!mounted) return;
     setState(() {
@@ -1001,10 +1010,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _error = null;
     });
     widget.onUserAvatarChanged?.call(bytes);
-    final activeNode = _activeNode();
-    if (activeNode != null) {
-      _avatarsByNodeId[activeNode.id] = bytes;
-    }
+    _avatarsByNodeId[accountId] = bytes;
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Avatar saved')),
@@ -1018,10 +1024,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settings.clearUserAvatarForNode(accountId);
     setState(() => _userAvatar = null);
     widget.onUserAvatarChanged?.call(null);
-    final activeNode = _activeNode();
-    if (activeNode != null) {
-      _avatarsByNodeId[activeNode.id] = null;
-    }
+    _avatarsByNodeId[accountId] = null;
   }
 
   // ── Config apply ──────────────────────────────────────────────────────────
@@ -1033,9 +1036,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final parsed = parseOpenSshPrivateKey(_privateKeyBytes!);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
-      final node = _activeNode();
+      final node = _selectedServerNode();
       if (node == null) return;
-      final accountId = node.effectiveAccountId;
+      final accountId = _activeAccountId();
+      if (accountId == null) return;
       if (accountId.trim().isEmpty) return;
       final newConfig = SgtpConfig(
         serverAddr: server,
@@ -1068,22 +1072,138 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return null;
   }
 
+  List<String> _accountIds() {
+    return List<String>.from(_accountIdsList);
+  }
+
+  NodeConfig? _representativeNodeForAccount(String accountId) {
+    final id = accountId.trim();
+    if (id.isEmpty) return null;
+    for (final n in _nodes) {
+      if (n.effectiveAccountId == id) return n;
+    }
+    return null;
+  }
+
+  String _accountName(String accountId) {
+    final rep = _representativeNodeForAccount(accountId);
+    final nick = (_nicknamesByNodeId[accountId] ?? '').trim();
+    if (nick.isNotEmpty) return nick;
+    if (rep != null) return rep.name;
+    if (accountId.length >= 8) return 'Account ${accountId.substring(0, 8)}';
+    return 'Account';
+  }
+
+  Uint8List? _accountAvatar(String accountId) {
+    return _avatarsByNodeId[accountId];
+  }
+
   String? _activeAccountId() {
-    final node = _activeNode();
+    final id = (_preferredAccountId ?? '').trim();
+    return id.isEmpty ? null : id;
+  }
+
+  Future<void> _selectServer(NodeConfig node) async {
+    setState(() {
+      _preferredNodeId = node.id;
+      _serversExpanded = false;
+    });
+    await _settings.setLastNodeId(node.id);
+    _tryApplyConfig();
+  }
+
+  Future<void> _selectAccountId(String accountId) async {
+    final id = accountId.trim();
+    if (id.isEmpty) return;
+    setState(() {
+      _preferredAccountId = id;
+      _accountsExpanded = false;
+    });
+    await _settings.setLastAccountId(id);
+    await _loadAccountData(id, applyConfig: true);
+  }
+
+  Future<void> _deleteAccount(String accountId) async {
+    final id = accountId.trim();
+    if (id.isEmpty) return;
+    final linkedServers = _nodes.where((n) => n.accountId.trim() == id).toList();
+    final label = _accountName(id);
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Delete Account?'),
+            content: Text(
+                'Delete "$label"? '
+                'Linked servers (${linkedServers.length}) will be kept and detached from this account. '
+                'Profile/key data for this account will no longer be used.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.statusRed,
+                ),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    for (final n in linkedServers) {
+      await _settings.upsertNode(n.copyWith(accountId: ''));
+    }
+    await _settings.clearPrivateKeyForNode(id);
+    await _settings.clearWhitelistForNode(id);
+    await _settings.clearUserAvatarForNode(id);
+    await _settings.saveUserNicknameForNode(id, '');
+    await _settings.saveUserUsernameForNode(id, '');
+    await _settings.deleteAccountId(id);
+    await _reloadNodes();
+    final nextAccount = _activeAccountId();
+    if (nextAccount != null) {
+      await _loadAccountData(nextAccount, applyConfig: true);
+    }
+  }
+
+  Future<void> _deleteServer(NodeConfig node) async {
+    await _deleteNode(node);
+  }
+
+  NodeConfig? _selectedServerNode() {
+    if (_preferredNodeId != null) {
+      for (final n in _nodes) {
+        if (n.id == _preferredNodeId) return n;
+      }
+    }
+    return _nodes.isNotEmpty ? _nodes.first : null;
+  }
+
+  String _selectedServerLabel() {
+    final node = _selectedServerNode();
+    if (node == null) return 'No servers';
+    return '${node.name} (${node.chatAddress})';
+  }
+
+  String? _selectedServerId() {
+    final node = _selectedServerNode();
     if (node == null) return null;
-    final id = node.effectiveAccountId.trim();
+    final id = node.id.trim();
     return id.isEmpty ? null : id;
   }
 
   String _effectiveServerAddress() {
-    final active = _activeNode();
+    final active = _selectedServerNode();
     if (active != null) return active.chatAddress;
     final normalized = _standaloneServerAddress
         .trim()
         .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
         .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
         .trim();
-    return normalized.isEmpty ? 'localhost:7777' : normalized;
+    return normalized.isEmpty ? 'localhost:443' : normalized;
   }
 
   // ── Nodes ────────────────────────────────────────────────────────────────
@@ -1145,15 +1265,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _reloadNodes() async {
     final nodes = await _settings.loadNodes();
+    final accountIds = await _settings.loadAccountIds();
     final preferred = await _settings.loadPreferredNode();
+    final savedAccountId = await _settings.loadLastAccountId();
+    final nextAccountId = (savedAccountId != null && accountIds.contains(savedAccountId))
+        ? savedAccountId
+        : (accountIds.isNotEmpty ? accountIds.first : null);
     if (!mounted) return;
     setState(() {
       _nodes = nodes;
+      _accountIdsList = accountIds;
       _nodesLoading = false;
       _preferredNodeId =
           preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
+      _preferredAccountId = nextAccountId;
     });
-    unawaited(_refreshProfilesCache(nodes));
+    unawaited(_refreshProfilesCache(accountIds));
   }
 
   Future<NodeConfig?> _openNodeEditor(
@@ -1181,44 +1308,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return result;
   }
 
-  Future<void> _addNode() async {
+  Future<void> _addServerOnly() async {
     final node = await _openNodeEditor();
     if (node == null) return;
-    await _settings.upsertNode(node);
-    // Pre-seed nickname with the account name so the profile field isn't blank
-    await _settings.saveUserNicknameForNode(node.effectiveAccountId, node.name);
+    await _settings.upsertNode(node.copyWith(accountId: ''));
     unawaited(_runDiscoveryForNode(node));
     await _reloadNodes();
     _tryApplyConfig();
+  }
+
+  Future<void> _addAccountOnly() async {
+    final accountId = uuidBytesToHex(generateUUIDv7());
+    await _settings.upsertAccountId(accountId);
+    await _settings.saveUserNicknameForNode(accountId, 'Account');
+    await _settings.setLastAccountId(accountId);
+    await _reloadNodes();
     if (!mounted) return;
-    final ok = await _promptPrivateKeyForAccount(node.effectiveAccountId);
+    final ok = await _promptPrivateKeyForAccount(accountId);
     if (!mounted) return;
-    if (ok) {
-      await _selectAccount(node);
-    } else {
+    await _selectAccountId(accountId);
+    if (!mounted) return;
+    if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Account added without private key')),
       );
     }
   }
 
-  Future<void> _addServerForCurrentAccount() async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    final node = await _openNodeEditor(accountIdForNew: accountId);
-    if (node == null) return;
-    await _settings.upsertNode(node);
-    unawaited(_runDiscoveryForNode(node));
-    await _reloadNodes();
-    _tryApplyConfig();
-    if (!mounted) return;
-    await _selectAccount(node);
-  }
-
   Future<void> _editNode(NodeConfig node) async {
     final updated = await _openNodeEditor(existing: node);
     if (updated == null) return;
-    await _settings.upsertNode(updated);
+    await _settings.upsertNode(updated.copyWith(accountId: ''));
     unawaited(_runDiscoveryForNode(updated));
     await _reloadNodes();
     _tryApplyConfig();
@@ -1240,7 +1360,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Delete Account?',
+                'Delete Server?',
                 style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
@@ -1261,8 +1381,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           color: AppColors.textPrimary,
                           fontWeight: FontWeight.w600),
                     ),
-                    TextSpan(
-                        text: ' (${node.chatAddress}) from your accounts?'),
+                    TextSpan(text: ' (${node.chatAddress}) from your servers?'),
                   ],
                 ),
               ),
@@ -1318,6 +1437,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
           _buildGettingStarted(),
           _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
+          _SettingsGroup(title: 'Data', child: _buildDataCard()),
           _SettingsGroup(title: 'About', child: _buildAboutCard()),
           const SizedBox(height: 16),
         ],
@@ -1334,10 +1454,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settings.saveUserNicknameForNode(accountId, next);
     if (!mounted) return;
     setState(() => _nickname = next);
-    final activeNode = _activeNode();
-    if (activeNode != null) {
-      _nicknamesByNodeId[activeNode.id] = next;
-    }
+    _nicknamesByNodeId[accountId] = next;
     widget.onNicknameChanged?.call(next);
   }
 
@@ -1354,7 +1471,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
     await _settings.saveUserUsernameForNode(accountId, sanitized);
     if (!mounted) return;
-    widget.onUsernameChanged?.call(sanitized);
+    final remoteError = await widget.onUsernameChanged?.call(sanitized);
+    if (!mounted) return;
+    setState(() {
+      _usernameError = remoteError;
+    });
   }
 
   void _showMyProfileShare() {
@@ -1404,8 +1525,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       nodeId: node.id,
       nodeName: node.name,
       nodeHost: node.host,
-      nodeChatPort: node.chatPort,
-      nodeVoicePort: node.voicePort,
       nodeTransport: node.transport.id,
       nodeUseTls: node.useTls,
       timestamp: DateTime.now().millisecondsSinceEpoch,
@@ -1448,15 +1567,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted || data == null) return;
     final node = await _importNodeFromShareData(data);
     if (!mounted || node == null) return;
-    final ok = await _promptPrivateKeyForAccount(node.effectiveAccountId);
-    if (!mounted) return;
-    if (ok) {
-      await _selectAccount(node);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Account imported without private key')),
-      );
-    }
   }
 
   Future<void> _showNodeHexImportSheet() async {
@@ -1533,19 +1643,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (!ctx.mounted) return;
                           if (node != null) {
                             Navigator.pop(ctx);
-                            final ok =
-                                await _promptPrivateKeyForAccount(
-                                    node.effectiveAccountId);
-                            if (!mounted) return;
-                            if (ok) {
-                              await _selectAccount(node);
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text(
-                                        'Account imported without private key')),
-                              );
-                            }
                           }
                           return;
                         }
@@ -1557,21 +1654,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           return;
                         }
 
-                        final (host, port) = parsed;
-                        final chatPort = port ?? 7777;
-                        if (chatPort <= 0 || chatPort > 65535) {
-                          setS(
-                              () => errorMsg = 'Port must be in range 1–65535');
-                          return;
-                        }
+                        final (host, _) = parsed;
                         final node = NodeConfig(
                           id: uuidBytesToHex(generateUUIDv7()),
                           name: host,
                           host: host,
-                          chatPort: chatPort,
-                          voicePort: chatPort,
+                          chatPort: 443,
+                          voicePort: 443,
                         );
-                        await _settings.upsertNode(node);
+                        await _settings.upsertNode(node.copyWith(accountId: ''));
                         await _reloadNodes();
                         if (!mounted) return;
                         if (ctx.mounted) Navigator.pop(ctx);
@@ -1580,18 +1671,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               content:
                                   Text('Node imported: ${node.chatAddress}')),
                         );
-                        final ok =
-                            await _promptPrivateKeyForAccount(node.effectiveAccountId);
-                        if (!mounted) return;
-                        if (ok) {
-                          await _selectAccount(node);
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text(
-                                    'Account imported without private key')),
-                          );
-                        }
                       },
                       child: const Text('Import'),
                     ),
@@ -1646,7 +1725,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       return null;
     }
-    await _settings.upsertNode(node);
+    await _settings.upsertNode(node.copyWith(accountId: ''));
     await _reloadNodes();
     if (!mounted) return node;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1671,7 +1750,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : uuidBytesToHex(generateUUIDv7());
 
     String? host = data.nodeHost != null ? normalizeHost(data.nodeHost!) : null;
-    int? chatPort = data.nodeChatPort;
+    int? chatPort;
 
     if ((host == null || host.isEmpty) && data.serverAddress != null) {
       final parsed = _parseHostPort(data.serverAddress!);
@@ -1682,8 +1761,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     host = host?.trim();
-    chatPort ??= 7777;
-    final voicePort = data.nodeVoicePort ?? chatPort;
+    chatPort ??= 443;
+    final voicePort = chatPort;
 
     if (host == null ||
         host.isEmpty ||
@@ -1812,19 +1891,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
               hoverColor: Colors.transparent,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.border),
+                borderSide: BorderSide(
+                    color: _usernameError != null
+                        ? AppColors.statusRed
+                        : AppColors.border),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.border),
+                borderSide: BorderSide(
+                    color: _usernameError != null
+                        ? AppColors.statusRed
+                        : AppColors.border),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.textSecondary),
+                borderSide: BorderSide(
+                    color: _usernameError != null
+                        ? AppColors.statusRed
+                        : AppColors.textSecondary),
               ),
               contentPadding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
+          if (_usernameError != null) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _usernameError!,
+                style:
+                    const TextStyle(fontSize: 12, color: AppColors.statusRed),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
 
           // ── Share Profile button ─────────────────────────────────────────
@@ -1875,14 +1974,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Account switcher ─────────────────────────────────────────────────────
 
   Widget _buildAccountSwitcher() {
-    final active = _nodes.firstWhere(
-      (n) => n.id == _preferredNodeId,
-      orElse: () => _nodes.isNotEmpty
-          ? _nodes.first
-          : NodeConfig(
-              id: '', name: '', host: '', chatPort: 7777, voicePort: 7777),
-    );
-    final hasAccounts = _nodes.isNotEmpty;
+    final accountIds = _accountIds();
+    final activeAccountId = _activeAccountId();
+    final hasAccounts = accountIds.isNotEmpty;
+    final activeName =
+        activeAccountId != null ? _accountName(activeAccountId) : 'No accounts';
+    final activeAvatar =
+        activeAccountId != null ? _accountAvatar(activeAccountId) : null;
 
     return Container(
       decoration: const BoxDecoration(
@@ -1901,10 +1999,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   // Use profile avatar + nickname instead of node data
                   UserAvatar(
-                    bytes: _userAvatar,
-                    name: _nickname.isNotEmpty
-                        ? _nickname
-                        : (hasAccounts ? active.name : 'Me'),
+                    bytes: _userAvatar ?? activeAvatar,
+                    name: _nickname.isNotEmpty ? _nickname : activeName,
                     size: 42,
                   ),
                   const SizedBox(width: 12),
@@ -1917,11 +2013,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _nickname.isNotEmpty
-                                    ? _nickname
-                                    : (hasAccounts
-                                        ? active.name
-                                        : 'No accounts'),
+                                _nickname.isNotEmpty ? _nickname : activeName,
                                 style: const TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -1929,16 +2021,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              if (hasAccounts) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  active.chatAddress,
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      color: AppColors.textSecondary),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
                             ],
                           ),
                   ),
@@ -1957,23 +2039,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (!_nodesLoading && hasAccounts)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Server: ${active.chatAddress}',
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.textSecondary),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _ActionButton(
-                    icon: Icons.edit_outlined,
-                    label: 'Edit Server',
-                    onPressed: () => _editNode(active),
-                  ),
-                ],
+              child: Text(
+                'Account: ${activeName}',
+                style:
+                    const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           // ── Dropdown ───────────────────────────────────────────────────
@@ -1981,15 +2051,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Divider(height: 1, thickness: 1, color: AppColors.border),
             Column(
               children: [
-                ..._nodes.map((n) => _AccountDropdownItem(
-                      node: n,
-                      isActive: n.id == _preferredNodeId,
-                      profileAvatar: _avatarsByNodeId[n.id],
-                      profileName: _nicknamesByNodeId[n.id],
-                      onTap: () => unawaited(_selectAccount(n)),
-                      onShare: () => _showNodeShare(n),
-                      onDelete: () => _deleteNode(n),
-                    )),
+                ...accountIds.map((id) {
+                  final rep = _representativeNodeForAccount(id);
+                  final displayNode = rep ??
+                      NodeConfig(
+                        id: id,
+                        accountId: id,
+                        name: _accountName(id),
+                        host: '',
+                        chatPort: 443,
+                        voicePort: 443,
+                      );
+                  return _AccountDropdownItem(
+                    node: displayNode,
+                    isActive: id == activeAccountId,
+                    profileAvatar: _accountAvatar(id),
+                    profileName: _accountName(id),
+                    onTap: () => unawaited(_selectAccountId(id)),
+                    onShare: _showMyProfileShare,
+                    onDelete: () => _deleteAccount(id),
+                  );
+                }),
                 // ── Add Account ───────────────────────────────────────
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -2033,15 +2115,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _selectAccount(NodeConfig node) async {
-    setState(() {
-      _preferredNodeId = node.id;
-      _accountsExpanded = false;
-    });
-    await _settings.setLastNodeId(node.id);
-    await _loadAccountData(node.effectiveAccountId, applyConfig: true);
-  }
-
   void _showAddAccountSheet() {
     showModalBottomSheet<void>(
       context: context,
@@ -2067,37 +2140,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 20),
               _AddAccountOption(
-                icon: Icons.qr_code_scanner_outlined,
-                title: 'Scan QR',
-                subtitle: 'Import an account by scanning its QR code',
+                icon: Icons.person_add_alt_1_outlined,
+                title: 'Create Account',
+                subtitle: 'Create a new profile and set up its private key',
                 onTap: () {
                   Navigator.pop(context);
-                  _importNodeFromQr();
+                  _addAccountOnly();
                 },
               ),
-              const SizedBox(height: 12),
-              _AddAccountOption(
-                icon: Icons.edit_note_outlined,
-                title: 'Enter Manually',
-                subtitle: 'Fill in the server address and ports by hand',
-                onTap: () {
-                  Navigator.pop(context);
-                  _addNode();
-                },
-              ),
-              if (_activeAccountId() != null) ...[
-                const SizedBox(height: 12),
-                _AddAccountOption(
-                  icon: Icons.hub_outlined,
-                  title: 'Add Server To Current Account',
-                  subtitle:
-                      'Use the same profile/key on another server connection',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _addServerForCurrentAccount();
-                  },
-                ),
-              ],
             ],
           ),
         ),
@@ -2300,9 +2350,149 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Network card ──────────────────────────────────────────────────────────
 
   Widget _buildNetworkCard() {
+    final selectedServer = _selectedServerNode();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const Text(
+          'Server',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _serversExpanded = !_serversExpanded),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.bgMain,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.dns_outlined,
+                    size: 18, color: AppColors.textSecondary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _selectedServerLabel(),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                AnimatedRotation(
+                  turns: _serversExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 220),
+                  child: const Icon(Icons.expand_more,
+                      color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_serversExpanded) ...[
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: AppColors.bgMain,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                ..._nodes.map((n) {
+                  final isSelected = n.id == _selectedServerId();
+                  return ListTile(
+                    dense: true,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                    onTap: () => unawaited(_selectServer(n)),
+                    leading: Icon(
+                      isSelected
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      color: isSelected
+                          ? const Color(0xFF0A84FF)
+                          : AppColors.textSecondary,
+                      size: 18,
+                    ),
+                    title: Text(
+                      n.name,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textPrimary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      n.chatAddress,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: () => _showNodeShare(n),
+                          child: const SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: Icon(Icons.qr_code_outlined,
+                                size: 18, color: AppColors.textSecondary),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: () => _editNode(n),
+                          child: const SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: Icon(Icons.edit_outlined,
+                                size: 18, color: AppColors.textSecondary),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: () => _deleteServer(n),
+                          child: const SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: Icon(Icons.delete_outline,
+                                size: 18, color: AppColors.statusRed),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                ListTile(
+                  dense: true,
+                  onTap: _addServerOnly,
+                  leading: const Icon(Icons.add, color: AppColors.textSecondary),
+                  title: const Text(
+                    'Add server',
+                    style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (selectedServer != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            'Active: ${selectedServer.chatAddress} • ${selectedServer.transport.id.toUpperCase()}${selectedServer.useTls ? " +TLS" : ""}',
+            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+        ],
+        const SizedBox(height: 16),
         const Text(
           'Ping interval',
           style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
@@ -2663,6 +2853,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildDataCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Delete all local app data (accounts, servers, keys, chats, cached files).',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        _ActionButton(
+          icon: Icons.delete_forever_outlined,
+          label: 'Delete all my data',
+          onPressed: _deleteAllMyData,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _deleteAllMyData() async {
+    final code = (1000 + Random().nextInt(9000)).toString();
+    final ctrl = TextEditingController();
+    String? err;
+    var confirmed = false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Delete All Data?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This will permanently remove all local data from this device.',
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Type this code to confirm: $code',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.number,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Enter code',
+                  errorText: err,
+                ),
+                onChanged: (_) {
+                  if (err != null) setS(() => err = null);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.statusRed),
+              onPressed: () {
+                if (ctrl.text.trim() != code) {
+                  setS(() => err = 'Code does not match');
+                  return;
+                }
+                confirmed = true;
+                Navigator.pop(ctx);
+              },
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
+    if (!confirmed) return;
+
+    try {
+      await _settings.clearAllLocalData();
+      if (!mounted) return;
+      widget.onAllDataDeleted?.call();
+      if (widget.onAllDataDeleted == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('All local data deleted')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete data: $e')),
+      );
+    }
+  }
+
   void _showDeleteConfirm(int index) {
     final entry = _wlEntries[index];
     showDialog<void>(
@@ -2884,8 +3170,6 @@ class _NodeEditorSheet extends StatefulWidget {
 class _NodeEditorSheetState extends State<_NodeEditorSheet> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _hostCtrl;
-  late final TextEditingController _chatCtrl;
-  late final TextEditingController _voiceCtrl;
 
   SgtpTransportFamily _transport = SgtpTransportFamily.tcp;
   bool _useTls = false;
@@ -2901,10 +3185,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     final e = widget.existing;
     _nameCtrl = TextEditingController(text: e?.name ?? '');
     _hostCtrl = TextEditingController(text: e?.host ?? '');
-    _chatCtrl =
-        TextEditingController(text: e != null ? e.chatPort.toString() : '');
-    _voiceCtrl =
-        TextEditingController(text: e != null ? e.voicePort.toString() : '');
     _transport = SgtpTransportFamilyCodec.resolve(
         e?.transport ?? SgtpTransportFamily.tcp);
     _useTls = e?.useTls ?? false;
@@ -2944,16 +3224,12 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       _optionsError = null;
     });
     try {
-      final (:opts, :port, tls: _) =
+      final (:opts, port: _, tls: _) =
           await SgtpServerDiscovery.discover(host);
       await widget.settings.saveNodeServerOptions(widget.baseId, opts);
       final savedAt =
           await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
       if (!mounted) return;
-      // Auto-fill chat port with the discovered port if field is empty.
-      if (_chatCtrl.text.trim().isEmpty) {
-        _chatCtrl.text = port.toString();
-      }
       setState(() {
         _serverOptions = opts;
         _serverOptionsAt = savedAt ?? DateTime.now();
@@ -2979,28 +3255,20 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
         .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
         .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
         .trim();
-    final chatPort = int.tryParse(_chatCtrl.text.trim());
-    final voicePort = int.tryParse(_voiceCtrl.text.trim());
-
-    bool validPort(int? p) => p != null && p > 0 && p <= 65535;
-    if (name.isEmpty ||
-        host.isEmpty ||
-        !validPort(chatPort) ||
-        !validPort(voicePort)) {
+    if (name.isEmpty || host.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please fill in all fields with valid values')),
+        const SnackBar(content: Text('Please fill in all fields')),
       );
       return;
     }
     widget.onSave(NodeConfig(
       id: widget.baseId,
       accountId:
-          widget.existing?.effectiveAccountId ?? widget.accountIdForNew ?? '',
+          widget.existing?.accountId ?? widget.accountIdForNew ?? '',
       name: name,
       host: host,
-      chatPort: chatPort!,
-      voicePort: voicePort!,
+      chatPort: 443,
+      voicePort: 443,
       transport: _transport,
       useTls: _useTls,
     ));
@@ -3011,8 +3279,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     _fetchTimer?.cancel();
     _nameCtrl.dispose();
     _hostCtrl.dispose();
-    _chatCtrl.dispose();
-    _voiceCtrl.dispose();
     super.dispose();
   }
 
@@ -3028,7 +3294,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                widget.existing == null ? 'Add Account' : 'Edit Account',
+                widget.existing == null ? 'Add Server' : 'Edit Server',
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w600,
@@ -3040,7 +3306,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               _StyledField(
                 controller: _nameCtrl,
                 icon: Icons.badge_outlined,
-                hint: 'Account Name',
+                hint: 'Server Name',
               ),
               const SizedBox(height: 12),
 
@@ -3051,27 +3317,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               ),
               const SizedBox(height: 12),
 
-              Row(
-                children: [
-                  Expanded(
-                    child: _StyledField(
-                      controller: _chatCtrl,
-                      icon: Icons.settings_ethernet,
-                      hint: 'Discovery',
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _StyledField(
-                      controller: _voiceCtrl,
-                      icon: Icons.mic_none_outlined,
-                      hint: 'Voice',
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
               const SizedBox(height: 12),
 
               StyledDropdown<SgtpTransportFamily>(
@@ -3166,7 +3411,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               ],
 
               const SizedBox(height: 24),
-              _SheetBtn(label: 'Save Account', onTap: _save),
+              _SheetBtn(label: 'Save Server', onTap: _save),
             ],
           ),
         ),
@@ -3365,10 +3610,10 @@ class _AccountDropdownItem extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    node.chatAddress,
-                    style: const TextStyle(
-                        fontSize: 13, color: AppColors.textSecondary),
+                  const Text(
+                    'Account profile',
+                    style:
+                        TextStyle(fontSize: 13, color: AppColors.textSecondary),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],

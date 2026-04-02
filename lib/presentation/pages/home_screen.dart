@@ -11,6 +11,7 @@ import '../../core/app_theme.dart';
 import '../../core/sgtp_transport.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
+import '../../core/uuid_v7.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
 import '../../data/userdir_client.dart';
@@ -131,9 +132,9 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_registerSelf());
   }
 
-  void _onUsernameChanged(String username) {
+  Future<String?> _onUsernameChanged(String username) async {
     _username = username;
-    unawaited(_registerSelf());
+    return _registerSelf();
   }
 
   void _onWhitelistChanged(List<WhitelistEntry> entries) {
@@ -179,16 +180,29 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
-  Future<void> _registerSelf() async {
+  Future<String?> _registerSelf() async {
     final client = _userDirClient;
-    if (client == null) return;
-    await client.register(
+    if (client == null) return null;
+    final result = await client.registerWithResult(
       username: _buildUsername(),
       fullname: _nickname,
       pubkey: _config.myPublicKey,
       avatarBytes: _userAvatar ?? Uint8List(0),
       identityKeyPair: _config.identityKeyPair,
     );
+    if (result.ok) return null;
+
+    final code = result.errorCode;
+    final msg = (result.errorMessage ?? '').trim();
+    final lower = msg.toLowerCase();
+    final isTaken = lower.contains('taken') ||
+        lower.contains('exists') ||
+        lower.contains('occupied') ||
+        lower.contains('already');
+    if (isTaken) return 'Username already taken';
+    if (msg.isNotEmpty) return msg;
+    if (code != null) return 'Username update failed (code: 0x${code.toRadixString(16)})';
+    return 'Username update failed';
   }
 
   Future<void> _initUserDir() async {
@@ -351,6 +365,14 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_registerSelf());
   }
 
+  void _onAllDataDeleted() {
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AppStartScreen()),
+      (_) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocProvider.value(
@@ -365,6 +387,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // 1 — Contacts
             ContactsScreen(
               accountId: _accountId,
+              serverNodeId: _config.nodeId,
               initialEntries: _whitelist,
               onEntriesChanged: _onWhitelistChanged,
               contactProfiles: _contactProfiles,
@@ -377,6 +400,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onUserAvatarChanged: _onUserAvatarChanged,
               onNicknameChanged: _onNicknameChanged,
               onUsernameChanged: _onUsernameChanged,
+              onAllDataDeleted: _onAllDataDeleted,
               currentUserAvatar: _userAvatar,
             ),
           ],
@@ -455,28 +479,42 @@ class _AppStartScreenState extends State<AppStartScreen> {
     final settings = SettingsRepository();
     final lastAddr = await settings.getLastAddress() ?? '';
     final preferredNode = await settings.loadPreferredNode();
-    final accountId = preferredNode?.effectiveAccountId ??
-        (await settings.loadLastNodeId()) ??
-        '';
+    var accountId = ((await settings.loadLastAccountId()) ?? '').trim();
+    if (accountId.isEmpty) {
+      final all = await settings.loadAccountIds();
+      if (all.isNotEmpty) {
+        accountId = all.first;
+        await settings.setLastAccountId(accountId);
+      }
+    }
+    if (accountId.isEmpty) {
+      accountId = uuidBytesToHex(generateUUIDv7());
+      await settings.upsertAccountId(accountId);
+      await settings.saveUserNicknameForNode(accountId, 'Account');
+      await settings.setLastAccountId(accountId);
+    }
     final chatServer =
-        preferredNode?.chatAddress ?? (lastAddr.isEmpty ? 'localhost:7777' : lastAddr);
+        preferredNode?.chatAddress ?? (lastAddr.isEmpty ? 'localhost:443' : lastAddr);
 
     if (accountId.trim().isNotEmpty) {
       await settings.migrateLegacyAccountDataToNodeIfNeeded(accountId);
     }
 
-    var savedKey = accountId.trim().isEmpty
-        ? await settings.loadPrivateKey()
-        : await settings.loadPrivateKeyForNode(accountId);
+    var savedKey = await settings.loadPrivateKeyForNode(accountId);
+    savedKey ??= await settings.loadPrivateKey(); // legacy fallback
 
     // First launch (per-account): auto-generate an Ed25519 identity key silently.
-    if (savedKey == null && accountId.trim().isNotEmpty) {
+    if (savedKey == null) {
       savedKey = await _autoGenerateKey(settings, accountId);
     }
 
-    // If key generation somehow failed, we still land on HomeScreen —
-    // the user will see an empty state and can configure via Settings.
-    if (savedKey == null) return;
+    // If key generation somehow failed, retry startup instead of hanging forever.
+    if (savedKey == null) {
+      if (mounted) {
+        Future.delayed(const Duration(milliseconds: 500), _checkAndNavigate);
+      }
+      return;
+    }
 
     try {
       final parsed = parseOpenSshPrivateKey(savedKey.bytes);

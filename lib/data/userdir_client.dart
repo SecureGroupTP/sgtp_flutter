@@ -276,6 +276,23 @@ class UserDirClient {
     required Uint8List avatarBytes,
     required SimpleKeyPairData identityKeyPair,
   }) async {
+    final result = await registerWithResult(
+      username: username,
+      fullname: fullname,
+      pubkey: pubkey,
+      avatarBytes: avatarBytes,
+      identityKeyPair: identityKeyPair,
+    );
+    return result.ok;
+  }
+
+  Future<({bool ok, int? errorCode, String? errorMessage})> registerWithResult({
+    required String? username,
+    required String fullname,
+    required Uint8List pubkey,
+    required Uint8List avatarBytes,
+    required SimpleKeyPairData identityKeyPair,
+  }) async {
     final usernameBytes = utf8.encode(username ?? '');
     final fullnameBytes = utf8.encode(fullname);
     final avatarLen = avatarBytes.length;
@@ -327,12 +344,14 @@ class UserDirClient {
     final ok = resp != null && resp.isNotEmpty && resp[0] == 0x81;
     if (ok) {
       AppLogger.i('REGISTER OK  username=$username', tag: _tag);
+      return (ok: true, errorCode: null, errorMessage: null);
     } else {
+      final err = _parseError(resp);
       AppLogger.w(
           'REGISTER failed  ${resp == null ? 'null' : _msgName(resp[0])}${_errorDetail(resp)}',
           tag: _tag);
+      return (ok: false, errorCode: err.$1, errorMessage: err.$2);
     }
-    return ok;
   }
 
   /// Fetches lightweight metadata (no avatar bytes) for [pubkey].
@@ -582,6 +601,23 @@ class UserDirClient {
       return '  code=0x${code.toRadixString(16).padLeft(4, '0')} "$msg"';
     } catch (_) {
       return '';
+    }
+  }
+
+  (int?, String?) _parseError(Uint8List? resp) {
+    if (resp == null || resp.isEmpty || resp[0] != 0x82) {
+      return (null, null);
+    }
+    try {
+      final payload = resp.sublist(1);
+      if (payload.length < 4) return (null, null);
+      final code = (payload[0] << 8) | payload[1];
+      final msgLen = (payload[2] << 8) | payload[3];
+      final msg =
+          msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
+      return (code, msg);
+    } catch (_) {
+      return (null, null);
     }
   }
 

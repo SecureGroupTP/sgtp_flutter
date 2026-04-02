@@ -15,6 +15,7 @@ import '../widgets/user_avatar.dart';
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
 class ContactsScreen extends StatefulWidget {
   final String accountId;
+  final String? serverNodeId;
   final List<WhitelistEntry> initialEntries;
   final Map<String, ContactProfile> contactProfiles;
 
@@ -25,6 +26,7 @@ class ContactsScreen extends StatefulWidget {
   const ContactsScreen({
     super.key,
     required this.accountId,
+    this.serverNodeId,
     required this.initialEntries,
     required this.onEntriesChanged,
     this.contactProfiles = const {},
@@ -54,7 +56,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   void didUpdateWidget(covariant ContactsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.accountId != widget.accountId) {
+    if (oldWidget.accountId != widget.accountId ||
+        oldWidget.serverNodeId != widget.serverNodeId) {
       _searchDebounce?.cancel();
       _searchRequestId++;
       setState(() {
@@ -137,9 +140,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   Future<UserDirClient?> _buildUserDirClient() async {
     final nodes = await _repo.loadNodes();
-    final node = nodes.where((n) => n.id == widget.accountId).firstOrNull;
+    final selectedServerId = (widget.serverNodeId ?? '').trim();
+    final node = selectedServerId.isNotEmpty
+        ? nodes.where((n) => n.id == selectedServerId).firstOrNull
+        : await _repo.loadPreferredNode();
     if (node == null) return null;
-    final opts = await _repo.loadNodeServerOptions(widget.accountId);
+    final opts = await _repo.loadNodeServerOptions(node.id);
     if (opts == null) return null;
     return UserDirClient.forNode(node, opts);
   }

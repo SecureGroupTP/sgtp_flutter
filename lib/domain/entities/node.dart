@@ -69,9 +69,9 @@ class NodeConfig {
           ? (json['name'] as String).trim()
           : 'Node',
       host: (json['host'] as String? ?? '').trim(),
-      chatPort: (json['chatPort'] as num?)?.toInt() ?? 7777,
+      chatPort: (json['chatPort'] as num?)?.toInt() ?? 443,
       voicePort: (json['voicePort'] as num?)?.toInt() ??
-          ((json['chatPort'] as num?)?.toInt() ?? 7777),
+          ((json['chatPort'] as num?)?.toInt() ?? 443),
       transport: SgtpTransportFamilyCodec.fromId(json['transport'] as String?),
       useTls: (json['tls'] as bool?) ?? false,
       // 'usersPort' key is ignored for backward compatibility

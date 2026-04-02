@@ -58,8 +58,7 @@ class _SetupPageState extends State<SetupPage> {
           // Navigate to HomeScreen, replacing setup
           unawaited(() async {
             final settings = SettingsRepository();
-            final preferred = await settings.loadPreferredNode();
-            final accountId = preferred?.id ?? '';
+            final accountId = (await settings.loadLastAccountId()) ?? '';
             final entries = accountId.trim().isEmpty
                 ? await settings.loadWhitelistEntries()
                 : await settings.loadWhitelistEntriesForNode(accountId);

@@ -15,6 +15,8 @@ class SettingsRepository {
   static const _lastAddressKey = 'sgtp_last_address';
   static const _nodesJsonKey = 'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort}]
   static const _lastNodeIdKey = 'sgtp_last_node_id';
+  static const _lastAccountIdKey = 'sgtp_last_account_id';
+  static const _accountIdsKey = 'sgtp_account_ids_v1';
   // Legacy (global) identity + profile keys. New code should prefer per-account scoped variants.
   static const _privKeyB64Key = 'sgtp_private_key_b64';
   static const _privKeyNameKey = 'sgtp_private_key_name';
@@ -60,6 +62,26 @@ class SettingsRepository {
     return dir;
   }
 
+  /// Deletes all locally persisted SGTP app data:
+  /// - SharedPreferences keys for this app
+  /// - documents folders used for SGTP files/metadata
+  Future<void> clearAllLocalData() async {
+    final p = await SharedPreferences.getInstance();
+    await p.clear();
+
+    final docsDir = await getApplicationDocumentsDirectory();
+    final folders = <Directory>[
+      Directory('${docsDir.path}/sgtp'),
+      Directory('${docsDir.path}/sgtp_accounts'),
+      Directory('${docsDir.path}/sgtp_chats'),
+    ];
+    for (final dir in folders) {
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+    }
+  }
+
   // ── Server addresses ──────────────────────────────────────────────────────
 
   Future<List<String>> getSavedAddresses() async {
@@ -85,8 +107,8 @@ class SettingsRepository {
   // ── Nodes (servers) ───────────────────────────────────────────────────────
 
   /// Loads all configured nodes. If none exist yet, tries to migrate from the
-  /// legacy `host:port` storage (`getLastAddress`), otherwise creates a sane
-  /// default (`localhost:7777`).
+  /// legacy `host:port` storage (`getLastAddress`). If no legacy value exists,
+  /// returns an empty list.
   Future<List<NodeConfig>> loadNodes() async {
     final p = await SharedPreferences.getInstance();
     final raw = p.getStringList(_nodesJsonKey) ?? [];
@@ -102,15 +124,18 @@ class SettingsRepository {
 
     if (parsed.isNotEmpty) return parsed;
 
-    // Legacy migration: use lastAddress or first saved address.
+    // Legacy migration: use lastAddress or first saved address if present.
     final legacy = (p.getString(_lastAddressKey) ??
-            (p.getStringList(_savedAddressesKey)?.firstOrNull)) ??
-        '';
-    final migrated = _nodeFromLegacyAddress(legacy);
-    final nodes = [migrated];
-    await saveNodes(nodes);
-    await setLastNodeId(migrated.id);
-    return nodes;
+            (p.getStringList(_savedAddressesKey)?.firstOrNull))
+        ?.trim();
+    if (legacy != null && legacy.isNotEmpty) {
+      final migrated = _nodeFromLegacyAddress(legacy);
+      final nodes = [migrated];
+      await saveNodes(nodes);
+      await setLastNodeId(migrated.id);
+      return nodes;
+    }
+    return const [];
   }
 
   Future<void> saveNodes(List<NodeConfig> nodes) async {
@@ -132,6 +157,101 @@ class SettingsRepository {
   Future<void> setLastNodeId(String nodeId) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_lastNodeIdKey, nodeId);
+  }
+
+  Future<void> setLastAccountId(String accountId) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_lastAccountIdKey, accountId.trim());
+  }
+
+  Future<List<String>> loadAccountIds() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getStringList(_accountIdsKey);
+    final out = <String>[];
+
+    // New schema: accounts are managed independently from servers.
+    if (raw != null) {
+      for (final id in raw) {
+        final trimmed = id.trim();
+        if (trimmed.isEmpty || out.contains(trimmed)) continue;
+        out.add(trimmed);
+      }
+      return out;
+    }
+
+    // One-time legacy bootstrap.
+    // New model keeps accounts independent from servers, so we only restore:
+    // 1) explicit node.accountId values, or
+    // 2) node.id values that already have account-scoped data saved.
+    final nodes = await loadNodes();
+    for (final n in nodes) {
+      final explicit = n.accountId.trim();
+      if (explicit.isNotEmpty) {
+        if (!out.contains(explicit)) out.add(explicit);
+        continue;
+      }
+      final legacyId = n.id.trim();
+      if (legacyId.isEmpty || out.contains(legacyId)) continue;
+      if (_hasAnyAccountScopedData(p, legacyId)) {
+        out.add(legacyId);
+      }
+    }
+    await p.setStringList(_accountIdsKey, out);
+    return out;
+  }
+
+  bool _hasAnyAccountScopedData(SharedPreferences p, String accountId) {
+    final id = accountId.trim();
+    if (id.isEmpty) return false;
+    final priv = p.getString(_scopedKey(_privKeyB64Key, id));
+    if (priv != null && priv.isNotEmpty) return true;
+    final wl = p.getStringList(_scopedKey(_whitelistJsonKey, id));
+    if (wl != null && wl.isNotEmpty) return true;
+    final avatar = p.getString(_scopedKey(_userAvatarB64Key, id));
+    if (avatar != null && avatar.isNotEmpty) return true;
+    final nick = p.getString(_scopedKey(_userNicknameKey, id));
+    if (nick != null && nick.trim().isNotEmpty) return true;
+    final username = p.getString(_scopedKey(_userUsernameKey, id));
+    if (username != null && username.trim().isNotEmpty) return true;
+    return false;
+  }
+
+  Future<void> upsertAccountId(String accountId) async {
+    final id = accountId.trim();
+    if (id.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final list = await loadAccountIds();
+    if (!list.contains(id)) {
+      list.add(id);
+      await p.setStringList(_accountIdsKey, list);
+    }
+    final last = await loadLastAccountId();
+    if (last == null || last.isEmpty) {
+      await setLastAccountId(id);
+    }
+  }
+
+  Future<void> deleteAccountId(String accountId) async {
+    final id = accountId.trim();
+    if (id.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final list = await loadAccountIds();
+    list.removeWhere((x) => x == id);
+    await p.setStringList(_accountIdsKey, list);
+    final last = await loadLastAccountId();
+    if (last == id) {
+      if (list.isNotEmpty) {
+        await setLastAccountId(list.first);
+      } else {
+        await p.remove(_lastAccountIdKey);
+      }
+    }
+  }
+
+  Future<String?> loadLastAccountId() async {
+    final p = await SharedPreferences.getInstance();
+    final id = (p.getString(_lastAccountIdKey) ?? '').trim();
+    return id.isEmpty ? null : id;
   }
 
   Future<NodeConfig?> loadPreferredNode() async {
@@ -165,12 +285,11 @@ class SettingsRepository {
     await saveNodes(next);
     final currentLast = await loadLastNodeId();
     if (currentLast == nodeId) {
+      final p = await SharedPreferences.getInstance();
       if (next.isNotEmpty) {
         await setLastNodeId(next.first.id);
       } else {
-        final fallback = _nodeFromLegacyAddress('');
-        await saveNodes([fallback]);
-        await setLastNodeId(fallback.id);
+        await p.remove(_lastNodeIdKey);
       }
     }
   }
@@ -217,12 +336,12 @@ class SettingsRepository {
         .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
         .trim();
     var host = 'localhost';
-    var port = 7777;
+    var port = 443;
     if (cleaned.isNotEmpty) {
       final parts = cleaned.split(':');
       if (parts.length >= 2) {
         host = parts.sublist(0, parts.length - 1).join(':').trim();
-        port = int.tryParse(parts.last.trim()) ?? 7777;
+        port = int.tryParse(parts.last.trim()) ?? 443;
       } else {
         host = cleaned;
       }

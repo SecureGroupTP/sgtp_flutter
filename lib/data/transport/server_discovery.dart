@@ -4,28 +4,32 @@ import '../../core/sgtp_server_options.dart';
 import 'server_discovery_http_client.dart';
 
 class SgtpServerDiscovery {
-  static final _ipv4Re = RegExp(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$');
-
   /// Discovers server options via HTTP(S) GET `/sgtp/discovery`.
   ///
-  /// For domain names, tries HTTPS on port 443 first, then HTTP on port 80.
-  /// For IP addresses, only tries HTTP on port 80 (no TLS cert to validate).
+  /// Tries the default discovery ports in strict order:
+  /// 1) HTTPS 443
+  /// 2) HTTP 80
+  /// 3) HTTP 77
   /// Throws if all attempts fail.
   static Future<({SgtpServerOptions opts, int port, bool tls})> discover(
     String host, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final isDomain = !_ipv4Re.hasMatch(host);
-
-    if (isDomain) {
+    final attempts = <({int port, bool tls})>[
+      (port: 443, tls: true),
+      (port: 80, tls: false),
+      (port: 77, tls: false),
+    ];
+    Object? lastError;
+    for (final a in attempts) {
       try {
-        final opts = await _get(host, 443, tls: true, timeout: timeout);
-        return (opts: opts, port: 443, tls: true);
-      } catch (_) {}
+        final opts = await _get(host, a.port, tls: a.tls, timeout: timeout);
+        return (opts: opts, port: a.port, tls: a.tls);
+      } catch (e) {
+        lastError = e;
+      }
     }
-
-    final opts = await _get(host, 80, tls: false, timeout: timeout);
-    return (opts: opts, port: 80, tls: false);
+    throw StateError('Discovery failed for $host: $lastError');
   }
 
   static Future<SgtpServerOptions> _get(

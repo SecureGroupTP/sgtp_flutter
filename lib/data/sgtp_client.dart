@@ -303,6 +303,8 @@ class SgtpClient {
   Timer? _ckRotationTimer;
   Timer?
       _keepaliveTimer; // actively pings all known peers to keep connections alive
+  Timer?
+      _handshakeRetryTimer; // retries handshake progression while waiting
   bool _infoTimerStarted = false;
   final Set<String> _pendingHandshakes = {};
   final Map<String, Timer> _pendingHandshakeTimers = {};
@@ -432,6 +434,11 @@ class SgtpClient {
       _keepaliveTimer = Timer.periodic(
           Duration(seconds: _config.pingIntervalSeconds),
           (_) => _sendKeepalive());
+      _handshakeRetryTimer?.cancel();
+      _handshakeRetryTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        if (_state != _ClientState.waitingHandshake || _readyEmitted) return;
+        unawaited(_retryHandshakeProgress());
+      });
       await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       Future.delayed(Duration(milliseconds: SgtpConstants.infoDelayMs),
           () async {
@@ -474,17 +481,18 @@ class SgtpClient {
       return (host, port);
     }
 
-    final parts = s.split(':');
-    if (parts.length < 2) {
-      throw ArgumentError('Expected host:port, got: $raw');
+    final idx = s.lastIndexOf(':');
+    if (idx <= 0 || idx == s.length - 1) {
+      return (s, 443);
     }
-    final port = int.tryParse(parts.last.trim()) ?? 0;
+    final host = s.substring(0, idx).trim();
+    final port = int.tryParse(s.substring(idx + 1).trim()) ?? 0;
+    if (host.isEmpty) {
+      throw ArgumentError('Invalid host in server address: $raw');
+    }
     if (port <= 0 || port > 65535) {
       throw ArgumentError('Invalid port in server address: $raw');
     }
-    final host = parts.sublist(0, parts.length - 1).join(':').trim();
-    if (host.isEmpty)
-      throw ArgumentError('Invalid host in server address: $raw');
     return (host, port);
   }
 
@@ -1108,6 +1116,27 @@ class SgtpClient {
     }
   }
 
+  Future<void> _retryHandshakeProgress() async {
+    try {
+      if (_state != _ClientState.waitingHandshake || _readyEmitted) return;
+      if (_peers.isEmpty) {
+        await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
+        return;
+      }
+      await _checkChatReq();
+      if (_state != _ClientState.waitingHandshake || _readyEmitted) return;
+      _updateMaster();
+      if (!_isMaster) {
+        final m = _masterPeer();
+        if (m != null) {
+          await _sendFrame(buildInfoRequest(_roomUUID, m, _myUUID));
+        }
+      }
+    } catch (e) {
+      AppLogger.w('Handshake retry tick failed: $e', tag: 'SGTP');
+    }
+  }
+
   Future<void> _onChatRequest(ParsedFrame f) async {
     final sender = uuidBytesToHex(f.senderUUID);
     AppLogger.d('CHAT_REQUEST from $sender', tag: 'SGTP');
@@ -1187,6 +1216,8 @@ class SgtpClient {
     if (!_readyEmitted) {
       _readyEmitted = true;
       _state = _ClientState.ready;
+      _handshakeRetryTimer?.cancel();
+      _handshakeRetryTimer = null;
       AppLogger.i('Ready (master) room=\${roomUUIDHex.substring(0,8)}',
           tag: 'SGTP');
       _eventController.add(SgtpReady(isMaster: true, roomUUIDHex: roomUUIDHex));
@@ -1216,6 +1247,8 @@ class SgtpClient {
       if (!_readyEmitted) {
         _readyEmitted = true;
         _state = _ClientState.ready;
+        _handshakeRetryTimer?.cancel();
+        _handshakeRetryTimer = null;
         AppLogger.i('Ready (peer) room=\${roomUUIDHex.substring(0,8)}',
             tag: 'SGTP');
         _eventController
@@ -1826,10 +1859,12 @@ class SgtpClient {
     _hsiTimer?.cancel();
     _stalePruneTimer?.cancel();
     _keepaliveTimer?.cancel();
+    _handshakeRetryTimer?.cancel();
     _ckRotationTimer = null;
     _hsiTimer = null;
     _stalePruneTimer = null;
     _keepaliveTimer = null;
+    _handshakeRetryTimer = null;
     _peerLastSeen.clear();
     _announcedJoins.clear();
     _infoTimerStarted = false;
