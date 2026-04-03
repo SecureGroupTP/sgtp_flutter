@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:camera/camera.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -104,6 +105,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _selectedMicrophoneId;
   List<CameraDescription> _cameras = const [];
   String? _selectedCameraName;
+  final AudioRecorder _micCheckRecorder = AudioRecorder();
+  final AudioPlayer _micCheckPlayer = AudioPlayer();
+  Timer? _micCheckTimer;
+  bool _micCheckEnabled = false;
+  bool _micCheckInFlight = false;
+  CameraController? _cameraCheckController;
+  bool _cameraCheckEnabled = false;
+  bool _cameraCheckLoading = false;
+  String? _cameraCheckError;
+  int _cameraCheckToken = 0;
 
   // Interaction preferences (Fix 7)
   String _doubleTapDesktop = 'react'; // 'react' | 'reply'
@@ -172,6 +183,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
       await _loadAccountData(preferredAccountId, applyConfig: false);
     } else {
+      await _setMicrophoneCheckEnabled(false);
+      await _setCameraCheckEnabled(false);
       final lastAddr = await _settings.getLastAddress();
       if (lastAddr != null && _standaloneServerAddress.isEmpty) {
         setState(() => _standaloneServerAddress = lastAddr.trim());
@@ -211,6 +224,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    _micCheckTimer?.cancel();
+    unawaited(_micCheckRecorder.stop());
+    unawaited(_micCheckRecorder.dispose());
+    unawaited(_micCheckPlayer.stop());
+    unawaited(_micCheckPlayer.dispose());
+    final cameraController = _cameraCheckController;
+    _cameraCheckController = null;
+    if (cameraController != null) {
+      unawaited(cameraController.dispose());
+    }
     _nicknameCtrl.dispose();
     _usernameCtrl.dispose();
     super.dispose();
@@ -291,6 +314,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadCaptureDevicesForAccount(String accountId) async {
     if (accountId.trim().isEmpty) return;
+    await _setMicrophoneCheckEnabled(false);
+    await _setCameraCheckEnabled(false);
     if (mounted) setState(() => _captureDevicesLoading = true);
 
     List<InputDevice> microphones = const [];
@@ -332,6 +357,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _cameras = cameras;
       _selectedCameraName = selectedCameraName;
       _captureDevicesLoading = false;
+      _cameraCheckError = null;
     });
   }
 
@@ -343,237 +369,214 @@ class _SettingsScreenState extends State<SettingsScreen> {
     };
   }
 
-  String _selectedMicrophoneLabel() {
-    final id = _selectedMicrophoneId;
-    if (id == null || id.isEmpty) return 'Not available';
-    for (final mic in _microphones) {
-      if (mic.id == id) return mic.label;
-    }
-    return 'Selected';
-  }
-
-  String _selectedCameraLabel() {
-    final name = _selectedCameraName;
-    if (name == null || name.isEmpty) return 'Not available';
-    for (final cam in _cameras) {
-      if (cam.name == name) return _cameraLabel(cam);
-    }
-    return 'Selected';
-  }
-
-  Future<void> _pickMicrophone() async {
+  Future<void> _selectMicrophone(String id) async {
     final accountId = _activeAccountId();
     if (accountId == null) return;
-    if (_microphones.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No microphones found')),
-      );
-      return;
+    await _settings.savePreferredMicrophoneForNode(accountId, id);
+    if (!mounted) return;
+    setState(() => _selectedMicrophoneId = id);
+    if (_micCheckEnabled) {
+      await _setMicrophoneCheckEnabled(true, restart: true);
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            const Text(
-              'Microphone',
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary),
-            ),
-            const SizedBox(height: 8),
-            ..._microphones.map((device) => ListTile(
-                  title: Text(device.label),
-                  trailing: device.id == _selectedMicrophoneId
-                      ? const Icon(Icons.check, color: AppColors.accent)
-                      : null,
-                  onTap: () async {
-                    await _settings.savePreferredMicrophoneForNode(
-                        accountId, device.id);
-                    if (!mounted) return;
-                    setState(() => _selectedMicrophoneId = device.id);
-                    if (context.mounted) Navigator.pop(ctx);
-                  },
-                )),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
   }
 
-  Future<void> _pickCamera() async {
+  Future<void> _selectCamera(String name) async {
     final accountId = _activeAccountId();
     if (accountId == null) return;
-    if (_cameras.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No cameras found')),
-      );
-      return;
+    await _settings.savePreferredCameraForNode(accountId, name);
+    if (!mounted) return;
+    setState(() => _selectedCameraName = name);
+    if (_cameraCheckEnabled) {
+      await _setCameraCheckEnabled(true, restart: true);
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            const Text(
-              'Camera',
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary),
-            ),
-            const SizedBox(height: 8),
-            ..._cameras.map((camera) => ListTile(
-                  title: Text(_cameraLabel(camera)),
-                  subtitle:
-                      Text(camera.name, style: const TextStyle(fontSize: 12)),
-                  trailing: camera.name == _selectedCameraName
-                      ? const Icon(Icons.check, color: AppColors.accent)
-                      : null,
-                  onTap: () async {
-                    await _settings.savePreferredCameraForNode(
-                        accountId, camera.name);
-                    if (!mounted) return;
-                    setState(() => _selectedCameraName = camera.name);
-                    if (context.mounted) Navigator.pop(ctx);
-                  },
-                )),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
   }
 
-  Future<void> _testMicrophone() async {
-    final selected = _selectedMicrophoneId;
-    if (selected == null || selected.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select a microphone first')),
-      );
+  Future<void> _setMicrophoneCheckEnabled(bool enabled,
+      {bool restart = false}) async {
+    if (enabled && _micCheckEnabled && !restart) return;
+    if (!enabled && !_micCheckEnabled && !restart) return;
+
+    _micCheckTimer?.cancel();
+    _micCheckTimer = null;
+    _micCheckEnabled = false;
+    _micCheckInFlight = false;
+    try {
+      await _micCheckRecorder.stop();
+    } catch (_) {}
+    try {
+      await _micCheckPlayer.stop();
+    } catch (_) {}
+
+    if (!enabled) {
+      if (mounted) setState(() {});
       return;
     }
+
+    final selectedId = _selectedMicrophoneId;
+    if (selectedId == null || selectedId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select a microphone first')),
+        );
+        setState(() {});
+      }
+      return;
+    }
+
     InputDevice? input;
     for (final mic in _microphones) {
-      if (mic.id == selected) {
+      if (mic.id == selectedId) {
         input = mic;
         break;
       }
     }
     if (input == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selected microphone is unavailable')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Selected microphone is unavailable')),
+        );
+      }
       return;
     }
 
-    final recorder = AudioRecorder();
-    StreamSubscription<Amplitude>? sub;
-    var peakDb = -120.0;
-    String? path;
-    try {
-      final hasPermission = await recorder.hasPermission();
-      if (!hasPermission) {
-        if (!mounted) return;
+    final hasPermission = await _micCheckRecorder.hasPermission();
+    if (!hasPermission) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Microphone permission is missing')),
         );
-        return;
       }
-      final dir = await getTemporaryDirectory();
-      path =
-          '${dir.path}/mic_test_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      return;
+    }
 
-      await recorder.start(
-        RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-          device: input,
-        ),
-        path: path,
+    _micCheckEnabled = true;
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Microphone check enabled')),
       );
-      sub = recorder
-          .onAmplitudeChanged(const Duration(milliseconds: 120))
-          .listen((amp) {
-        if (amp.current > peakDb) peakDb = amp.current;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Testing microphone for 3 seconds...')),
-        );
-      }
-      await Future.delayed(const Duration(seconds: 3));
-      await recorder.stop();
-      await sub.cancel();
+    }
 
-      if (!mounted) return;
-      final ok = peakDb > -45;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(ok
-              ? 'Microphone works (signal detected)'
-              : 'No clear microphone signal detected'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Microphone test failed: $e')),
-      );
-    } finally {
+    Future<void> runCycle() async {
+      if (!_micCheckEnabled || _micCheckInFlight) return;
+      _micCheckInFlight = true;
+      String? path;
       try {
-        await recorder.stop();
-      } catch (_) {}
-      await sub?.cancel();
-      await recorder.dispose();
-      if (path != null) {
-        try {
-          await File(path).delete();
-        } catch (_) {}
+        final dir = await getTemporaryDirectory();
+        path =
+            '${dir.path}/mic_loop_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        await _micCheckRecorder.start(
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 128000,
+            sampleRate: 44100,
+            device: input,
+          ),
+          path: path,
+        );
+        await Future.delayed(const Duration(milliseconds: 900));
+        final recordedPath = await _micCheckRecorder.stop() ?? path;
+        final bytes = await File(recordedPath).readAsBytes();
+        if (bytes.isNotEmpty && _micCheckEnabled) {
+          await _micCheckPlayer.stop();
+          await _micCheckPlayer.play(BytesSource(bytes));
+        }
+      } catch (_) {
+        await _setMicrophoneCheckEnabled(false);
+      } finally {
+        if (path != null) {
+          try {
+            await File(path).delete();
+          } catch (_) {}
+        }
+        _micCheckInFlight = false;
       }
     }
+
+    unawaited(runCycle());
+    _micCheckTimer = Timer.periodic(const Duration(milliseconds: 1300), (_) {
+      unawaited(runCycle());
+    });
   }
 
-  Future<void> _testCamera() async {
-    final selected = _selectedCameraName;
-    if (selected == null || selected.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select a camera first')),
-      );
+  Future<void> _setCameraCheckEnabled(bool enabled,
+      {bool restart = false}) async {
+    if (enabled && _cameraCheckEnabled && !restart) return;
+    if (!enabled && !_cameraCheckEnabled && !restart) return;
+
+    _cameraCheckEnabled = false;
+    _cameraCheckLoading = false;
+    _cameraCheckError = null;
+    final previousController = _cameraCheckController;
+    _cameraCheckController = null;
+    if (previousController != null) {
+      await previousController.dispose();
+    }
+
+    if (!enabled) {
+      if (mounted) setState(() {});
+      return;
+    }
+
+    final selectedName = _selectedCameraName;
+    if (selectedName == null || selectedName.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select a camera first')),
+        );
+      }
       return;
     }
     CameraDescription? selectedCamera;
     for (final cam in _cameras) {
-      if (cam.name == selected) {
+      if (cam.name == selectedName) {
         selectedCamera = cam;
         break;
       }
     }
     if (selectedCamera == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selected camera is unavailable')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Selected camera is unavailable')),
+        );
+      }
       return;
     }
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => _CameraTestPage(camera: selectedCamera!),
-      ),
-    );
+
+    _cameraCheckEnabled = true;
+    _cameraCheckLoading = true;
+    _cameraCheckError = null;
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera check enabled')),
+      );
+    }
+
+    final token = ++_cameraCheckToken;
+    try {
+      final controller = CameraController(
+        selectedCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      if (!mounted || token != _cameraCheckToken || !_cameraCheckEnabled) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _cameraCheckController = controller;
+        _cameraCheckLoading = false;
+      });
+    } catch (e) {
+      if (!mounted || token != _cameraCheckToken) return;
+      setState(() {
+        _cameraCheckEnabled = false;
+        _cameraCheckLoading = false;
+        _cameraCheckError = 'Failed to initialize camera: $e';
+      });
+    }
   }
 
   // ── Private key: browse ──────────────────────────────────────────────────
@@ -2860,6 +2863,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildCaptureDropdown({
+    required String? value,
+    required List<DropdownMenuItem<String>> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Container(
+      height: 48,
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B1B1F),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          isExpanded: true,
+          dropdownColor: AppColors.bgSurface,
+          iconEnabledColor: AppColors.textSecondary,
+          style: const TextStyle(color: AppColors.textPrimary),
+          items: items,
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCameraCheckPreview() {
+    final controller = _cameraCheckController;
+    if (_cameraCheckLoading) {
+      return const SizedBox(
+        height: 128,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_cameraCheckError != null) {
+      return Container(
+        width: 156,
+        height: 156,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.bgMain,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Text(
+            _cameraCheckError!,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    if (controller == null || !controller.value.isInitialized) {
+      return const SizedBox.shrink();
+    }
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          width: 156,
+          height: 156,
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: 156,
+              height: 156 / controller.value.aspectRatio,
+              child: CameraPreview(controller),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildMediaCard() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2977,44 +3058,103 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           )
         else ...[
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Microphone: ${_selectedMicrophoneLabel()}',
-                  style: const TextStyle(color: AppColors.textPrimary),
-                ),
-              ),
-              TextButton(
-                onPressed: _microphones.isNotEmpty ? _pickMicrophone : null,
-                child: const Text('Choose'),
-              ),
-              TextButton(
-                onPressed:
-                    _selectedMicrophoneId != null ? _testMicrophone : null,
-                child: const Text('Check'),
-              ),
-            ],
+          const Text(
+            'Microphone',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Camera: ${_selectedCameraLabel()}',
-                  style: const TextStyle(color: AppColors.textPrimary),
-                ),
-              ),
-              TextButton(
-                onPressed: _cameras.isNotEmpty ? _pickCamera : null,
-                child: const Text('Choose'),
-              ),
-              TextButton(
-                onPressed: _selectedCameraName != null ? _testCamera : null,
-                child: const Text('Check'),
-              ),
-            ],
+          const SizedBox(height: 6),
+          if (_microphones.isEmpty)
+            const Text(
+              'No microphones found',
+              style: TextStyle(color: AppColors.textSecondary),
+            )
+          else
+            _buildCaptureDropdown(
+              value: _selectedMicrophoneId,
+              items: _microphones
+                  .map(
+                    (mic) => DropdownMenuItem<String>(
+                      value: mic.id,
+                      child: Text(mic.label),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (id) {
+                if (id == null) return;
+                unawaited(_selectMicrophone(id));
+              },
+            ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            value: _micCheckEnabled,
+            onChanged:
+                _selectedMicrophoneId != null && _microphones.isNotEmpty
+                    ? (v) => unawaited(_setMicrophoneCheckEnabled(v))
+                    : null,
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            activeThumbColor: AppColors.accent,
+            activeTrackColor: AppColors.accent.withAlpha(110),
+            title: const Text(
+              'Microphone check',
+              style: TextStyle(color: AppColors.textPrimary),
+            ),
+            subtitle: const Text(
+              'Toggle on to hear your own voice',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
           ),
+          const SizedBox(height: 8),
+          const Text(
+            'Camera',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 6),
+          if (_cameras.isEmpty)
+            const Text(
+              'No cameras found',
+              style: TextStyle(color: AppColors.textSecondary),
+            )
+          else
+            _buildCaptureDropdown(
+              value: _selectedCameraName,
+              items: _cameras
+                  .map(
+                    (cam) => DropdownMenuItem<String>(
+                      value: cam.name,
+                      child: Text('${_cameraLabel(cam)} (${cam.name})'),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (name) {
+                if (name == null) return;
+                unawaited(_selectCamera(name));
+              },
+            ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            value: _cameraCheckEnabled,
+            onChanged: _selectedCameraName != null && _cameras.isNotEmpty
+                ? (v) => unawaited(_setCameraCheckEnabled(v))
+                : null,
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            activeThumbColor: AppColors.accent,
+            activeTrackColor: AppColors.accent.withAlpha(110),
+            title: const Text(
+              'Camera check',
+              style: TextStyle(color: AppColors.textPrimary),
+            ),
+            subtitle: const Text(
+              'Toggle on to see live camera preview',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+          ),
+          if (_cameraCheckEnabled || _cameraCheckLoading || _cameraCheckError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _buildCameraCheckPreview(),
+            ),
         ],
       ],
     );
@@ -4087,86 +4227,6 @@ class _AddAccountOption extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _CameraTestPage extends StatefulWidget {
-  final CameraDescription camera;
-
-  const _CameraTestPage({required this.camera});
-
-  @override
-  State<_CameraTestPage> createState() => _CameraTestPageState();
-}
-
-class _CameraTestPageState extends State<_CameraTestPage> {
-  CameraController? _controller;
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _init() async {
-    try {
-      final controller = CameraController(
-        widget.camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-      await controller.initialize();
-      if (!mounted) return;
-      setState(() {
-        _controller = controller;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = _controller;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('Camera check'),
-        backgroundColor: Colors.black,
-      ),
-      body: Center(
-        child: _loading
-            ? const CircularProgressIndicator()
-            : (_error != null || controller == null)
-                ? Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      _error ?? 'Failed to initialize camera',
-                      style: const TextStyle(color: Colors.white70),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                : AspectRatio(
-                    aspectRatio: controller.value.aspectRatio,
-                    child: CameraPreview(controller),
-                  ),
       ),
     );
   }

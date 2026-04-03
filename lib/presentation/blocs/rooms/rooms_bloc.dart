@@ -207,12 +207,15 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     ));
   }
 
-  void _onRemove(RoomsRemoveRoom event, Emitter<RoomsState> emit) {
-    _chatSubs[event.roomUUID]?.cancel();
+  Future<void> _onRemove(RoomsRemoveRoom event, Emitter<RoomsState> emit) async {
+    await _chatSubs[event.roomUUID]?.cancel();
     _chatSubs.remove(event.roomUUID);
     final room =
         state.rooms.where((r) => r.roomUUID == event.roomUUID).firstOrNull;
-    room?.chatBloc.close();
+    if (room != null) {
+      room.chatBloc.add(const ChatDisconnect());
+      await room.chatBloc.close();
+    }
     emit(state.copyWith(
       rooms: state.rooms.where((r) => r.roomUUID != event.roomUUID).toList(),
       clearError: true,
