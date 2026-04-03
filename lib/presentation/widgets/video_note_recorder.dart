@@ -2,8 +2,6 @@ import 'dart:io';
 import 'dart:async';
 
 import 'package:camera/camera.dart';
-import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -387,11 +385,14 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     }
   }
 
-  /// Merges [videoPath] (video-only or video+audio) with [audioPath] into a
-  /// new MP4 file, using the audio from [audioPath] as the sole audio track.
+  static const _mergerChannel =
+      MethodChannel('com.example.sgtp_flutter/video_merger');
+
+  /// Merges [videoPath] (video-only) with [audioPath] into a new MP4 file.
   ///
-  /// Tries `ffmpeg_kit_flutter_new` first (Android / iOS / macOS),
-  /// then falls back to a system `ffmpeg` process (Windows / Linux).
+  /// On Android / iOS uses a native platform channel (MediaMuxer /
+  /// AVMutableComposition — no extra library required).
+  /// On Windows / Linux falls back to a system `ffmpeg` process.
   Future<String?> _mergeVideoAudio({
     required String videoPath,
     required String audioPath,
@@ -401,51 +402,35 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     final outputPath =
         '${tmpDir.path}/vnote_merged_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-    // ffmpeg arguments: copy video stream, re-encode audio, use the shortest
-    // stream to set the output duration.
-    final args = [
-      '-i', videoPath,
-      '-i', audioPath,
-      '-map', '0:v:0',
-      '-map', '1:a:0',
-      '-c:v', 'copy',
-      '-c:a', 'aac',
-      '-shortest',
-      '-y',
-      outputPath,
-    ];
-
-    // --- Try ffmpeg_kit_flutter_new (Android / iOS / macOS) ---
+    // --- Native channel (Android / iOS / macOS) ---
     if (!Platform.isWindows && !Platform.isLinux) {
       try {
-        // Dynamic import to avoid MissingPluginException on unsupported platforms.
-        final merged = await _runFfmpegKit(args, outputPath);
-        if (merged != null) return merged;
+        final result = await _mergerChannel.invokeMethod<String>(
+          'mergeVideoAudio',
+          {'videoPath': videoPath, 'audioPath': audioPath, 'outputPath': outputPath},
+        );
+        if (result != null && await File(result).exists()) return result;
       } catch (_) {}
     }
 
-    // --- Try system ffmpeg process (Windows / Linux / fallback) ---
+    // --- System ffmpeg process (Windows / Linux / fallback) ---
     try {
-      final result = await Process.run('ffmpeg', args);
+      final result = await Process.run('ffmpeg', [
+        '-i', videoPath,
+        '-i', audioPath,
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-shortest',
+        '-y',
+        outputPath,
+      ]);
       if (result.exitCode == 0 && await File(outputPath).exists()) {
         return outputPath;
       }
     } catch (_) {}
 
-    return null;
-  }
-
-  /// Runs ffmpeg via ffmpeg_kit_flutter_new (Android / iOS / macOS).
-  /// Throws [MissingPluginException] on unsupported platforms — caller catches.
-  Future<String?> _runFfmpegKit(
-      List<String> args, String outputPath) async {
-    try {
-      final session = await FFmpegKit.executeWithArguments(args);
-      final rc = await session.getReturnCode();
-      if (ReturnCode.isSuccess(rc) && await File(outputPath).exists()) {
-        return outputPath;
-      }
-    } catch (_) {}
     return null;
   }
 
