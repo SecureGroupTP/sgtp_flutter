@@ -1380,6 +1380,7 @@ class SgtpClient {
       p = json.decode(utf8.decode(plaintext)) as Map<String, dynamic>;
     } catch (_) {}
     if (p == null || p['v'] != 1) {
+      final mine = _isOwnMessage(senderUUIDHex, null);
       _eventController.add(SgtpMessageReceived(
           message: ChatMessage(
               id: msgId,
@@ -1387,11 +1388,12 @@ class SgtpClient {
               content: utf8.decode(plaintext),
               receivedAt: recvAt,
               isFromHistory: history,
-              isFromMe: false)));
+              isFromMe: mine)));
       return;
     }
     _maybeApplyChatAvatarFromPayload(p, senderUUIDHex, history);
     final senderPub = p['pub'] as String?;
+    final mine = _isOwnMessage(senderUUIDHex, senderPub);
     if (senderPub != null && !history)
       _peerPublicKeys[senderUUIDHex] = senderPub;
 
@@ -1405,27 +1407,27 @@ class SgtpClient {
           content: (p['text'] as String?) ?? '',
           receivedAt: recvAt,
           isFromHistory: history,
-          isFromMe: false,
+          isFromMe: mine,
           replyToId: p['reply_to_id'] as String?,
           replyToContent: p['reply_to_content'] as String?,
           replyToSender: p['reply_to_sender'] as String?,
         )));
       case 'image':
         await _mediaPayload(msgId, senderUUIDHex, p, 'image', history, recvAt,
-            senderPub: senderPub);
+            senderPub: senderPub, isFromMe: mine);
       case 'gif':
         await _mediaPayload(msgId, senderUUIDHex, p, 'gif', history, recvAt,
-            senderPub: senderPub);
+            senderPub: senderPub, isFromMe: mine);
       case 'video':
         await _mediaPayload(msgId, senderUUIDHex, p, 'video', history, recvAt,
-            senderPub: senderPub);
+            senderPub: senderPub, isFromMe: mine);
       case 'video_note':
         await _mediaPayload(
             msgId, senderUUIDHex, p, 'video_note', history, recvAt,
-            senderPub: senderPub);
+            senderPub: senderPub, isFromMe: mine);
       case 'voice':
         await _mediaPayload(msgId, senderUUIDHex, p, 'voice', history, recvAt,
-            senderPub: senderPub);
+            senderPub: senderPub, isFromMe: mine);
       case 'message_read':
         if (!history) {
           final readMsgId = p['msg_id'] as String?;
@@ -1475,6 +1477,7 @@ class SgtpClient {
     bool history,
     DateTime recvAt, {
     String? senderPub,
+    required bool isFromMe,
   }) async {
     final fileId = p['file_id'] as String? ?? id;
     final name = p['name'] as String? ?? 'file';
@@ -1486,7 +1489,7 @@ class SgtpClient {
       _eventController.add(SgtpMessageReceived(
           message: _media(
               fileId, sender, name, mime, type, chunk, history, recvAt,
-              senderPub: senderPub)));
+              senderPub: senderPub, isFromMe: isFromMe)));
       return;
     }
     final ci = (p['chunk'] as num).toInt();
@@ -1508,13 +1511,13 @@ class SgtpClient {
       _eventController.add(SgtpMessageReceived(
           message: _media(
               fileId, sender, name, mime, type, pf.assemble(), history, recvAt,
-              senderPub: senderPub)));
+              senderPub: senderPub, isFromMe: isFromMe)));
     }
   }
 
   ChatMessage _media(String id, String sender, String name, String mime,
           String type, Uint8List bytes, bool history, DateTime recvAt,
-          {String? senderPub}) =>
+          {String? senderPub, required bool isFromMe}) =>
       switch (type) {
         'gif' => ChatMessage(
             id: id,
@@ -1527,7 +1530,7 @@ class SgtpClient {
             type: MessageType.gif,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false),
+            isFromMe: isFromMe),
         'video' => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1539,7 +1542,7 @@ class SgtpClient {
             type: MessageType.video,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false),
+            isFromMe: isFromMe),
         'video_note' => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1551,7 +1554,7 @@ class SgtpClient {
             type: MessageType.videoNote,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false),
+            isFromMe: isFromMe),
         'voice' => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1563,7 +1566,7 @@ class SgtpClient {
             type: MessageType.voice,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false),
+            isFromMe: isFromMe),
         _ => ChatMessage(
             id: id,
             senderUUID: sender,
@@ -1575,8 +1578,18 @@ class SgtpClient {
             type: MessageType.image,
             receivedAt: recvAt,
             isFromHistory: history,
-            isFromMe: false),
+            isFromMe: isFromMe),
       };
+
+  bool _isOwnMessage(String senderUUIDHex, String? senderPub) {
+    final myPub = _hex(_config.myPublicKey).toLowerCase();
+    final pub = (senderPub ?? '').trim().toLowerCase();
+    if (pub.isNotEmpty) {
+      return pub == myPub;
+    }
+    // Fallback for legacy payloads without `pub`.
+    return senderUUIDHex == myUUIDHex;
+  }
 
   void _attachChatAvatar(Map<String, dynamic> payload) {
     final avatar = _currentChatAvatar;
