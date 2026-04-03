@@ -77,7 +77,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     if (_useSeparateMic) {
       _audioRecorder = AudioRecorder();
     }
-    _initCamera();
+    _initCamera(selectDefault: true);
   }
 
   @override
@@ -111,7 +111,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     }
   }
 
-  Future<void> _initCamera({int index = 0}) async {
+  Future<void> _initCamera({int index = 0, bool selectDefault = false}) async {
     setState(() {
       _initialising = true;
       _initError = null;
@@ -132,7 +132,10 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       if (preferred != null && preferred.isNotEmpty) {
         final prefIdx = cameras.indexWhere((c) => c.name == preferred);
         if (prefIdx >= 0) target = prefIdx;
-      } else if (index == 0) {
+      } else if (selectDefault) {
+        // On first launch: prefer the front camera as a sensible default for
+        // video notes. This branch must NOT run during explicit swaps so that
+        // requesting camera index 0 (back camera) actually opens the back camera.
         final frontIdx = cameras
             .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
         target = frontIdx >= 0 ? frontIdx : 0;

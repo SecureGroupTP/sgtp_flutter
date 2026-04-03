@@ -1324,12 +1324,18 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         return Transform.scale(
           scale: scale < 1 ? 1 / scale : scale,
           child: Center(
-            child: Video(
-              controller: controller,
-              controls: NoVideoControls,
-              // Keep correct aspect, scaling is handled by Transform.scale above.
-              fit: BoxFit.contain,
-              aspectRatio: safeAspect,
+            // libmpv mis-applies the front-camera horizontal-flip metadata on
+            // Android and Windows, so we counteract it with a horizontal flip.
+            child: Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.diagonal3Values(-1, 1, 1),
+              child: Video(
+                controller: controller,
+                controls: NoVideoControls,
+                // Keep correct aspect, scaling is handled by Transform.scale above.
+                fit: BoxFit.contain,
+                aspectRatio: safeAspect,
+              ),
             ),
           ),
         );
