@@ -1001,7 +1001,8 @@ class SgtpClient {
 
   /// Send a circular video note (кружок) from an in-memory buffer (recorder).
   Future<void> sendVideoNote(Uint8List bytes, String mime) {
-    final name = 'videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final name =
+        'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     return () async {
       final echoId = uuidBytesToHex(generateUUIDv7());
       final localPath = await _cachePlayableMedia(echoId, mime, bytes);
@@ -1030,7 +1031,8 @@ class SgtpClient {
   /// Send a circular video note from a file (picked from gallery) —
   /// streams from disk, never loads the full file into RAM.
   Future<void> sendVideoNoteFromXFile(XFile xFile, String mime) async {
-    final name = 'videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final name =
+        'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     final echoId = uuidBytesToHex(generateUUIDv7());
     final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
     await _sendMediaFromXFile(

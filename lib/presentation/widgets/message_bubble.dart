@@ -628,7 +628,9 @@ class MessageBubble extends StatelessWidget {
   Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
     final isMedia =
-        message.type == MessageType.video || message.type == MessageType.voice;
+        message.type == MessageType.video ||
+        message.type == MessageType.videoNote ||
+        message.type == MessageType.voice;
 
     if (message.isSending) {
       return Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1108,6 +1110,20 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     return aspect;
   }
 
+  String _tempExtForMime(String? mime) => switch (mime) {
+        'video/mp4' => 'mp4',
+        'video/quicktime' => 'mov',
+        'video/webm' => 'webm',
+        'audio/m4a' => 'm4a',
+        'audio/mp4' => 'm4a',
+        'audio/x-m4a' => 'm4a',
+        'audio/aac' => 'aac',
+        'audio/mp4a-latm' => 'aac',
+        'audio/opus' => 'opus',
+        'audio/mpeg' => 'mp3',
+        _ => 'bin',
+      };
+
   Future<void> _preparePreview({bool autoplay = false}) async {
     if (_initialized || _loading) return;
     setState(() => _loading = true);
@@ -1125,7 +1141,8 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         if (bytes == null || bytes.isEmpty) {
           throw Exception('Video data is unavailable');
         }
-        final file = File('${tmpDir.path}/vnote_${bytes.hashCode}.mp4');
+        final ext = _tempExtForMime(widget.mediaMime);
+        final file = File('${tmpDir.path}/vnote_${bytes.hashCode}.$ext');
         if (!file.existsSync()) await file.writeAsBytes(bytes);
         path = file.path;
         _ownsTempFile = true;
