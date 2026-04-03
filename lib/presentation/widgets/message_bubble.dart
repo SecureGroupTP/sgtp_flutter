@@ -1120,17 +1120,17 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         setState(() => _playing = p);
       });
 
-      // Open briefly to render first frame, then pause at 0.
-      await player.open(Media('file://${file.path}'), play: true);
-      await player.setVolume(0);
+      // Open without autoplay: avoids mute-state races on some platforms.
+      await player.open(Media('file://${file.path}'), play: false);
+      await player.setVolume(100);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveVideoNoteAspectRatio(player);
 
-      if (!autoplay) {
-        await player.pause();
+      if (autoplay) {
+        await player.play();
+      } else {
         await player.seek(Duration.zero);
       }
-      await player.setVolume(100);
 
       if (!mounted) {
         await player.dispose();
@@ -1144,8 +1144,8 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         await prevSub?.cancel();
       } catch (_) {}
 
-      final readyPlayer = player!;
-      final readyController = controller!;
+      final readyPlayer = player;
+      final readyController = controller;
       setState(() {
         _player = readyPlayer;
         _controller = readyController;
@@ -1178,6 +1178,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       await _preparePreview(autoplay: true);
       return;
     }
+    await _player?.setVolume(100);
     await _player?.playOrPause();
   }
 

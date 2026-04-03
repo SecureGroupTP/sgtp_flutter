@@ -569,12 +569,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         _saveMetadata(roomUUID, chatName, avatarBytes);
 
       case SgtpMediaProgress(:final echoId, :final progress):
-        // Update sendProgress on the in-flight outgoing message
+        // Update sendProgress on the in-flight outgoing message.
+        // Ignore tiny deltas to avoid excessive full-list rebuilds.
+        var changed = false;
         final updatedMsgs = state.messages.map<ChatMessage>((m) {
-          if (m.id == echoId) return m.copyWith(sendProgress: progress);
-          return m;
+          if (m.id != echoId) return m;
+          final next = progress.clamp(0.0, 1.0);
+          final delta = (next - m.sendProgress).abs();
+          if (delta < 0.01 && next < 1.0) return m;
+          changed = true;
+          return m.copyWith(sendProgress: next);
         }).toList();
-        emit(state.copyWith(messages: updatedMsgs));
+        if (changed) {
+          emit(state.copyWith(messages: updatedMsgs));
+        }
 
       case SgtpReactionReceived(
           :final messageId,

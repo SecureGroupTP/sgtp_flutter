@@ -710,9 +710,13 @@ class SgtpClient {
     }
 
     try {
+      final progressTimer = Stopwatch()..start();
+      var lastProgressEmit = 0.0;
+      var lastProgressEmitMs = -1;
       for (int i = 0; i < totalChunks; i++) {
         final start = i * chunkSize;
         final end = (start + chunkSize).clamp(0, bytes.length);
+        final chunkBytes = Uint8List.sublistView(bytes, start, end);
         final Map<String, dynamic> payload = {
           'v': 1,
           'type': mediaType,
@@ -720,7 +724,7 @@ class SgtpClient {
           'name': name,
           'mime': mime,
           'size': bytes.length,
-          'data': base64.encode(bytes.sublist(start, end)),
+          'data': base64.encode(chunkBytes),
         };
         if (i == 0) {
           _attachChatAvatar(payload);
@@ -747,8 +751,25 @@ class SgtpClient {
         final progress = (i + 1) / totalChunks;
         onProgress?.call(progress);
         if (echoMessage != null) {
-          _eventController.add(SgtpMediaProgress(
-              messageId: fileId, echoId: fileId, progress: progress));
+          final nowMs = progressTimer.elapsedMilliseconds;
+          final shouldEmit = progress >= 1.0 ||
+              (progress - lastProgressEmit) >= 0.03 ||
+              lastProgressEmitMs < 0 ||
+              (nowMs - lastProgressEmitMs) >= 200;
+          if (shouldEmit) {
+            lastProgressEmit = progress;
+            lastProgressEmitMs = nowMs;
+            _eventController.add(SgtpMediaProgress(
+              messageId: fileId,
+              echoId: fileId,
+              progress: progress,
+            ));
+          }
+        }
+
+        // Yield periodically so UI isolate stays responsive on large media.
+        if ((i & 1) == 1) {
+          await Future<void>.delayed(Duration.zero);
         }
       }
       // Mark as sent
