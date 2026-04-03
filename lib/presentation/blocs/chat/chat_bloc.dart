@@ -42,6 +42,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatSendVideo>(_onSendVideo);
     on<ChatSendVoice>(_onSendVoice);
     on<ChatSendVideoNote>(_onSendVideoNote);
+    on<ChatSendVideoNoteFile>(_onSendVideoNoteFile);
     on<ChatSendMessageRead>(_onSendMessageRead);
     on<ChatLoadOlderHistory>(_onLoadOlderHistory);
     on<ChatDisconnect>(_onDisconnect);
@@ -283,7 +284,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onSendVideo(
       ChatSendVideo event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendVideo(event.bytes, event.name, event.mime);
+    await _client!.sendVideo(event.xFile, event.name, event.mime);
     await _touchChatActivity();
   }
 
@@ -298,6 +299,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       ChatSendVideoNote event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     await _client!.sendVideoNote(event.bytes, event.mime);
+    await _touchChatActivity();
+  }
+
+  Future<void> _onSendVideoNoteFile(
+      ChatSendVideoNoteFile event, Emitter<ChatState> emit) async {
+    if (_client == null || state.status != ChatStatus.ready) return;
+    await _client!.sendVideoNoteFromXFile(event.xFile, event.mime);
     await _touchChatActivity();
   }
 

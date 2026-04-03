@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'package:cross_file/cross_file.dart';
 import 'package:equatable/equatable.dart';
 import '../../../data/sgtp_client.dart';
 import '../../../domain/entities/message.dart';
@@ -49,11 +50,11 @@ class ChatSendImage extends ChatEvent {
 }
 
 class ChatSendVideo extends ChatEvent {
-  final Uint8List bytes;
+  final XFile xFile;
   final String name;
   final String mime;
   const ChatSendVideo(
-      {required this.bytes, required this.name, required this.mime});
+      {required this.xFile, required this.name, required this.mime});
   @override
   List<Object?> get props => [name, mime];
 }
@@ -70,6 +71,15 @@ class ChatSendVideoNote extends ChatEvent {
   final Uint8List bytes;
   final String mime;
   const ChatSendVideoNote({required this.bytes, required this.mime});
+  @override
+  List<Object?> get props => [mime];
+}
+
+/// Video note picked from gallery — streamed from XFile, never fully loaded.
+class ChatSendVideoNoteFile extends ChatEvent {
+  final XFile xFile;
+  final String mime;
+  const ChatSendVideoNoteFile({required this.xFile, required this.mime});
   @override
   List<Object?> get props => [mime];
 }

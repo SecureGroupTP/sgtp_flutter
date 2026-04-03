@@ -623,25 +623,23 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   Future<void> _pickAndSendVideoNote(BuildContext context) async {
     final result = await FilePicker.platform
-        .pickFiles(type: FileType.video, withData: true);
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.bytes == null) return;
+        .pickFiles(type: FileType.video, withData: false);
+    if (result == null || result.xFiles.isEmpty) return;
+    final xFile = result.xFiles.first;
     if (!context.mounted) return;
     context
         .read<ChatBloc>()
-        .add(ChatSendVideoNote(bytes: file.bytes!, mime: 'video/mp4'));
+        .add(ChatSendVideoNoteFile(xFile: xFile, mime: 'video/mp4'));
     _scrollToBottom();
   }
 
   Future<void> _pickAndSendVideo(BuildContext context) async {
     final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
     final result = await FilePicker.platform
-        .pickFiles(type: FileType.video, withData: true);
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    if (file.bytes == null) return;
-    final ext = file.name.split('.').last.toLowerCase();
+        .pickFiles(type: FileType.video, withData: false);
+    if (result == null || result.xFiles.isEmpty) return;
+    final xFile = result.xFiles.first;
+    final ext = xFile.name.split('.').last.toLowerCase();
     if (!_videoExtensions.contains(ext)) {
       if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
       return;
@@ -659,7 +657,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
     context
         .read<ChatBloc>()
-        .add(ChatSendVideo(bytes: file.bytes!, name: file.name, mime: mime));
+        .add(ChatSendVideo(xFile: xFile, name: xFile.name, mime: mime));
     _scrollToBottom();
   }
 

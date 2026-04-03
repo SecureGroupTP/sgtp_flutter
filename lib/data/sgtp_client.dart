@@ -4,8 +4,10 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:cross_file/cross_file.dart';
+
 import 'package:cryptography/cryptography.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/app_logger.dart';
@@ -56,9 +58,19 @@ class _PendingFile {
   final int totalChunks;
   final String senderUUID;
   final String mediaType;
-  final List<Uint8List?> chunks;
 
-  _PendingFile({
+  // Disk-based storage: chunks are written to tempPath as they arrive.
+  // Only one copy of the data ever exists — on disk, never fully in RAM.
+  final String? tempPath;
+  final RandomAccessFile? _raf;
+  int _firstChunkSize = 0; // inferred from chunk index 0
+
+  // Memory-based fallback (web or small non-cacheable files).
+  final List<Uint8List?>? _memChunks;
+
+  int _receivedCount = 0;
+
+  _PendingFile._({
     required this.fileId,
     required this.name,
     required this.mime,
@@ -66,13 +78,79 @@ class _PendingFile {
     required this.totalChunks,
     required this.senderUUID,
     required this.mediaType,
-  }) : chunks = List.filled(totalChunks, null);
+    RandomAccessFile? raf,
+    this.tempPath,
+    List<Uint8List?>? memChunks,
+  })  : _raf = raf,
+        _memChunks = memChunks;
 
-  bool get isComplete => chunks.every((c) => c != null);
-  Uint8List assemble() {
+  /// Opens a temp file on disk and returns a disk-backed [_PendingFile].
+  /// Falls back to in-memory on web.
+  static Future<_PendingFile> create({
+    required String fileId,
+    required String name,
+    required String mime,
+    required int totalSize,
+    required int totalChunks,
+    required String senderUUID,
+    required String mediaType,
+    required bool useDisk,
+    required String tempPath,
+  }) async {
+    if (useDisk && !kIsWeb) {
+      final f = File(tempPath);
+      final raf = await f.open(mode: FileMode.write);
+      return _PendingFile._(
+        fileId: fileId, name: name, mime: mime,
+        totalSize: totalSize, totalChunks: totalChunks,
+        senderUUID: senderUUID, mediaType: mediaType,
+        raf: raf, tempPath: tempPath,
+      );
+    }
+    return _PendingFile._(
+      fileId: fileId, name: name, mime: mime,
+      totalSize: totalSize, totalChunks: totalChunks,
+      senderUUID: senderUUID, mediaType: mediaType,
+      memChunks: List.filled(totalChunks, null),
+    );
+  }
+
+  Future<void> writeChunk(int ci, Uint8List data) async {
+    final raf = _raf;
+    if (raf != null) {
+      if (ci == 0) _firstChunkSize = data.length;
+      // Seek to the correct offset using the chunk size learned from chunk 0.
+      // On TCP/WS transports chunks arrive in order, so chunk 0 always precedes
+      // later chunks and _firstChunkSize is set before it is needed.
+      final offset = _firstChunkSize > 0 ? ci * _firstChunkSize : 0;
+      await raf.setPosition(offset);
+      await raf.writeFrom(data);
+    } else {
+      final mem = _memChunks;
+      if (mem != null && ci < mem.length) mem[ci] = data;
+    }
+    _receivedCount++;
+  }
+
+  bool get isComplete => _receivedCount >= totalChunks;
+
+  /// Assemble in-memory chunks into a single buffer (memory-based path only).
+  Uint8List? assembleMemory() {
+    final mem = _memChunks;
+    if (mem == null) return null;
     final buf = BytesBuilder();
-    for (final c in chunks) buf.add(c!);
+    for (final c in mem) {
+      if (c == null) return null;
+      buf.add(c);
+    }
     return buf.takeBytes();
+  }
+
+  Future<void> close() async {
+    try {
+      await _raf?.flush();
+      await _raf?.close();
+    } catch (_) {}
   }
 }
 
@@ -308,7 +386,9 @@ class SgtpClient {
   String _currentChatName;
   Uint8List? _currentChatAvatar;
 
-  final Map<String, _PendingFile> _pendingFiles = {};
+  // Keyed by fileId. Values are Futures so concurrent chunk arrivals
+  // (frames are processed fire-and-forget) share the same init future.
+  final Map<String, Future<_PendingFile>> _pendingFiles = {};
 
   /// Serial send queue — ensures only one frame is written to the socket at a time.
   /// Without this, concurrent async calls can interleave bytes in the TCP stream,
@@ -694,14 +774,22 @@ class SgtpClient {
     }
   }
 
-  Future<void> _sendMedia(
-      Uint8List bytes, String name, String mime, String mediaType,
+  /// Core send loop shared by all media senders.
+  ///
+  /// [totalSize] is the byte length of the full media.
+  /// [readChunk] is called with (start, end) and must return exactly
+  /// (end – start) bytes read from whatever backing store the caller has.
+  /// Only that slice is held in RAM during each iteration.
+  Future<void> _sendMediaChunked(
+      String name, String mime, String mediaType, int totalSize,
+      Future<Uint8List> Function(int start, int end) readChunk,
       {ChatMessage? echoMessage,
-      void Function(double progress)? onProgress}) async {
+      void Function(double progress)? onProgress,
+      bool persistChunks = true}) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
     final chunkSize = _config.mediaChunkSizeBytes;
     final fileId = echoMessage?.id ?? uuidBytesToHex(generateUUIDv7());
-    final totalChunks = (bytes.length / chunkSize).ceil().clamp(1, 9999);
+    final totalChunks = (totalSize / chunkSize).ceil().clamp(1, 9999);
 
     // Emit echo immediately so the sender sees the bubble right away.
     // The echo id IS the fileId so read-receipts from receivers will match.
@@ -717,15 +805,16 @@ class SgtpClient {
       var lastProgressEmitMs = -1;
       for (int i = 0; i < totalChunks; i++) {
         final start = i * chunkSize;
-        final end = (start + chunkSize).clamp(0, bytes.length);
-        final chunkBytes = Uint8List.sublistView(bytes, start, end);
+        final end = (start + chunkSize).clamp(0, totalSize);
+        // Read only this chunk — no other bytes are held in RAM.
+        final chunkBytes = await readChunk(start, end);
         final Map<String, dynamic> payload = {
           'v': 1,
           'type': mediaType,
           'file_id': fileId,
           'name': name,
           'mime': mime,
-          'size': bytes.length,
+          'size': totalSize,
           'data': base64.encode(chunkBytes),
         };
         if (i == 0) {
@@ -741,13 +830,15 @@ class SgtpClient {
         final cipher = await encrypt(plain, _chatKey!, nonce);
         await _sendFrame(
             buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
-        unawaited(_persistRecord(_HistoryRecord(
-          senderUUID: _myUUID,
-          messageUUID: msgUUID,
-          timestamp: DateTime.now().millisecondsSinceEpoch,
-          nonce: nonce,
-          plaintext: plain,
-        )));
+        if (persistChunks) {
+          unawaited(_persistRecord(_HistoryRecord(
+            senderUUID: _myUUID,
+            messageUUID: msgUUID,
+            timestamp: DateTime.now().millisecondsSinceEpoch,
+            nonce: nonce,
+            plaintext: plain,
+          )));
+        }
 
         // Report progress
         final progress = (i + 1) / totalChunks;
@@ -786,6 +877,60 @@ class SgtpClient {
     }
   }
 
+  /// Send media from an in-memory buffer (images, voice, short video notes).
+  Future<void> _sendMedia(
+      Uint8List bytes, String name, String mime, String mediaType,
+      {ChatMessage? echoMessage,
+      void Function(double progress)? onProgress}) =>
+      _sendMediaChunked(
+        name, mime, mediaType, bytes.length,
+        (start, end) async => Uint8List.sublistView(bytes, start, end),
+        echoMessage: echoMessage,
+        onProgress: onProgress,
+      );
+
+  /// Send media from an [XFile] with a read-ahead buffer.
+  ///
+  /// Reads [_sendReadAheadBytes] from disk at a time, then serves individual
+  /// protocol chunks as zero-copy sub-slices — reducing IO calls by ~300×
+  /// while keeping at most ~30 MB in RAM. Works on native and web.
+  static const int _sendReadAheadBytes = 30 * 1024 * 1024; // 30 MB
+
+  Future<void> _sendMediaFromXFile(
+      XFile xFile, String name, String mime, String mediaType,
+      {ChatMessage? echoMessage,
+      void Function(double progress)? onProgress}) async {
+    final fileSize = await xFile.length();
+
+    Uint8List? block;
+    int blockStart = -1;
+
+    await _sendMediaChunked(
+      name, mime, mediaType, fileSize,
+      (start, end) async {
+        // Load the next 30 MB block when the current one is exhausted.
+        if (block == null || start >= blockStart + block!.length) {
+          final blockEnd = (start + _sendReadAheadBytes).clamp(0, fileSize);
+          final builder = BytesBuilder(copy: false);
+          await for (final part in xFile.openRead(start, blockEnd)) {
+            builder.add(part);
+          }
+          block = builder.takeBytes();
+          blockStart = start;
+        }
+        // Zero-copy slice from the in-memory block — no IO.
+        final lo = start - blockStart;
+        final hi = (end - blockStart).clamp(0, block!.length);
+        return Uint8List.sublistView(block!, lo, hi);
+      },
+      echoMessage: echoMessage,
+      onProgress: onProgress,
+      // Media chunks are already cached to disk — persisting 2000+ JSON records
+      // per file wastes disk I/O without any replay benefit.
+      persistChunks: false,
+    );
+  }
+
   Future<void> sendImage(Uint8List bytes, String name, String mime) =>
       _sendMedia(bytes, name, mime, mime == 'image/gif' ? 'gif' : 'image',
           echoMessage: ChatMessage(
@@ -800,11 +945,11 @@ class SgtpClient {
               isFromHistory: false,
               isFromMe: true));
 
-  Future<void> sendVideo(Uint8List bytes, String name, String mime) async {
+  Future<void> sendVideo(XFile xFile, String name, String mime) async {
     final echoId = uuidBytesToHex(generateUUIDv7());
-    final localPath = await _cachePlayableMedia(echoId, mime, bytes);
-    return _sendMedia(
-      bytes,
+    final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
+    return _sendMediaFromXFile(
+      xFile,
       name,
       mime,
       'video',
@@ -812,10 +957,9 @@ class SgtpClient {
         id: echoId,
         senderUUID: uuidBytesToHex(_myUUID),
         content: name,
-        videoBytes: localPath == null ? bytes : null,
         mediaMime: mime,
         mediaName: name,
-        localMediaPath: localPath,
+        localMediaPath: localPath ?? xFile.path,
         type: MessageType.video,
         receivedAt: DateTime.now(),
         isFromHistory: false,
@@ -851,7 +995,7 @@ class SgtpClient {
     }();
   }
 
-  /// Send a circular video note (кружок).
+  /// Send a circular video note (кружок) from an in-memory buffer (recorder).
   Future<void> sendVideoNote(Uint8List bytes, String mime) {
     final name = 'videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
     return () async {
@@ -877,6 +1021,32 @@ class SgtpClient {
         ),
       );
     }();
+  }
+
+  /// Send a circular video note from a file (picked from gallery) —
+  /// streams from disk, never loads the full file into RAM.
+  Future<void> sendVideoNoteFromXFile(XFile xFile, String mime) async {
+    final name = 'videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final echoId = uuidBytesToHex(generateUUIDv7());
+    final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
+    await _sendMediaFromXFile(
+      xFile,
+      name,
+      mime,
+      'video_note',
+      echoMessage: ChatMessage(
+        id: echoId,
+        senderUUID: uuidBytesToHex(_myUUID),
+        content: name,
+        mediaMime: mime,
+        mediaName: name,
+        localMediaPath: localPath ?? xFile.path,
+        type: MessageType.videoNote,
+        receivedAt: DateTime.now(),
+        isFromHistory: false,
+        isFromMe: true,
+      ),
+    );
   }
 
   String _ext(String mime) => switch (mime) {
@@ -1559,27 +1729,50 @@ class SgtpClient {
     }
     final ci = (p['chunk'] as num).toInt();
     final ct = (p['chunks'] as num).toInt();
-    _pendingFiles.putIfAbsent(
-        fileId,
-        () => _PendingFile(
-            fileId: fileId,
-            name: name,
-            mime: mime,
-            totalSize: totalSize,
-            totalChunks: ct,
-            senderUUID: sender,
-            mediaType: type));
-    final pf = _pendingFiles[fileId]!;
-    if (ci < pf.chunks.length) pf.chunks[ci] = chunk;
+
+    // Initialise the pending file entry once — using a Future so concurrent
+    // frame handlers (fire-and-forget) all await the same init future.
+    if (!_pendingFiles.containsKey(fileId)) {
+      _pendingFiles[fileId] = () async {
+        String tempPath = '';
+        if (shouldCacheToDisk && !kIsWeb) {
+          final dir = await getTemporaryDirectory();
+          final cacheDir = Directory('${dir.path}/sgtp_media_cache');
+          if (!await cacheDir.exists()) {
+            await cacheDir.create(recursive: true);
+          }
+          tempPath = '${cacheDir.path}/$fileId.${_extForMime(mime)}';
+        }
+        return _PendingFile.create(
+          fileId: fileId,
+          name: name,
+          mime: mime,
+          totalSize: totalSize,
+          totalChunks: ct,
+          senderUUID: sender,
+          mediaType: type,
+          useDisk: shouldCacheToDisk,
+          tempPath: tempPath,
+        );
+      }();
+    }
+    final pf = await _pendingFiles[fileId]!;
+    await pf.writeChunk(ci, chunk);
+
     if (pf.isComplete) {
       _pendingFiles.remove(fileId);
-      final assembled = pf.assemble();
-      final localPath = shouldCacheToDisk
-          ? await _cachePlayableMedia(fileId, mime, assembled)
-          : null;
+      await pf.close();
+
+      // Disk-based: file is already assembled at tempPath — no RAM copy needed.
+      // Memory-based: assemble from in-memory chunks (non-cacheable types).
+      final String? localPath = pf.tempPath;
+      final Uint8List bytes = localPath != null
+          ? Uint8List(0)
+          : (pf.assembleMemory() ?? Uint8List(0));
+
       _eventController.add(SgtpMessageReceived(
           message: _media(
-              fileId, sender, name, mime, type, assembled, history, recvAt,
+              fileId, sender, name, mime, type, bytes, history, recvAt,
               senderPub: senderPub,
               isFromMe: isFromMe,
               localMediaPath: localPath)));
@@ -1686,6 +1879,34 @@ class SgtpClient {
         await sink.close();
       }
       return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Cache a playable media file from an [XFile] stream.
+  /// On native: copies to temp directory via streaming (no full-file RAM load).
+  /// On web: returns the XFile path directly (blob URL — no disk caching needed).
+  Future<String?> _cachePlayableMediaFromXFile(
+      String fileId, String mime, XFile xFile) async {
+    if (kIsWeb) {
+      return xFile.path.isNotEmpty ? xFile.path : null;
+    }
+    try {
+      final dir = await getTemporaryDirectory();
+      final cacheDir = Directory('${dir.path}/sgtp_media_cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+      final ext = _extForMime(mime);
+      final dest = File('${cacheDir.path}/$fileId.$ext');
+      if (!await dest.exists()) {
+        final sink = dest.openWrite();
+        await sink.addStream(xFile.openRead());
+        await sink.flush();
+        await sink.close();
+      }
+      return dest.path;
     } catch (_) {
       return null;
     }
@@ -2122,6 +2343,9 @@ class SgtpClient {
       timer.cancel();
     }
     _pendingHandshakeTimers.clear();
+    for (final fut in _pendingFiles.values) {
+      fut.then((pf) => pf.close()).catchError((_) {});
+    }
     _pendingFiles.clear();
     _hsiReplies.clear();
     _peerPublicKeys.clear();
