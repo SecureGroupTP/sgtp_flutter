@@ -720,6 +720,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         MaterialPageRoute(
           builder: (_) => VideoNoteRecorderPage(
             preferredCameraName: preferred?.name,
+            preferredMicrophone: _selectedMicrophoneDevice(),
           ),
           fullscreenDialog: true,
         ),

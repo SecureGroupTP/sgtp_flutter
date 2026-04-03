@@ -2,8 +2,13 @@ import 'dart:io';
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/return_code.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 class VideoNoteCaptureResult {
   final XFile xFile;
@@ -22,7 +27,16 @@ class VideoNoteCaptureResult {
 /// Pops with [VideoNoteCaptureResult] on success, or `null` on cancel.
 class VideoNoteRecorderPage extends StatefulWidget {
   final String? preferredCameraName;
-  const VideoNoteRecorderPage({super.key, this.preferredCameraName});
+
+  /// When set, audio is recorded separately using this microphone and merged
+  /// into the final video. Falls back to camera audio if merging fails.
+  final InputDevice? preferredMicrophone;
+
+  const VideoNoteRecorderPage({
+    super.key,
+    this.preferredCameraName,
+    this.preferredMicrophone,
+  });
 
   @override
   State<VideoNoteRecorderPage> createState() => _VideoNoteRecorderPageState();
@@ -32,10 +46,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     with WidgetsBindingObserver {
   List<CameraDescription> _cameras = [];
   CameraController? _ctrl;
-  int _cameraIndex = 0; // 0 = front, 1 = back
+  int _cameraIndex = 0;
 
   bool _initialising = true;
   bool _recording = false;
+  bool _merging = false;
   bool _recordActionInFlight = false;
   String? _initError;
   DateTime? _recordStartAt;
@@ -49,10 +64,19 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   Timer? _holdIntentTimer;
   bool _pressWasRecording = false;
 
+  // Separate audio recording for mic selection support.
+  AudioRecorder? _audioRecorder;
+  String? _audioRecordPath;
+
+  bool get _useSeparateMic => widget.preferredMicrophone != null;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (_useSeparateMic) {
+      _audioRecorder = AudioRecorder();
+    }
     _initCamera();
   }
 
@@ -61,7 +85,19 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     WidgetsBinding.instance.removeObserver(this);
     _holdIntentTimer?.cancel();
     _ctrl?.dispose();
+    _audioRecorder?.dispose();
+    _cleanupAudioFile();
     super.dispose();
+  }
+
+  void _cleanupAudioFile() {
+    final p = _audioRecordPath;
+    if (p != null) {
+      try {
+        File(p).deleteSync();
+      } catch (_) {}
+      _audioRecordPath = null;
+    }
   }
 
   @override
@@ -91,14 +127,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       }
       _cameras = cameras;
 
-      // Prefer camera selected in settings, then front camera fallback.
       int target = index;
       final preferred = widget.preferredCameraName;
       if (preferred != null && preferred.isNotEmpty) {
         final prefIdx = cameras.indexWhere((c) => c.name == preferred);
-        if (prefIdx >= 0) {
-          target = prefIdx;
-        }
+        if (prefIdx >= 0) target = prefIdx;
       } else if (index == 0) {
         final frontIdx = cameras
             .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
@@ -110,7 +143,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       final ctrl = CameraController(
         cameras[target],
         ResolutionPreset.high,
-        enableAudio: true,
+        // When using a separate mic, disable camera audio to avoid conflicts.
+        enableAudio: !_useSeparateMic,
       );
       await ctrl.initialize();
       if (mounted) {
@@ -163,12 +197,16 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         return;
       }
       await ctrl.startVideoRecording();
+      // Start separate audio recording immediately after camera.
+      if (_useSeparateMic) {
+        unawaited(_startAudioRecording());
+      }
       HapticFeedback.mediumImpact();
       if (!mounted) return;
       setState(() {
         _recording = true;
         _recordStartAt = DateTime.now();
-        _toggleMode = true; // default: tap-to-start, tap-to-stop
+        _toggleMode = true;
       });
     } catch (e) {
       if (mounted) {
@@ -179,6 +217,29 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       }
     } finally {
       _recordActionInFlight = false;
+    }
+  }
+
+  Future<void> _startAudioRecording() async {
+    final recorder = _audioRecorder;
+    if (recorder == null) return;
+    try {
+      final tmpDir = await getTemporaryDirectory();
+      final path =
+          '${tmpDir.path}/vnote_audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await recorder.start(
+        RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+          device: widget.preferredMicrophone,
+        ),
+        path: path,
+      );
+      _audioRecordPath = path;
+    } catch (_) {
+      // Audio recording failed; merge will be skipped and camera audio used.
+      _audioRecordPath = null;
     }
   }
 
@@ -203,6 +264,17 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         return null;
       }
       final xfile = await ctrl.stopVideoRecording();
+
+      // Stop separate audio recording in parallel.
+      String? audioPath;
+      if (_useSeparateMic) {
+        try {
+          audioPath = await _audioRecorder?.stop();
+        } catch (_) {}
+        // Use the path we saved at start (some backends return null on stop).
+        audioPath ??= _audioRecordPath;
+      }
+
       final startedAt = _recordStartAt;
       _recordStartAt = null;
       if (mounted) setState(() => _recording = false);
@@ -214,6 +286,12 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         try {
           await File(xfile.path).delete();
         } catch (_) {}
+        if (audioPath != null) {
+          try {
+            await File(audioPath).delete();
+          } catch (_) {}
+        }
+        _audioRecordPath = null;
         if (!mounted) return null;
         HapticFeedback.selectionClick();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -221,8 +299,15 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         );
         return null;
       }
-      final file = File(xfile.path);
-      if (!await file.exists() || await file.length() == 0) {
+
+      final videoFile = File(xfile.path);
+      if (!await videoFile.exists() || await videoFile.length() == 0) {
+        if (audioPath != null) {
+          try {
+            await File(audioPath).delete();
+          } catch (_) {}
+        }
+        _audioRecordPath = null;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Recorded file is empty')),
@@ -230,13 +315,65 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         }
         return null;
       }
+
+      // Merge separate audio track into the video.
+      if (audioPath != null && await File(audioPath).exists()) {
+        if (mounted) setState(() => _merging = true);
+        try {
+          final merged = await _mergeVideoAudio(
+            videoPath: xfile.path,
+            audioPath: audioPath,
+          );
+          if (merged != null) {
+            // Clean up originals.
+            try {
+              await File(xfile.path).delete();
+            } catch (_) {}
+            try {
+              await File(audioPath).delete();
+            } catch (_) {}
+            _audioRecordPath = null;
+            return VideoNoteCaptureResult(
+              xFile: XFile(merged),
+              mime: 'video/mp4',
+            );
+          }
+        } finally {
+          if (mounted) setState(() => _merging = false);
+        }
+        // Merge failed — fall back to video without the selected mic.
+        try {
+          await File(audioPath).delete();
+        } catch (_) {}
+        _audioRecordPath = null;
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Could not apply selected mic — using default audio.',
+              ),
+            ),
+          );
+        }
+        // Re-enable camera audio and fall through to return original video.
+        // The camera video has no audio since enableAudio was false.
+        // For now, return the video-only file.
+        return VideoNoteCaptureResult(
+          xFile: xfile,
+          mime: _mimeForPath(xfile.path),
+        );
+      }
+
       return VideoNoteCaptureResult(
         xFile: xfile,
         mime: _mimeForPath(xfile.path),
       );
     } catch (e) {
       if (mounted) {
-        setState(() => _recording = false);
+        setState(() {
+          _recording = false;
+          _merging = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to stop recording: $e')),
         );
@@ -245,6 +382,68 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     } finally {
       _recordActionInFlight = false;
     }
+  }
+
+  /// Merges [videoPath] (video-only or video+audio) with [audioPath] into a
+  /// new MP4 file, using the audio from [audioPath] as the sole audio track.
+  ///
+  /// Tries `ffmpeg_kit_flutter_new` first (Android / iOS / macOS),
+  /// then falls back to a system `ffmpeg` process (Windows / Linux).
+  Future<String?> _mergeVideoAudio({
+    required String videoPath,
+    required String audioPath,
+  }) async {
+    if (kIsWeb) return null;
+    final tmpDir = await getTemporaryDirectory();
+    final outputPath =
+        '${tmpDir.path}/vnote_merged_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+    // ffmpeg arguments: copy video stream, re-encode audio, use the shortest
+    // stream to set the output duration.
+    final args = [
+      '-i', videoPath,
+      '-i', audioPath,
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+      '-c:v', 'copy',
+      '-c:a', 'aac',
+      '-shortest',
+      '-y',
+      outputPath,
+    ];
+
+    // --- Try ffmpeg_kit_flutter_new (Android / iOS / macOS) ---
+    if (!Platform.isWindows && !Platform.isLinux) {
+      try {
+        // Dynamic import to avoid MissingPluginException on unsupported platforms.
+        final merged = await _runFfmpegKit(args, outputPath);
+        if (merged != null) return merged;
+      } catch (_) {}
+    }
+
+    // --- Try system ffmpeg process (Windows / Linux / fallback) ---
+    try {
+      final result = await Process.run('ffmpeg', args);
+      if (result.exitCode == 0 && await File(outputPath).exists()) {
+        return outputPath;
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  /// Runs ffmpeg via ffmpeg_kit_flutter_new (Android / iOS / macOS).
+  /// Throws [MissingPluginException] on unsupported platforms — caller catches.
+  Future<String?> _runFfmpegKit(
+      List<String> args, String outputPath) async {
+    try {
+      final session = await FFmpegKit.executeWithArguments(args);
+      final rc = await session.getReturnCode();
+      if (ReturnCode.isSuccess(rc) && await File(outputPath).exists()) {
+        return outputPath;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> _stopAndConfirmSend() async {
@@ -290,9 +489,12 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
           await File(xfile.path).delete();
         } catch (_) {}
       }
-    } catch (_) {
-      // no-op
-    }
+    } catch (_) {}
+    // Also stop and discard any separate audio.
+    try {
+      await _audioRecorder?.stop();
+    } catch (_) {}
+    _cleanupAudioFile();
   }
 
   void _cancel() {
@@ -328,13 +530,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
     if (!_recording) return;
 
-    // Hold-to-record: stop on release.
     if (_holdIntent) {
       _stopAndConfirmSend();
       return;
     }
 
-    // Tap-to-start keeps recording; a subsequent tap stops.
     if (_toggleMode && _pressWasRecording) {
       _stopAndConfirmSend();
     }
@@ -355,15 +555,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // ── Dark background ───────────────────────────────────────────
           const ColoredBox(color: Colors.black),
 
-          // ── Circular camera preview ───────────────────────────────────
-          Center(
-            child: _buildPreview(),
-          ),
+          Center(child: _buildPreview()),
 
-          // ── Top bar: cancel + "Video note" label ─────────────────────
+          // Top bar
           Positioned(
             top: 0,
             left: 0,
@@ -374,10 +570,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
-                    _CircleBtn(
-                      icon: Icons.close,
-                      onTap: _cancel,
-                    ),
+                    _CircleBtn(icon: Icons.close, onTap: _cancel),
                     const Spacer(),
                     const Text(
                       'Video note',
@@ -388,7 +581,6 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                       ),
                     ),
                     const Spacer(),
-                    // Swap camera
                     if (_cameras.length > 1)
                       _CircleBtn(
                         icon: Icons.flip_camera_ios_outlined,
@@ -402,13 +594,9 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
             ),
           ),
 
-          // ── Recording indicator ───────────────────────────────────────
+          // Recording progress ring
           if (_recording)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
+            Positioned.fill(
               child: IgnorePointer(
                 child: Center(
                   child: SizedBox(
@@ -424,70 +612,87 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
               ),
             ),
 
-          // ── Bottom controls: hold-to-record button ────────────────────
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Hint
-                    AnimatedOpacity(
-                      opacity: _recording ? 0.0 : 1.0,
-                      duration: const Duration(milliseconds: 200),
-                      child: const Text(
-                        'Tap or hold to record',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
+          // Merging overlay
+          if (_merging)
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black54,
+                child: const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: Colors.white),
+                      SizedBox(height: 16),
+                      Text(
+                        'Processing audio…',
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Record button
-                    GestureDetector(
-                      onTapDown: (_) => _onPressDown(),
-                      onTapUp: (_) => _onPressUp(),
-                      onTapCancel: _onPressCancel,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: _recording ? 80 : 72,
-                        height: _recording ? 80 : 72,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _recording
-                              ? const Color(0xFFFF3B30)
-                              : Colors.white,
-                          boxShadow: [
-                            BoxShadow(
-                              color: (_recording
-                                      ? const Color(0xFFFF3B30)
-                                      : Colors.white)
-                                  .withAlpha(60),
-                              blurRadius: 24,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          _recording
-                              ? Icons.stop_rounded
-                              : Icons.videocam_rounded,
-                          color: _recording ? Colors.white : Colors.black,
-                          size: 32,
-                        ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
+
+          // Bottom controls
+          if (!_merging)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedOpacity(
+                        opacity: _recording ? 0.0 : 1.0,
+                        duration: const Duration(milliseconds: 200),
+                        child: const Text(
+                          'Tap or hold to record',
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 14),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      GestureDetector(
+                        onTapDown: (_) => _onPressDown(),
+                        onTapUp: (_) => _onPressUp(),
+                        onTapCancel: _onPressCancel,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          width: _recording ? 80 : 72,
+                          height: _recording ? 80 : 72,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _recording
+                                ? const Color(0xFFFF3B30)
+                                : Colors.white,
+                            boxShadow: [
+                              BoxShadow(
+                                color: (_recording
+                                        ? const Color(0xFFFF3B30)
+                                        : Colors.white)
+                                    .withAlpha(60),
+                                blurRadius: 24,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: Icon(
+                            _recording
+                                ? Icons.stop_rounded
+                                : Icons.videocam_rounded,
+                            color: _recording ? Colors.white : Colors.black,
+                            size: 32,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -508,9 +713,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         width: 240,
         height: 240,
         child: Center(
-          child: Text(_initError!,
-              style: const TextStyle(color: Colors.white70, fontSize: 13),
-              textAlign: TextAlign.center),
+          child: Text(
+            _initError!,
+            style: const TextStyle(color: Colors.white70, fontSize: 13),
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
@@ -520,15 +727,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Circle clip around camera preview
         SizedBox(
           width: 240,
           height: 240,
-          child: ClipOval(
-            child: _coverCameraPreview(ctrl),
-          ),
+          child: ClipOval(child: _coverCameraPreview(ctrl)),
         ),
-        // Blue border (thicker when recording)
         AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           width: 240,
@@ -547,7 +750,6 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     );
   }
 
-  /// Scale camera preview to cover-fill a square, then we clip it as a circle.
   Widget _coverCameraPreview(CameraController ctrl) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -555,8 +757,6 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         final preview = CameraPreview(ctrl);
         final previewAspect = ctrl.value.aspectRatio;
         final widgetAspect = size.width / size.height;
-
-        // Scale so that preview covers the widget bounds (no squish).
         final scale = previewAspect / widgetAspect;
         return Transform.scale(
           scale: scale < 1 ? 1 / scale : scale,

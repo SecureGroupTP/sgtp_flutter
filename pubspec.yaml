@@ -33,6 +33,7 @@ dependencies:
   camera: ^0.11.0
   flutter_zxing: ^2.2.1
   camera_desktop: ^1.0.6
+  ffmpeg_kit_flutter_new: ^4.1.0
 
 dev_dependencies:
   flutter_test:
