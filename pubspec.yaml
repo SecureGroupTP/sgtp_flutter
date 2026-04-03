@@ -32,7 +32,7 @@ dependencies:
   flutter_local_notifications: ^17.2.3
   camera: ^0.11.0
   flutter_zxing: ^2.2.1
-  camera_desktop: ^1.0.6
+  camera_windows: ^0.2.6+4
 
 dev_dependencies:
   flutter_test:

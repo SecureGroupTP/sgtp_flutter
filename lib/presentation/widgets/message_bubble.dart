@@ -1060,6 +1060,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   Player? _player;
   VideoController? _controller;
   StreamSubscription<bool>? _playingSub;
+  StreamSubscription<VideoParams>? _paramsSub;
   bool _loading = false;
   bool _initialized = false;
   bool _failed = false;
@@ -1093,6 +1094,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   @override
   void dispose() {
     _playingSub?.cancel();
+    _paramsSub?.cancel();
     _player?.dispose();
     if (_ownsTempFile && _tmpPath != null) {
       try {
@@ -1278,6 +1280,18 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         _aspectRatio =
             aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
         _hasVideoTrack = hasVideoTrack;
+      });
+
+      // params.rotate often arrives after dw/dh on Android/Windows.
+      // Subscribe so the aspect ratio corrects itself as soon as rotation
+      // metadata is populated, preventing squishing and apparent 90° tilt.
+      _paramsSub?.cancel();
+      _paramsSub = readyPlayer.stream.videoParams.listen((p) {
+        if (!mounted) return;
+        final updated = _resolveVideoNoteAspectRatio(readyPlayer);
+        if (updated.isFinite && updated > 0 && updated != _aspectRatio) {
+          setState(() => _aspectRatio = updated);
+        }
       });
     } catch (e) {
       try {
