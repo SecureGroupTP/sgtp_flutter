@@ -1311,20 +1311,54 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     required VideoController controller,
     required double aspectRatio,
   }) {
-    // Pass the post-rotation aspect ratio so the Video widget crops correctly.
-    // Without it, BoxFit.cover uses raw texture dimensions (pre-rotation) and
-    // produces squishing or an apparent 90° tilt on rotated videos.
-    // The horizontal flip counteracts libmpv mis-applying front-camera flip
-    // metadata on Android and Windows.
-    return Transform(
-      alignment: Alignment.center,
-      transform: Matrix4.diagonal3Values(-1, 1, 1),
-      child: Video(
-        controller: controller,
-        controls: NoVideoControls,
-        fit: BoxFit.cover,
-        aspectRatio: aspectRatio,
-      ),
+    // `Positioned.fill` gives the Video widget tight 1:1 constraints (the circle
+    // is square), so passing `aspectRatio` to Video is ignored by the layout and
+    // the video is always stretched to fill — causing squishing and apparent
+    // rotation on videos with rotate=90/270 metadata.
+    //
+    // Fix: size the Video widget manually to the correct cover-fill dimensions
+    // via OverflowBox so the texture is never stretched. BoxFit.fill is safe
+    // here because the SizedBox already has the correct post-rotation aspect.
+    // The circular ClipOval higher up clips the overflow.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final containerAspect =
+            size.height > 0 ? size.width / size.height : 1.0;
+        final safeAspect =
+            (aspectRatio.isFinite && aspectRatio > 0) ? aspectRatio : containerAspect;
+
+        final double vW, vH;
+        if (safeAspect >= containerAspect) {
+          // Wider than container → fill height, overflow width
+          vH = size.height;
+          vW = size.height * safeAspect;
+        } else {
+          // Taller than container → fill width, overflow height
+          vW = size.width;
+          vH = size.width / safeAspect;
+        }
+
+        return OverflowBox(
+          maxWidth: vW,
+          maxHeight: vH,
+          child: SizedBox(
+            width: vW,
+            height: vH,
+            // Counteract libmpv mis-applying front-camera horizontal-flip
+            // metadata on Android and Windows.
+            child: Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.diagonal3Values(-1, 1, 1),
+              child: Video(
+                controller: controller,
+                controls: NoVideoControls,
+                fit: BoxFit.fill,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
