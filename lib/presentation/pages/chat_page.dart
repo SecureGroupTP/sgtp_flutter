@@ -44,6 +44,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   final _scrollCtrl = ScrollController();
   final _recorder = AudioRecorder();
   final _focusNode = FocusNode();
+  final _keyboardFocusNode = FocusNode();
   bool _infoShown = false;
   bool _isRecording = false;
   String? _recordingPath;
@@ -129,10 +130,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void dispose() {
     _saveScrollPosition();
     WidgetsBinding.instance.removeObserver(this);
+    NotificationService.onMarkAsRead = null;
     _messageCtrl.dispose();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     _focusNode.dispose();
+    _keyboardFocusNode.dispose();
     _recorder.dispose();
     super.dispose();
   }
@@ -501,7 +504,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     String initialCaption = '',
   }) async {
     final ctrl = TextEditingController(text: initialCaption);
-    return showModalBottomSheet<String>(
+    final result = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF141417),
@@ -614,6 +617,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         ),
       ),
     );
+    ctrl.dispose();
+    return result;
   }
 
   Future<void> _pickAndSendVideoNote(BuildContext context) async {
@@ -965,7 +970,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           ],
         ),
       ),
-    );
+    ).whenComplete(nameCtrl.dispose);
   }
 
   @override
@@ -1058,7 +1063,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             }
           },
           child: RawKeyboardListener(
-            focusNode: FocusNode(),
+            focusNode: _keyboardFocusNode,
             onKey: (event) {
               if (event.isKeyPressed(LogicalKeyboardKey.keyV) &&
                   (event.isControlPressed || event.isMetaPressed)) {

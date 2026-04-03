@@ -359,7 +359,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
           ),
         ),
       ),
-    );
+    ).whenComplete(inputCtrl.dispose);
   }
 
   void _handleImportData(QrShareData data) {
@@ -474,7 +474,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
           ),
         ),
       ),
-    );
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      keyCtrl.dispose();
+    });
   }
 
   // ── Edit Contact ──────────────────────────────────────────────────────────
@@ -629,7 +632,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
           ),
         ),
       ),
-    );
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      keyCtrl.dispose();
+    });
   }
 
   // ── Delete Contact ────────────────────────────────────────────────────────

@@ -73,6 +73,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = SettingsRepository();
+  final _logsCountNotifier = _LogsCountNotifier();
   final _nicknameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
   String _standaloneServerAddress = '';
@@ -236,6 +237,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     _nicknameCtrl.dispose();
     _usernameCtrl.dispose();
+    _logsCountNotifier.dispose();
     super.dispose();
   }
 
@@ -3302,7 +3304,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildLogsCard() {
     return ListenableBuilder(
-      listenable: _LogsCountNotifier(),
+      listenable: _logsCountNotifier,
       builder: (_, __) {
         final count = AppLogger.entries.length;
         return Row(

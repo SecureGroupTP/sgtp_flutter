@@ -44,6 +44,10 @@ class ChatMessage extends Equatable {
   /// File name for media
   final String? mediaName;
 
+  /// Local on-disk path for media payload. Used to avoid keeping large
+  /// playable media fully in RAM.
+  final String? localMediaPath;
+
   final MessageType type;
 
   /// When the message was received/created
@@ -96,6 +100,7 @@ class ChatMessage extends Equatable {
     this.audioBytes,
     this.mediaMime,
     this.mediaName,
+    this.localMediaPath,
     this.type = MessageType.text,
     required this.receivedAt,
     required this.isFromHistory,
@@ -121,6 +126,7 @@ class ChatMessage extends Equatable {
     Uint8List? audioBytes,
     String? mediaMime,
     String? mediaName,
+    String? localMediaPath,
     MessageType? type,
     DateTime? receivedAt,
     bool? isFromHistory,
@@ -145,6 +151,7 @@ class ChatMessage extends Equatable {
       audioBytes:           audioBytes ?? this.audioBytes,
       mediaMime:            mediaMime ?? this.mediaMime,
       mediaName:            mediaName ?? this.mediaName,
+      localMediaPath:       localMediaPath ?? this.localMediaPath,
       type:                 type ?? this.type,
       receivedAt:           receivedAt ?? this.receivedAt,
       isFromHistory:        isFromHistory ?? this.isFromHistory,
@@ -164,10 +171,9 @@ class ChatMessage extends Equatable {
   @override
   List<Object?> get props => [
         id, senderUUID, senderPublicKeyHex, content,
-        imageBytes, videoBytes, audioBytes, mediaMime, mediaName,
+        imageBytes, videoBytes, audioBytes, mediaMime, mediaName, localMediaPath,
         type, receivedAt, isFromHistory, isFromMe, senderAvatarBytes,
         readMessageId, readBy, replyToId, replyToContent, replyToSender,
         reactions, isSending, sendProgress,
       ];
 }
-

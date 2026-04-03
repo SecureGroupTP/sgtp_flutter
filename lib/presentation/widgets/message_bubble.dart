@@ -957,7 +957,10 @@ class MessageBubble extends StatelessWidget {
               ),
             ),
             child: ClipOval(
-              child: _VideoNotePlayer(videoBytes: message.videoBytes!),
+              child: _VideoNotePlayer(
+                videoBytes: message.videoBytes,
+                localPath: message.localMediaPath,
+              ),
             ),
           ),
         ],
@@ -983,7 +986,8 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _VideoThumbnail(
-            videoBytes: message.videoBytes!,
+            videoBytes: message.videoBytes,
+            localPath: message.localMediaPath,
             mediaName: message.mediaName ?? 'video',
             isMe: isMe,
           ),
@@ -1009,7 +1013,8 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _VoicePlayer(
-            audioBytes: message.audioBytes!,
+            audioBytes: message.audioBytes,
+            localPath: message.localMediaPath,
             mediaMime: message.mediaMime ?? 'audio/m4a',
             isMe: isMe,
           ),
@@ -1039,8 +1044,9 @@ class MessageBubble extends StatelessWidget {
 // ─── Circular video note player ───────────────────────────────────────────────
 
 class _VideoNotePlayer extends StatefulWidget {
-  final Uint8List videoBytes;
-  const _VideoNotePlayer({required this.videoBytes});
+  final Uint8List? videoBytes;
+  final String? localPath;
+  const _VideoNotePlayer({this.videoBytes, this.localPath});
 
   @override
   State<_VideoNotePlayer> createState() => _VideoNotePlayerState();
@@ -1056,6 +1062,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   Duration _duration = Duration.zero;
   double? _aspectRatio;
   String? _tmpPath;
+  bool _ownsTempFile = false;
 
   @override
   void initState() {
@@ -1068,7 +1075,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   void dispose() {
     _playingSub?.cancel();
     _player?.dispose();
-    if (_tmpPath != null) {
+    if (_ownsTempFile && _tmpPath != null) {
       try {
         File(_tmpPath!).deleteSync();
       } catch (_) {}
@@ -1106,10 +1113,21 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     StreamSubscription<bool>? playingSub;
     try {
       final tmpDir = await getTemporaryDirectory();
-      final file =
-          File('${tmpDir.path}/vnote_${widget.videoBytes.hashCode}.mp4');
-      if (!file.existsSync()) await file.writeAsBytes(widget.videoBytes);
-      _tmpPath = file.path;
+      String path;
+      if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
+        path = widget.localPath!;
+        _ownsTempFile = false;
+      } else {
+        final bytes = widget.videoBytes;
+        if (bytes == null || bytes.isEmpty) {
+          throw Exception('Video data is unavailable');
+        }
+        final file = File('${tmpDir.path}/vnote_${bytes.hashCode}.mp4');
+        if (!file.existsSync()) await file.writeAsBytes(bytes);
+        path = file.path;
+        _ownsTempFile = true;
+      }
+      _tmpPath = path;
 
       player = Player();
       controller = VideoController(player);
@@ -1121,7 +1139,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       });
 
       // Open without autoplay: avoids mute-state races on some platforms.
-      await player.open(Media('file://${file.path}'), play: false);
+      await player.open(Media('file://$path'), play: false);
       await player.setVolume(100);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveVideoNoteAspectRatio(player);
@@ -1345,12 +1363,14 @@ class _VideoNoteProgressRingPainter extends CustomPainter {
 // ─── Video thumbnail + inline player (media_kit) ──────────────────────────────
 
 class _VideoThumbnail extends StatefulWidget {
-  final Uint8List videoBytes;
+  final Uint8List? videoBytes;
+  final String? localPath;
   final String mediaName;
   final bool isMe;
 
   const _VideoThumbnail({
-    required this.videoBytes,
+    this.videoBytes,
+    this.localPath,
     required this.mediaName,
     required this.isMe,
   });
@@ -1367,11 +1387,12 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
   double? _aspectRatio;
   bool _initialized = false;
   String? _tmpPath;
+  bool _ownsTempFile = false;
 
   @override
   void dispose() {
     _player?.dispose();
-    if (_tmpPath != null) {
+    if (_ownsTempFile && _tmpPath != null) {
       try {
         File(_tmpPath!).deleteSync();
       } catch (_) {}
@@ -1390,16 +1411,28 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
     setState(() => _loading = true);
     try {
       final tmpDir = await getTemporaryDirectory();
-      final ext = widget.mediaName.split('.').last;
-      final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-      if (!file.existsSync()) {
-        await file.writeAsBytes(widget.videoBytes);
+      String path;
+      if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
+        path = widget.localPath!;
+        _ownsTempFile = false;
+      } else {
+        final bytes = widget.videoBytes;
+        if (bytes == null || bytes.isEmpty) {
+          throw Exception('Video data is unavailable');
+        }
+        final ext = widget.mediaName.split('.').last;
+        final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
+        if (!file.existsSync()) {
+          await file.writeAsBytes(bytes);
+        }
+        path = file.path;
+        _ownsTempFile = true;
       }
-      _tmpPath = file.path;
+      _tmpPath = path;
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media('file://${file.path}'), play: true);
+      await player.open(Media('file://$path'), play: true);
       await player.setVolume(0);
       await _waitForVideoMetadata(player);
       final params = player.state.videoParams;
@@ -1460,6 +1493,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
             MaterialPageRoute<void>(
               builder: (_) => _VideoPlayerPage(
                 videoBytes: widget.videoBytes,
+                localPath: widget.localPath,
                 mediaName: widget.mediaName,
               ),
             ),
@@ -1591,11 +1625,13 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
 }
 
 class _VideoPlayerPage extends StatefulWidget {
-  final Uint8List videoBytes;
+  final Uint8List? videoBytes;
+  final String? localPath;
   final String mediaName;
 
   const _VideoPlayerPage({
-    required this.videoBytes,
+    this.videoBytes,
+    this.localPath,
     required this.mediaName,
   });
 
@@ -1612,6 +1648,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
   bool _controlsVisible = true;
   Timer? _controlsTimer;
   bool _preferPortraitZoom = true;
+  bool _ownsTempFile = false;
 
   bool get _isDesktop =>
       !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
@@ -1626,7 +1663,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
   void dispose() {
     _controlsTimer?.cancel();
     _player?.dispose();
-    if (_tmpPath != null) {
+    if (_ownsTempFile && _tmpPath != null) {
       try {
         File(_tmpPath!).deleteSync();
       } catch (_) {}
@@ -1637,16 +1674,28 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
   Future<void> _init() async {
     try {
       final tmpDir = await getTemporaryDirectory();
-      final ext = widget.mediaName.split('.').last;
-      final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-      if (!file.existsSync()) {
-        await file.writeAsBytes(widget.videoBytes);
+      String path;
+      if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
+        path = widget.localPath!;
+        _ownsTempFile = false;
+      } else {
+        final bytes = widget.videoBytes;
+        if (bytes == null || bytes.isEmpty) {
+          throw Exception('Video data is unavailable');
+        }
+        final ext = widget.mediaName.split('.').last;
+        final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
+        if (!file.existsSync()) {
+          await file.writeAsBytes(bytes);
+        }
+        path = file.path;
+        _ownsTempFile = true;
       }
-      _tmpPath = file.path;
+      _tmpPath = path;
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media('file://${file.path}'), play: true);
+      await player.open(Media('file://$path'), play: true);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveAspectRatio(player);
 
@@ -2217,12 +2266,14 @@ class _AlwaysVisibleProgressBar extends StatelessWidget {
 // ─── Voice player ─────────────────────────────────────────────────────────────
 
 class _VoicePlayer extends StatefulWidget {
-  final Uint8List audioBytes;
+  final Uint8List? audioBytes;
+  final String? localPath;
   final String mediaMime;
   final bool isMe;
 
   const _VoicePlayer({
-    required this.audioBytes,
+    this.audioBytes,
+    this.localPath,
     required this.mediaMime,
     this.isMe = false,
   });
@@ -2239,6 +2290,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   String? _tmpPath;
+  bool _ownsTempFile = false;
   late final List<double> _waveform;
 
   static const _barCount = 10;
@@ -2248,7 +2300,13 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   @override
   void initState() {
     super.initState();
-    _waveform = _generateWaveform(widget.audioBytes, _barCount);
+    final bytes = widget.audioBytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      _waveform = _generateWaveform(bytes, _barCount);
+    } else {
+      _waveform = List.generate(
+          _barCount, (i) => 0.25 + ((i % 5) * 0.12).clamp(0.0, 0.7));
+    }
     _player.onPlayerStateChanged.listen((s) {
       if (mounted) setState(() => _playing = s.name == 'playing');
     });
@@ -2272,7 +2330,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   @override
   void dispose() {
     _player.dispose();
-    if (_tmpPath != null) {
+    if (_ownsTempFile && _tmpPath != null) {
       try {
         File(_tmpPath!).deleteSync();
       } catch (_) {}
@@ -2311,12 +2369,22 @@ class _VoicePlayerState extends State<_VoicePlayer> {
 
   Future<void> _prepareTmp() async {
     if (_tmpPath != null) return;
+    if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
+      _tmpPath = widget.localPath!;
+      _ownsTempFile = false;
+      return;
+    }
+    final bytes = widget.audioBytes;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('Audio data is unavailable');
+    }
     final tmpDir = await getTemporaryDirectory();
     final ext = _mimeToExt(widget.mediaMime);
     final file =
-        File('${tmpDir.path}/voice_play_${widget.audioBytes.hashCode}.$ext');
-    if (!file.existsSync()) await file.writeAsBytes(widget.audioBytes);
+        File('${tmpDir.path}/voice_play_${bytes.hashCode}.$ext');
+    if (!file.existsSync()) await file.writeAsBytes(bytes);
     _tmpPath = file.path;
+    _ownsTempFile = true;
   }
 
   String _mimeToExt(String mime) => switch (mime) {

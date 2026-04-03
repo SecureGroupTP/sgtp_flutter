@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert' show base64, json, utf8, ascii;
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:path_provider/path_provider.dart';
 
 import '../core/app_logger.dart';
 import '../core/constants.dart';
@@ -798,51 +800,83 @@ class SgtpClient {
               isFromHistory: false,
               isFromMe: true));
 
-  Future<void> sendVideo(Uint8List bytes, String name, String mime) =>
-      _sendMedia(bytes, name, mime, 'video',
-          echoMessage: ChatMessage(
-              id: uuidBytesToHex(generateUUIDv7()),
-              senderUUID: uuidBytesToHex(_myUUID),
-              content: name,
-              videoBytes: bytes,
-              mediaMime: mime,
-              mediaName: name,
-              type: MessageType.video,
-              receivedAt: DateTime.now(),
-              isFromHistory: false,
-              isFromMe: true));
+  Future<void> sendVideo(Uint8List bytes, String name, String mime) async {
+    final echoId = uuidBytesToHex(generateUUIDv7());
+    final localPath = await _cachePlayableMedia(echoId, mime, bytes);
+    return _sendMedia(
+      bytes,
+      name,
+      mime,
+      'video',
+      echoMessage: ChatMessage(
+        id: echoId,
+        senderUUID: uuidBytesToHex(_myUUID),
+        content: name,
+        videoBytes: localPath == null ? bytes : null,
+        mediaMime: mime,
+        mediaName: name,
+        localMediaPath: localPath,
+        type: MessageType.video,
+        receivedAt: DateTime.now(),
+        isFromHistory: false,
+        isFromMe: true,
+      ),
+    );
+  }
 
   Future<void> sendVoice(Uint8List bytes, String mime) {
     final name = 'voice_${DateTime.now().millisecondsSinceEpoch}.${_ext(mime)}';
-    return _sendMedia(bytes, name, mime, 'voice',
+    return () async {
+      final echoId = uuidBytesToHex(generateUUIDv7());
+      final localPath = await _cachePlayableMedia(echoId, mime, bytes);
+      await _sendMedia(
+        bytes,
+        name,
+        mime,
+        'voice',
         echoMessage: ChatMessage(
-            id: uuidBytesToHex(generateUUIDv7()),
-            senderUUID: uuidBytesToHex(_myUUID),
-            content: name,
-            audioBytes: bytes,
-            mediaMime: mime,
-            mediaName: name,
-            type: MessageType.voice,
-            receivedAt: DateTime.now(),
-            isFromHistory: false,
-            isFromMe: true));
+          id: echoId,
+          senderUUID: uuidBytesToHex(_myUUID),
+          content: name,
+          audioBytes: localPath == null ? bytes : null,
+          mediaMime: mime,
+          mediaName: name,
+          localMediaPath: localPath,
+          type: MessageType.voice,
+          receivedAt: DateTime.now(),
+          isFromHistory: false,
+          isFromMe: true,
+        ),
+      );
+    }();
   }
 
   /// Send a circular video note (кружок).
   Future<void> sendVideoNote(Uint8List bytes, String mime) {
     final name = 'videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
-    return _sendMedia(bytes, name, mime, 'video_note',
+    return () async {
+      final echoId = uuidBytesToHex(generateUUIDv7());
+      final localPath = await _cachePlayableMedia(echoId, mime, bytes);
+      await _sendMedia(
+        bytes,
+        name,
+        mime,
+        'video_note',
         echoMessage: ChatMessage(
-            id: uuidBytesToHex(generateUUIDv7()),
-            senderUUID: uuidBytesToHex(_myUUID),
-            content: name,
-            videoBytes: bytes,
-            mediaMime: mime,
-            mediaName: name,
-            type: MessageType.videoNote,
-            receivedAt: DateTime.now(),
-            isFromHistory: false,
-            isFromMe: true));
+          id: echoId,
+          senderUUID: uuidBytesToHex(_myUUID),
+          content: name,
+          videoBytes: localPath == null ? bytes : null,
+          mediaMime: mime,
+          mediaName: name,
+          localMediaPath: localPath,
+          type: MessageType.videoNote,
+          receivedAt: DateTime.now(),
+          isFromHistory: false,
+          isFromMe: true,
+        ),
+      );
+    }();
   }
 
   String _ext(String mime) => switch (mime) {
@@ -1505,12 +1539,19 @@ class SgtpClient {
     final mime = p['mime'] as String? ?? 'application/octet-stream';
     final totalSize = (p['size'] as num?)?.toInt() ?? 0;
     final chunk = base64.decode(p['data'] as String? ?? '');
+    final shouldCacheToDisk =
+        type == 'video' || type == 'video_note' || type == 'voice';
     if (!p.containsKey('chunk')) {
+      final localPath = shouldCacheToDisk
+          ? await _cachePlayableMedia(fileId, mime, chunk)
+          : null;
       // Single-chunk: use fileId as message id so it matches sender's echo id
       _eventController.add(SgtpMessageReceived(
           message: _media(
               fileId, sender, name, mime, type, chunk, history, recvAt,
-              senderPub: senderPub, isFromMe: isFromMe)));
+              senderPub: senderPub,
+              isFromMe: isFromMe,
+              localMediaPath: localPath)));
       return;
     }
     final ci = (p['chunk'] as num).toInt();
@@ -1529,16 +1570,24 @@ class SgtpClient {
     if (ci < pf.chunks.length) pf.chunks[ci] = chunk;
     if (pf.isComplete) {
       _pendingFiles.remove(fileId);
+      final assembled = pf.assemble();
+      final localPath = shouldCacheToDisk
+          ? await _cachePlayableMedia(fileId, mime, assembled)
+          : null;
       _eventController.add(SgtpMessageReceived(
           message: _media(
-              fileId, sender, name, mime, type, pf.assemble(), history, recvAt,
-              senderPub: senderPub, isFromMe: isFromMe)));
+              fileId, sender, name, mime, type, assembled, history, recvAt,
+              senderPub: senderPub,
+              isFromMe: isFromMe,
+              localMediaPath: localPath)));
     }
   }
 
   ChatMessage _media(String id, String sender, String name, String mime,
           String type, Uint8List bytes, bool history, DateTime recvAt,
-          {String? senderPub, required bool isFromMe}) =>
+          {String? senderPub,
+          required bool isFromMe,
+          String? localMediaPath}) =>
       switch (type) {
         'gif' => ChatMessage(
             id: id,
@@ -1548,6 +1597,7 @@ class SgtpClient {
             imageBytes: bytes,
             mediaMime: mime,
             mediaName: name,
+            localMediaPath: localMediaPath,
             type: MessageType.gif,
             receivedAt: recvAt,
             isFromHistory: history,
@@ -1557,9 +1607,10 @@ class SgtpClient {
             senderUUID: sender,
             senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
             content: name,
-            videoBytes: bytes,
+            videoBytes: localMediaPath == null ? bytes : null,
             mediaMime: mime,
             mediaName: name,
+            localMediaPath: localMediaPath,
             type: MessageType.video,
             receivedAt: recvAt,
             isFromHistory: history,
@@ -1569,9 +1620,10 @@ class SgtpClient {
             senderUUID: sender,
             senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
             content: name,
-            videoBytes: bytes,
+            videoBytes: localMediaPath == null ? bytes : null,
             mediaMime: mime,
             mediaName: name,
+            localMediaPath: localMediaPath,
             type: MessageType.videoNote,
             receivedAt: recvAt,
             isFromHistory: history,
@@ -1581,9 +1633,10 @@ class SgtpClient {
             senderUUID: sender,
             senderPublicKeyHex: senderPub ?? _peerPublicKeys[sender],
             content: name,
-            audioBytes: bytes,
+            audioBytes: localMediaPath == null ? bytes : null,
             mediaMime: mime,
             mediaName: name,
+            localMediaPath: localMediaPath,
             type: MessageType.voice,
             receivedAt: recvAt,
             isFromHistory: history,
@@ -1596,10 +1649,54 @@ class SgtpClient {
             imageBytes: bytes,
             mediaMime: mime,
             mediaName: name,
+            localMediaPath: localMediaPath,
             type: MessageType.image,
             receivedAt: recvAt,
             isFromHistory: history,
             isFromMe: isFromMe),
+      };
+
+  Future<String?> _cachePlayableMedia(
+      String fileId, String mime, Uint8List bytes) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final cacheDir = Directory('${dir.path}/sgtp_media_cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+      final ext = _extForMime(mime);
+      final file = File('${cacheDir.path}/${fileId}_$ext');
+      if (!await file.exists()) {
+        final sink = file.openWrite();
+        const step = 64 * 1024;
+        var yieldedChunks = 0;
+        for (var i = 0; i < bytes.length; i += step) {
+          final end = (i + step).clamp(0, bytes.length);
+          sink.add(Uint8List.sublistView(bytes, i, end));
+          yieldedChunks++;
+          if (yieldedChunks >= 4) {
+            yieldedChunks = 0;
+            await Future<void>.delayed(Duration.zero);
+          }
+        }
+        await sink.flush();
+        await sink.close();
+      }
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _extForMime(String mime) => switch (mime) {
+        'video/mp4' => 'mp4',
+        'video/quicktime' => 'mov',
+        'video/webm' => 'webm',
+        'audio/m4a' => 'm4a',
+        'audio/aac' => 'aac',
+        'audio/opus' => 'opus',
+        'audio/mpeg' => 'mp3',
+        _ => 'bin',
       };
 
   bool _isOwnMessage(String senderUUIDHex, String? senderPub) {

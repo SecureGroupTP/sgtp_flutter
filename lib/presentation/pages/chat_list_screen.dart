@@ -108,10 +108,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   void _showCreateChatDialog() {
+    final chatNameCtrl = TextEditingController(text: 'My Chat');
     showDialog(
       context: context,
       builder: (context) {
-        String chatName = 'My Chat';
+        String chatName = chatNameCtrl.text;
         Uint8List? avatarBytes;
 
         return StatefulBuilder(
@@ -143,6 +144,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     const SizedBox(height: 16),
                     // Name field
                     TextField(
+                      controller: chatNameCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Chat Name',
                         hintText: 'Enter chat name',
@@ -150,7 +152,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       onChanged: (value) {
                         chatName = value.isEmpty ? 'My Chat' : value;
                       },
-                      controller: TextEditingController(text: chatName),
                     ),
                   ],
                 ),
@@ -177,7 +178,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           },
         );
       },
-    );
+    ).whenComplete(chatNameCtrl.dispose);
   }
 
   void _showEditDialog(ChatMetadata chat) {
