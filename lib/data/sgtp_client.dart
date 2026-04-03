@@ -881,7 +881,10 @@ class SgtpClient {
 
   String _ext(String mime) => switch (mime) {
         'audio/m4a' => 'm4a',
+        'audio/mp4' => 'm4a',
+        'audio/x-m4a' => 'm4a',
         'audio/aac' => 'aac',
+        'audio/mp4a-latm' => 'aac',
         'audio/opus' => 'opus',
         'audio/mpeg' => 'mp3',
         _ => 'audio',
@@ -1665,7 +1668,7 @@ class SgtpClient {
         await cacheDir.create(recursive: true);
       }
       final ext = _extForMime(mime);
-      final file = File('${cacheDir.path}/${fileId}_$ext');
+      final file = File('${cacheDir.path}/$fileId.$ext');
       if (!await file.exists()) {
         final sink = file.openWrite();
         const step = 64 * 1024;
@@ -1693,7 +1696,10 @@ class SgtpClient {
         'video/quicktime' => 'mov',
         'video/webm' => 'webm',
         'audio/m4a' => 'm4a',
+        'audio/mp4' => 'm4a',
+        'audio/x-m4a' => 'm4a',
         'audio/aac' => 'aac',
+        'audio/mp4a-latm' => 'aac',
         'audio/opus' => 'opus',
         'audio/mpeg' => 'mp3',
         _ => 'bin',

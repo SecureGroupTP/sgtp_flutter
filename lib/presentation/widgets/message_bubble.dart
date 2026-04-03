@@ -960,6 +960,7 @@ class MessageBubble extends StatelessWidget {
               child: _VideoNotePlayer(
                 videoBytes: message.videoBytes,
                 localPath: message.localMediaPath,
+                mediaMime: message.mediaMime,
               ),
             ),
           ),
@@ -1046,7 +1047,8 @@ class MessageBubble extends StatelessWidget {
 class _VideoNotePlayer extends StatefulWidget {
   final Uint8List? videoBytes;
   final String? localPath;
-  const _VideoNotePlayer({this.videoBytes, this.localPath});
+  final String? mediaMime;
+  const _VideoNotePlayer({this.videoBytes, this.localPath, this.mediaMime});
 
   @override
   State<_VideoNotePlayer> createState() => _VideoNotePlayerState();
@@ -1059,6 +1061,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   bool _loading = false;
   bool _initialized = false;
   bool _playing = false;
+  bool _hasVideoTrack = true;
   Duration _duration = Duration.zero;
   double? _aspectRatio;
   String? _tmpPath;
@@ -1130,7 +1133,6 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       _tmpPath = path;
 
       player = Player();
-      controller = VideoController(player);
 
       // Listen to playback state (also used for overlay visibility).
       playingSub = player.stream.playing.listen((p) {
@@ -1139,10 +1141,16 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       });
 
       // Open without autoplay: avoids mute-state races on some platforms.
-      await player.open(Media('file://$path'), play: false);
+      await player.open(Media(Uri.file(path).toString()), play: false);
       await player.setVolume(100);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveVideoNoteAspectRatio(player);
+      final hasVideoTrack =
+          (player.state.videoParams.dw ?? player.state.width ?? 0) > 0 &&
+              (player.state.videoParams.dh ?? player.state.height ?? 0) > 0;
+      if (hasVideoTrack) {
+        controller = VideoController(player);
+      }
 
       if (autoplay) {
         await player.play();
@@ -1172,6 +1180,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         _duration = readyPlayer.state.duration;
         _aspectRatio =
             aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
+        _hasVideoTrack = hasVideoTrack;
       });
     } catch (e) {
       try {
@@ -1250,11 +1259,21 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
           ),
 
           // Video (when loaded) — cover-fill the circle
-          if (_initialized && _controller != null)
+          if (_initialized && _controller != null && _hasVideoTrack)
             Positioned.fill(
               child: _coverFillVideo(
                 controller: _controller!,
                 aspectRatio: sourceAspectRatio,
+              ),
+            ),
+
+          // Audio-only "circle note" fallback (no video track).
+          if (_initialized && !_hasVideoTrack)
+            Center(
+              child: Icon(
+                Icons.graphic_eq_rounded,
+                color: Colors.white.withAlpha(220),
+                size: 56,
               ),
             ),
 
@@ -1432,7 +1451,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media('file://$path'), play: true);
+      await player.open(Media(Uri.file(path).toString()), play: true);
       await player.setVolume(0);
       await _waitForVideoMetadata(player);
       final params = player.state.videoParams;
@@ -1695,7 +1714,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media('file://$path'), play: true);
+      await player.open(Media(Uri.file(path).toString()), play: true);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveAspectRatio(player);
 
@@ -2389,7 +2408,10 @@ class _VoicePlayerState extends State<_VoicePlayer> {
 
   String _mimeToExt(String mime) => switch (mime) {
         'audio/m4a' => 'm4a',
+        'audio/mp4' => 'm4a',
+        'audio/x-m4a' => 'm4a',
         'audio/aac' => 'aac',
+        'audio/mp4a-latm' => 'aac',
         'audio/opus' => 'opus',
         'audio/mpeg' => 'mp3',
         _ => 'audio',
