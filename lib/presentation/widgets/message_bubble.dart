@@ -1311,35 +1311,20 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     required VideoController controller,
     required double aspectRatio,
   }) {
-    // Similar to camera preview fix: scale to cover-fill without squishing.
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = constraints.biggest;
-        final widgetAspect =
-            (size.height > 0) ? (size.width / size.height) : 1.0;
-        final safeAspect = aspectRatio.isFinite && aspectRatio > 0
-            ? aspectRatio
-            : widgetAspect;
-        final scale = safeAspect / widgetAspect;
-        return Transform.scale(
-          scale: scale < 1 ? 1 / scale : scale,
-          child: Center(
-            // libmpv mis-applies the front-camera horizontal-flip metadata on
-            // Android and Windows, so we counteract it with a horizontal flip.
-            child: Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.diagonal3Values(-1, 1, 1),
-              child: Video(
-                controller: controller,
-                controls: NoVideoControls,
-                // Keep correct aspect, scaling is handled by Transform.scale above.
-                fit: BoxFit.contain,
-                aspectRatio: safeAspect,
-              ),
-            ),
-          ),
-        );
-      },
+    // Pass the post-rotation aspect ratio so the Video widget crops correctly.
+    // Without it, BoxFit.cover uses raw texture dimensions (pre-rotation) and
+    // produces squishing or an apparent 90° tilt on rotated videos.
+    // The horizontal flip counteracts libmpv mis-applying front-camera flip
+    // metadata on Android and Windows.
+    return Transform(
+      alignment: Alignment.center,
+      transform: Matrix4.diagonal3Values(-1, 1, 1),
+      child: Video(
+        controller: controller,
+        controls: NoVideoControls,
+        fit: BoxFit.cover,
+        aspectRatio: aspectRatio,
+      ),
     );
   }
 

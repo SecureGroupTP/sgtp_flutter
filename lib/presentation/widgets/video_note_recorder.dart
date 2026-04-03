@@ -126,17 +126,20 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       _cameras = cameras;
 
       int target = index;
-      final preferred = widget.preferredCameraName;
-      if (preferred != null && preferred.isNotEmpty) {
-        final prefIdx = cameras.indexWhere((c) => c.name == preferred);
-        if (prefIdx >= 0) target = prefIdx;
-      } else if (selectDefault) {
-        // On first launch: prefer the front camera as a sensible default for
-        // video notes. This branch must NOT run during explicit swaps so that
-        // requesting camera index 0 (back camera) actually opens the back camera.
-        final frontIdx = cameras
-            .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
-        target = frontIdx >= 0 ? frontIdx : 0;
+      if (selectDefault) {
+        // On first launch only: apply preferredCameraName from settings, or
+        // fall back to the front camera as a sensible default for video notes.
+        final preferred = widget.preferredCameraName;
+        if (preferred != null && preferred.isNotEmpty) {
+          final prefIdx = cameras.indexWhere((c) => c.name == preferred);
+          if (prefIdx >= 0) target = prefIdx;
+        } else {
+          final frontIdx = cameras
+              .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
+          target = frontIdx >= 0 ? frontIdx : 0;
+        }
+        // Explicit swaps (selectDefault == false) always use the given index
+        // so the user can freely switch between cameras regardless of settings.
       }
       _cameraIndex = target;
 
