@@ -1219,19 +1219,27 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         controller = VideoController(player);
       }
 
-      if (autoplay) {
-        await _ensureAudible(player);
-        await player.play();
-      } else {
-        // Seek to start and decode the first frame so the thumbnail is visible.
-        await player.seek(Duration.zero);
-        if (hasVideoTrack) {
-          // Brief play+pause forces the first frame to be decoded by the renderer.
-          await player.play();
-          await Future<void>.delayed(const Duration(milliseconds: 80));
-          await player.pause();
-          await player.seek(Duration.zero);
+      await _ensureAudible(player);
+      await player.play();
+
+      if (hasVideoTrack && controller != null) {
+        // Wait until the native renderer has produced at least one frame.
+        // This is required on Windows/desktop — the Video widget shows the
+        // `fill` color (black by default) until the native texture rect is set.
+        try {
+          await controller.waitUntilFirstFrameRendered
+              .timeout(const Duration(seconds: 8));
+        } catch (_) {
+          // Timeout is tolerated: the Video widget will update once frames arrive.
         }
+      } else if (!autoplay) {
+        // Audio-only: give the player a moment to buffer.
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+
+      if (!autoplay) {
+        await player.pause();
+        await player.seek(Duration.zero);
       }
 
       if (!mounted) {
