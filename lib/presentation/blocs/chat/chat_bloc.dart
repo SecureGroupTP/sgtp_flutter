@@ -17,6 +17,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   StreamSubscription<SgtpEvent>? _eventSub;
   final ChatMetadataRepository _metaRepo;
   DateTime? _lastActivityPersistAt;
+  static const int _historyBatchSize = 100;
+  String _activeServerAddress = '';
+  int _persistedHistoryLoaded = 0;
 
   // Keep last config for reconnect
   ChatConnect? _lastConnectEvent;
@@ -40,6 +43,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatSendVoice>(_onSendVoice);
     on<ChatSendVideoNote>(_onSendVideoNote);
     on<ChatSendMessageRead>(_onSendMessageRead);
+    on<ChatLoadOlderHistory>(_onLoadOlderHistory);
     on<ChatDisconnect>(_onDisconnect);
     on<ChatUpdateMetadata>(_onUpdateMetadata);
     on<ChatSetUserAvatar>(_onSetUserAvatar);
@@ -81,6 +85,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     // Load saved metadata from disk BEFORE creating client,
     // so we pass correct name/avatar into SgtpClient from the start.
+    _activeServerAddress = event.config.serverAddr.trim();
+    _persistedHistoryLoaded = 0;
+
     String chatName = event.config.chatName;
     Uint8List? chatAvatar = event.config.chatAvatarBytes;
 
@@ -91,10 +98,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     if (isRealRoom) {
       try {
-        final saved = await _metaRepo.loadChat(roomUUIDHex);
+        final saved = await _metaRepo.loadChat(
+          roomUUIDHex,
+          serverAddress: _activeServerAddress,
+        );
         if (saved != null) {
           chatName = saved.name;
           chatAvatar = saved.avatarBytes;
+          if (saved.serverAddress.trim().isNotEmpty) {
+            _activeServerAddress = saved.serverAddress.trim();
+          }
           AppLogger.i('[ChatBloc] Pre-loaded metadata: "${saved.name}"');
         }
       } catch (_) {}
@@ -138,6 +151,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       peerPublicKeys: {},
       peerAvatars: {},
       readReceipts: {},
+      hasMoreHistory: true,
+      isLoadingHistory: false,
       isMaster: false,
       myPublicKeyHex: pubHex,
       nicknames: event.nicknames,
@@ -152,6 +167,17 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()),
           sessionId: sessionId)),
     );
+
+    final initial = await client.replayPersistedHistoryBatch(
+      offsetFromEnd: _persistedHistoryLoaded,
+      limit: _historyBatchSize,
+    );
+    _persistedHistoryLoaded += initial.loaded;
+    if (!isClosed) {
+      emit(state.copyWith(
+        hasMoreHistory: _persistedHistoryLoaded < initial.total,
+      ));
+    }
 
     await client.connect();
   }
@@ -282,6 +308,28 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _touchChatActivity();
   }
 
+  Future<void> _onLoadOlderHistory(
+      ChatLoadOlderHistory event, Emitter<ChatState> emit) async {
+    final client = _client;
+    if (client == null) return;
+    if (state.isLoadingHistory || !state.hasMoreHistory) return;
+
+    emit(state.copyWith(isLoadingHistory: true));
+    try {
+      final batch = await client.replayPersistedHistoryBatch(
+        offsetFromEnd: _persistedHistoryLoaded,
+        limit: _historyBatchSize,
+      );
+      _persistedHistoryLoaded += batch.loaded;
+      emit(state.copyWith(
+        isLoadingHistory: false,
+        hasMoreHistory: _persistedHistoryLoaded < batch.total,
+      ));
+    } catch (_) {
+      emit(state.copyWith(isLoadingHistory: false));
+    }
+  }
+
   Future<void> _onDisconnect(
       ChatDisconnect event, Emitter<ChatState> emit) async {
     final client = _client;
@@ -315,10 +363,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     if (roomUUID.isEmpty) return;
     try {
       final now = DateTime.now();
-      final existing = await _metaRepo.loadChat(roomUUID);
+      final existing = await _metaRepo.loadChat(
+        roomUUID,
+        serverAddress: _activeServerAddress,
+      );
       final meta = ChatMetadata(
         uuid: roomUUID,
         name: name,
+        serverAddress: _activeServerAddress,
         avatarBytes: avatar,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -343,10 +395,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
 
     try {
-      final existing = await _metaRepo.loadChat(roomUUID);
+      final existing = await _metaRepo.loadChat(
+        roomUUID,
+        serverAddress: _activeServerAddress,
+      );
       final metadata = ChatMetadata(
         uuid: roomUUID,
         name: existing?.name ?? state.chatName,
+        serverAddress: _activeServerAddress,
         avatarBytes: existing?.avatarBytes ?? state.chatAvatarBytes,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -419,6 +475,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           updated[existingIdx] = message;
         } else {
           updated = List<ChatMessage>.from(state.messages)..add(message);
+          if (message.isFromHistory) {
+            updated.sort((a, b) => a.receivedAt.compareTo(b.receivedAt));
+          }
         }
         emit(state.copyWith(
           messages: updated,

@@ -1,15 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entities/chat_metadata.dart';
 
 /// Repository for persisting chat metadata to disk.
-/// Metadata includes: chat name, avatar, window size (desktop).
-/// Message history is NOT stored here.
+/// Metadata includes: chat name, avatar, server address, window size (desktop).
 class ChatMetadataRepository {
   static const String _legacyChatsDir = 'sgtp_chats';
   static const String _accountsDir = 'sgtp_accounts';
@@ -19,7 +18,6 @@ class ChatMetadataRepository {
 
   ChatMetadataRepository({this.accountId});
 
-  /// Get the chats directory path
   Future<Directory> _getChatsDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
     final id = (accountId ?? '').trim();
@@ -32,32 +30,62 @@ class ChatMetadataRepository {
     return chatsDir;
   }
 
-  /// Get metadata file for a specific chat
-  Future<File> _getMetadataFile(String chatUUID) async {
-    final chatsDir = await _getChatsDirectory();
-    return File('${chatsDir.path}/$chatUUID/metadata.json');
+  String _serverKey(String serverAddress) {
+    final normalized = serverAddress.trim().toLowerCase();
+    if (normalized.isEmpty) return 'default';
+    return base64Url.encode(utf8.encode(normalized)).replaceAll('=', '');
   }
 
-  /// Load all saved chats
+  Future<Directory> _getChatDirectory(String uuid,
+      {required String serverAddress}) async {
+    final chatsDir = await _getChatsDirectory();
+    final serverDir =
+        Directory('${chatsDir.path}/${_serverKey(serverAddress)}');
+    if (!await serverDir.exists()) {
+      await serverDir.create(recursive: true);
+    }
+    return Directory('${serverDir.path}/$uuid');
+  }
+
+  Future<File> _getMetadataFile(String chatUUID,
+      {required String serverAddress}) async {
+    final chatDir =
+        await _getChatDirectory(chatUUID, serverAddress: serverAddress);
+    return File('${chatDir.path}/metadata.json');
+  }
+
   Future<List<ChatMetadata>> loadAllChats() async {
     try {
       final chatsDir = await _getChatsDirectory();
       if (!await chatsDir.exists()) return [];
 
       final chats = <ChatMetadata>[];
-      final dirs = chatsDir.listSync();
+      final dirs = chatsDir.listSync().whereType<Directory>();
 
       for (final entry in dirs) {
-        if (entry is Directory) {
-          final uuid = p.basename(entry.path);
-          final chat = await loadChat(uuid);
-          if (chat != null) {
-            chats.add(chat);
+        final directMetadata = File('${entry.path}/metadata.json');
+        if (await directMetadata.exists()) {
+          final uuid = _basename(entry.path);
+          final chat = await _loadLegacyChat(uuid);
+          if (chat != null) chats.add(chat);
+          continue;
+        }
+
+        final nested = entry.listSync().whereType<Directory>();
+        for (final chatDir in nested) {
+          final uuid = _basename(chatDir.path);
+          final file = File('${chatDir.path}/metadata.json');
+          if (!await file.exists()) continue;
+          try {
+            final parsed =
+                jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+            chats.add(_parseJson(uuid, parsed));
+          } catch (e) {
+            debugPrint('[ChatMetadata] Error parsing chat $uuid: $e');
           }
         }
       }
 
-      // Sort by updatedAt descending (most recent first)
       chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       return chats;
     } catch (e) {
@@ -66,48 +94,69 @@ class ChatMetadataRepository {
     }
   }
 
-  /// Load a specific chat by UUID
-  Future<ChatMetadata?> loadChat(String uuid) async {
-    try {
-      final file = await _getMetadataFile(uuid);
-      if (!await file.exists()) {
-        return null;
-      }
+  String _basename(String path) {
+    if (path.isEmpty) return path;
+    final normalized = path.replaceAll('\\', '/');
+    final idx = normalized.lastIndexOf('/');
+    return idx >= 0 ? normalized.substring(idx + 1) : normalized;
+  }
 
+  Future<ChatMetadata?> _loadLegacyChat(String uuid) async {
+    try {
+      final chatsDir = await _getChatsDirectory();
+      final file = File('${chatsDir.path}/$uuid/metadata.json');
+      if (!await file.exists()) return null;
       final content = await file.readAsString();
       final json = jsonDecode(content) as Map<String, dynamic>;
       return _parseJson(uuid, json);
+    } catch (e) {
+      debugPrint('[ChatMetadata] Error loading legacy chat $uuid: $e');
+      return null;
+    }
+  }
+
+  Future<ChatMetadata?> loadChat(String uuid, {String? serverAddress}) async {
+    try {
+      final server = (serverAddress ?? '').trim();
+      if (server.isNotEmpty) {
+        final file = await _getMetadataFile(uuid, serverAddress: server);
+        if (await file.exists()) {
+          final content = await file.readAsString();
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          return _parseJson(uuid, json, fallbackServerAddress: server);
+        }
+      }
+
+      final all = await loadAllChats();
+      for (final chat in all) {
+        if (chat.uuid == uuid) return chat;
+      }
+      return null;
     } catch (e) {
       debugPrint('[ChatMetadata] Error loading chat $uuid: $e');
       return null;
     }
   }
 
-  /// Save a new chat or update an existing one
   Future<void> saveChat(ChatMetadata metadata) async {
     try {
-      final file = await _getMetadataFile(metadata.uuid);
-      await file.parent.create(recursive: true);
-
-      final json = _toJson(metadata);
-      await file.writeAsString(
-        jsonEncode(json),
-        flush: true,
+      final file = await _getMetadataFile(
+        metadata.uuid,
+        serverAddress: metadata.serverAddress,
       );
-
-      debugPrint('[ChatMetadata] Saved chat: ${metadata.uuid}');
+      await file.parent.create(recursive: true);
+      await file.writeAsString(jsonEncode(_toJson(metadata)), flush: true);
+      debugPrint(
+          '[ChatMetadata] Saved chat: ${metadata.uuid}@${metadata.serverAddress}');
     } catch (e) {
       debugPrint('[ChatMetadata] Error saving chat: $e');
       rethrow;
     }
   }
 
-  /// Update an existing chat
   Future<void> updateChat(ChatMetadata metadata) async {
     try {
-      final updated = metadata.copyWith(
-        updatedAt: DateTime.now(),
-      );
+      final updated = metadata.copyWith(updatedAt: DateTime.now());
       await saveChat(updated);
       debugPrint('[ChatMetadata] Updated chat: ${metadata.uuid}');
     } catch (e) {
@@ -116,27 +165,44 @@ class ChatMetadataRepository {
     }
   }
 
-  /// Delete a chat from disk
-  Future<void> deleteChat(String uuid) async {
+  Future<void> deleteChat(String uuid, {String? serverAddress}) async {
     try {
       final chatsDir = await _getChatsDirectory();
-      final chatDir = Directory('${chatsDir.path}/$uuid');
-      if (await chatDir.exists()) {
-        await chatDir.delete(recursive: true);
+      final server = (serverAddress ?? '').trim();
+
+      if (server.isNotEmpty) {
+        final scoped = await _getChatDirectory(uuid, serverAddress: server);
+        if (await scoped.exists()) {
+          await scoped.delete(recursive: true);
+        }
+      } else {
+        final legacyDir = Directory('${chatsDir.path}/$uuid');
+        if (await legacyDir.exists()) {
+          await legacyDir.delete(recursive: true);
+        }
+
+        final servers = chatsDir.listSync().whereType<Directory>();
+        for (final serverDir in servers) {
+          final scoped = Directory('${serverDir.path}/$uuid');
+          if (await scoped.exists()) {
+            await scoped.delete(recursive: true);
+          }
+        }
       }
-      debugPrint('[ChatMetadata] Deleted chat: $uuid');
+
+      debugPrint(
+          '[ChatMetadata] Deleted chat: $uuid${server.isNotEmpty ? '@$server' : ''}');
     } catch (e) {
       debugPrint('[ChatMetadata] Error deleting chat: $e');
       rethrow;
     }
   }
 
-  /// Convert ChatMetadata to JSON
   Map<String, dynamic> _toJson(ChatMetadata metadata) {
     return {
       'uuid': metadata.uuid,
       'name': metadata.name,
-      // Store avatar as base64 for JSON compatibility
+      'serverAddress': metadata.serverAddress,
       'avatar': metadata.avatarBytes != null
           ? base64Encode(metadata.avatarBytes!)
           : null,
@@ -147,8 +213,11 @@ class ChatMetadataRepository {
     };
   }
 
-  /// Parse JSON to ChatMetadata
-  ChatMetadata _parseJson(String uuid, Map<String, dynamic> json) {
+  ChatMetadata _parseJson(
+    String uuid,
+    Map<String, dynamic> json, {
+    String? fallbackServerAddress,
+  }) {
     final avatarBase64 = json['avatar'] as String?;
     Uint8List? avatarBytes;
     if (avatarBase64 != null && avatarBase64.isNotEmpty) {
@@ -162,6 +231,9 @@ class ChatMetadataRepository {
     return ChatMetadata(
       uuid: uuid,
       name: json['name'] as String? ?? 'Chat',
+      serverAddress:
+          (json['serverAddress'] as String? ?? fallbackServerAddress ?? '')
+              .trim(),
       avatarBytes: avatarBytes,
       createdAt: DateTime.parse(
           json['createdAt'] as String? ?? DateTime.now().toIso8601String()),

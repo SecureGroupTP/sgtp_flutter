@@ -164,8 +164,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
   void _onUpdateContactAvatars(
       RoomsUpdateContactAvatars event, Emitter<RoomsState> emit) {
-    _contactAvatarsByPub =
-        Map<String, Uint8List>.from(event.avatarsByPubkey);
+    _contactAvatarsByPub = Map<String, Uint8List>.from(event.avatarsByPubkey);
     for (final room in state.rooms) {
       room.chatBloc.add(ChatUpdateContactAvatars(event.avatarsByPubkey));
     }
@@ -179,7 +178,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       return;
     }
 
-    final config = (configOverride ?? _baseConfig).copyWithRoomUUID(roomUUID);
+    final config = (configOverride ?? _baseConfig)
+        .copyWith(accountId: _accountId)
+        .copyWithRoomUUID(roomUUID);
     final chatBloc = ChatBloc(accountId: _accountId)
       ..add(ChatConnect(config, nicknames: _nicknames));
 

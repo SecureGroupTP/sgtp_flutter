@@ -32,7 +32,8 @@ class ChatSendMessage extends ChatEvent {
   final String? replyToId;
   final String? replyToContent;
   final String? replyToSender;
-  const ChatSendMessage(this.text, {this.replyToId, this.replyToContent, this.replyToSender});
+  const ChatSendMessage(this.text,
+      {this.replyToId, this.replyToContent, this.replyToSender});
   @override
   List<Object?> get props => [text, replyToId];
 }
@@ -41,7 +42,8 @@ class ChatSendImage extends ChatEvent {
   final Uint8List bytes;
   final String name;
   final String mime;
-  const ChatSendImage({required this.bytes, required this.name, required this.mime});
+  const ChatSendImage(
+      {required this.bytes, required this.name, required this.mime});
   @override
   List<Object?> get props => [name, mime];
 }
@@ -50,7 +52,8 @@ class ChatSendVideo extends ChatEvent {
   final Uint8List bytes;
   final String name;
   final String mime;
-  const ChatSendVideo({required this.bytes, required this.name, required this.mime});
+  const ChatSendVideo(
+      {required this.bytes, required this.name, required this.mime});
   @override
   List<Object?> get props => [name, mime];
 }
@@ -77,6 +80,11 @@ class ChatSendMessageRead extends ChatEvent {
   const ChatSendMessageRead(this.messageId);
   @override
   List<Object?> get props => [messageId];
+}
+
+/// Load older local history page (from disk) in batches.
+class ChatLoadOlderHistory extends ChatEvent {
+  const ChatLoadOlderHistory();
 }
 
 class ChatDisconnect extends ChatEvent {
@@ -150,6 +158,7 @@ class ChatUpdateContactAvatars extends ChatEvent {
 
 class ChatInternalSgtpEvent extends ChatEvent {
   final SgtpEvent sgtpEvent;
+
   /// The session generation counter at the time this event was dispatched.
   /// The BLoC ignores events whose sessionId doesn't match the current one,
   /// preventing stale reconnect events from corrupting the peer list.

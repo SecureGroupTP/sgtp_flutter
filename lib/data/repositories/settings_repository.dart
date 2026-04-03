@@ -367,7 +367,6 @@ class SettingsRepository {
     final scopedWl = _scopedKey(_whitelistJsonKey, nodeId);
     final scopedAvatar = _scopedKey(_userAvatarB64Key, nodeId);
     final scopedNick = _scopedKey(_userNicknameKey, nodeId);
-    final scopedSavedV2 = _scopedKey(_savedChatsV2Key, nodeId);
 
     // Only migrate into the preferred node if it has no scoped data yet.
     if (p.getString(scopedPriv) == null) {
@@ -390,11 +389,6 @@ class SettingsRepository {
       final legacy = p.getString(_userNicknameKey);
       if (legacy != null) await p.setString(scopedNick, legacy);
     }
-    if (p.getStringList(scopedSavedV2) == null) {
-      final legacy = p.getStringList(_savedChatsV2Key);
-      if (legacy != null) await p.setStringList(scopedSavedV2, legacy);
-    }
-
     await p.setBool(_accountsMigratedV1Key, true);
   }
 
@@ -614,119 +608,6 @@ class SettingsRepository {
   Future<void> saveUserUsernameForNode(String nodeId, String username) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_scopedKey(_userUsernameKey, nodeId), username.trim());
-  }
-
-  // ── Saved chats (UUIDs) ───────────────────────────────────────────────────
-
-  static const _savedChatsKey = 'sgtp_saved_chat_uuids';
-  static const _savedChatsV2Key = 'sgtp_saved_chats_v2'; // [{uuid, server}]
-
-  Future<List<SavedChatRef>> loadSavedChats() async {
-    final p = await SharedPreferences.getInstance();
-    final raw = p.getStringList(_savedChatsV2Key) ?? [];
-    final result = <SavedChatRef>[];
-    for (final s in raw) {
-      try {
-        final m = json.decode(s) as Map<String, dynamic>;
-        final ref = SavedChatRef.fromJson(m);
-        if (ref.uuid.isEmpty) continue;
-        result.add(ref);
-      } catch (_) {}
-    }
-
-    // Legacy migration (uuid-only list).
-    if (result.isEmpty) {
-      final legacy = p.getStringList(_savedChatsKey) ?? [];
-      if (legacy.isNotEmpty) {
-        final migrated = legacy
-            .where((u) => u.trim().isNotEmpty)
-            .map((u) => SavedChatRef(uuid: u.trim()))
-            .toList();
-        await saveSavedChats(migrated);
-        return migrated;
-      }
-    }
-
-    return result;
-  }
-
-  Future<List<SavedChatRef>> loadSavedChatsForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final raw = p.getStringList(_scopedKey(_savedChatsV2Key, nodeId)) ?? [];
-    final result = <SavedChatRef>[];
-    for (final s in raw) {
-      try {
-        final m = json.decode(s) as Map<String, dynamic>;
-        final ref = SavedChatRef.fromJson(m);
-        if (ref.uuid.isEmpty) continue;
-        result.add(ref);
-      } catch (_) {}
-    }
-    return result;
-  }
-
-  Future<void> saveSavedChats(List<SavedChatRef> refs) async {
-    final p = await SharedPreferences.getInstance();
-    final jsonList = refs.map((r) => json.encode(r.toJson())).toList();
-    await p.setStringList(_savedChatsV2Key, jsonList);
-    // Keep legacy key in sync (uuid-only) for older code paths.
-    await p.setStringList(_savedChatsKey, refs.map((r) => r.uuid).toList());
-  }
-
-  Future<void> saveSavedChatsForNode(
-      String nodeId, List<SavedChatRef> refs) async {
-    final p = await SharedPreferences.getInstance();
-    final jsonList = refs.map((r) => json.encode(r.toJson())).toList();
-    await p.setStringList(_scopedKey(_savedChatsV2Key, nodeId), jsonList);
-  }
-
-  Future<List<String>> loadSavedChatUUIDs() async {
-    final refs = await loadSavedChats();
-    return refs.map((r) => r.uuid).toList();
-  }
-
-  Future<List<String>> loadSavedChatUUIDsForNode(String nodeId) async {
-    final refs = await loadSavedChatsForNode(nodeId);
-    return refs.map((r) => r.uuid).toList();
-  }
-
-  Future<void> addSavedChat(String uuid, {String? serverAddress}) async {
-    final refs = await loadSavedChats();
-    final next = [...refs];
-    final idx = next.indexWhere((r) => r.uuid == uuid);
-    final ref = SavedChatRef(uuid: uuid, serverAddress: serverAddress);
-    if (idx >= 0) {
-      next[idx] = ref;
-    } else {
-      next.add(ref);
-    }
-    await saveSavedChats(next);
-  }
-
-  Future<void> addSavedChatForNode(String nodeId, String uuid,
-      {String? serverAddress}) async {
-    final refs = await loadSavedChatsForNode(nodeId);
-    final next = [...refs];
-    final idx = next.indexWhere((r) => r.uuid == uuid);
-    final ref = SavedChatRef(uuid: uuid, serverAddress: serverAddress);
-    if (idx >= 0) {
-      next[idx] = ref;
-    } else {
-      next.add(ref);
-    }
-    await saveSavedChatsForNode(nodeId, next);
-  }
-
-  Future<void> removeSavedChat(String uuid) async {
-    final refs = await loadSavedChats();
-    final next = refs.where((r) => r.uuid != uuid).toList();
-    await saveSavedChats(next);
-  }
-
-  Future<void> removeSavedChatForNode(String nodeId, String uuid) async {
-    final refs = await loadSavedChatsForNode(nodeId);
-    final next = refs.where((r) => r.uuid != uuid).toList();
-    await saveSavedChatsForNode(nodeId, next);
   }
 
   // ── Media transfer ───────────────────────────────────────────────────────

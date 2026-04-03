@@ -3,7 +3,7 @@ part of 'chat_list_bloc.dart';
 /// Base event for ChatListBloc
 sealed class ChatListEvent {}
 
-/// Load all saved chats from disk
+/// Load all chats from disk
 class ChatListLoadChats extends ChatListEvent {
   ChatListLoadChats();
 }

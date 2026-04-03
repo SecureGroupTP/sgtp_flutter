@@ -9,6 +9,9 @@ class ChatMetadata extends Equatable {
   /// Chat display name (editable by any participant)
   final String name;
 
+  /// Server address bound to this chat history (host:port).
+  final String serverAddress;
+
   /// Avatar image bytes (optional, PNG/JPEG, max 4KB)
   final Uint8List? avatarBytes;
 
@@ -27,6 +30,7 @@ class ChatMetadata extends Equatable {
   const ChatMetadata({
     required this.uuid,
     required this.name,
+    required this.serverAddress,
     this.avatarBytes,
     required this.createdAt,
     required this.updatedAt,
@@ -38,6 +42,7 @@ class ChatMetadata extends Equatable {
   ChatMetadata copyWith({
     String? uuid,
     String? name,
+    String? serverAddress,
     Uint8List? avatarBytes,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -47,6 +52,7 @@ class ChatMetadata extends Equatable {
     return ChatMetadata(
       uuid: uuid ?? this.uuid,
       name: name ?? this.name,
+      serverAddress: serverAddress ?? this.serverAddress,
       avatarBytes: avatarBytes ?? this.avatarBytes,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -59,6 +65,7 @@ class ChatMetadata extends Equatable {
   List<Object?> get props => [
         uuid,
         name,
+        serverAddress,
         avatarBytes,
         createdAt,
         updatedAt,

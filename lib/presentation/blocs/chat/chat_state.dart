@@ -50,6 +50,12 @@ class ChatState extends Equatable {
   /// Emoji reactions: messageId → emoji → Set<senderUUID> (local + received).
   final Map<String, Map<String, Set<String>>> reactions;
 
+  /// True while an older history page is being loaded from local storage.
+  final bool isLoadingHistory;
+
+  /// Whether there are older local history messages available.
+  final bool hasMoreHistory;
+
   const ChatState({
     this.status = ChatStatus.connecting,
     this.messages = const [],
@@ -71,6 +77,8 @@ class ChatState extends Equatable {
     this.replyToMessage,
     this.uploadProgress,
     this.reactions = const {},
+    this.isLoadingHistory = false,
+    this.hasMoreHistory = true,
   });
 
   ChatState copyWith({
@@ -94,6 +102,8 @@ class ChatState extends Equatable {
     ChatMessage? replyToMessage,
     double? uploadProgress,
     Map<String, Map<String, Set<String>>>? reactions,
+    bool? isLoadingHistory,
+    bool? hasMoreHistory,
     bool clearError = false,
     bool clearAvatar = false,
     bool clearUserAvatar = false,
@@ -101,35 +111,58 @@ class ChatState extends Equatable {
     bool clearUpload = false,
   }) {
     return ChatState(
-      status:         status ?? this.status,
-      messages:       messages ?? this.messages,
-      peerUUIDs:      peerUUIDs ?? this.peerUUIDs,
-      isMaster:       isMaster ?? this.isMaster,
-      roomUUID:       roomUUID ?? this.roomUUID,
-      myUUID:         myUUID ?? this.myUUID,
+      status: status ?? this.status,
+      messages: messages ?? this.messages,
+      peerUUIDs: peerUUIDs ?? this.peerUUIDs,
+      isMaster: isMaster ?? this.isMaster,
+      roomUUID: roomUUID ?? this.roomUUID,
+      myUUID: myUUID ?? this.myUUID,
       myPublicKeyHex: myPublicKeyHex ?? this.myPublicKeyHex,
-      errorMessage:   clearError ? null : (errorMessage ?? this.errorMessage),
-      nicknames:      nicknames ?? this.nicknames,
-      peerNicknames:  peerNicknames ?? this.peerNicknames,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      nicknames: nicknames ?? this.nicknames,
+      peerNicknames: peerNicknames ?? this.peerNicknames,
       peerNicknamesHistory: peerNicknamesHistory ?? this.peerNicknamesHistory,
       peerPublicKeys: peerPublicKeys ?? this.peerPublicKeys,
-      chatName:       chatName ?? this.chatName,
-      chatAvatarBytes: clearAvatar ? null : (chatAvatarBytes ?? this.chatAvatarBytes),
-      userAvatarBytes: clearUserAvatar ? null : (userAvatarBytes ?? this.userAvatarBytes),
-      peerAvatars:    peerAvatars ?? this.peerAvatars,
-      readReceipts:   readReceipts ?? this.readReceipts,
-      replyToMessage: clearReply ? null : (replyToMessage ?? this.replyToMessage),
-      uploadProgress: clearUpload ? null : (uploadProgress ?? this.uploadProgress),
-      reactions:      reactions ?? this.reactions,
+      chatName: chatName ?? this.chatName,
+      chatAvatarBytes:
+          clearAvatar ? null : (chatAvatarBytes ?? this.chatAvatarBytes),
+      userAvatarBytes:
+          clearUserAvatar ? null : (userAvatarBytes ?? this.userAvatarBytes),
+      peerAvatars: peerAvatars ?? this.peerAvatars,
+      readReceipts: readReceipts ?? this.readReceipts,
+      replyToMessage:
+          clearReply ? null : (replyToMessage ?? this.replyToMessage),
+      uploadProgress:
+          clearUpload ? null : (uploadProgress ?? this.uploadProgress),
+      reactions: reactions ?? this.reactions,
+      isLoadingHistory: isLoadingHistory ?? this.isLoadingHistory,
+      hasMoreHistory: hasMoreHistory ?? this.hasMoreHistory,
     );
   }
 
   @override
   List<Object?> get props => [
-        status, messages, peerUUIDs, isMaster,
-        roomUUID, myUUID, myPublicKeyHex, errorMessage,
-        nicknames, peerNicknames, peerNicknamesHistory, peerPublicKeys,
-        chatName, chatAvatarBytes, userAvatarBytes,
-        peerAvatars, readReceipts, replyToMessage, uploadProgress, reactions,
+        status,
+        messages,
+        peerUUIDs,
+        isMaster,
+        roomUUID,
+        myUUID,
+        myPublicKeyHex,
+        errorMessage,
+        nicknames,
+        peerNicknames,
+        peerNicknamesHistory,
+        peerPublicKeys,
+        chatName,
+        chatAvatarBytes,
+        userAvatarBytes,
+        peerAvatars,
+        readReceipts,
+        replyToMessage,
+        uploadProgress,
+        reactions,
+        isLoadingHistory,
+        hasMoreHistory,
       ];
 }

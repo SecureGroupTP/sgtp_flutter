@@ -201,7 +201,8 @@ class _HomeScreenState extends State<HomeScreen> {
         lower.contains('already');
     if (isTaken) return 'Username already taken';
     if (msg.isNotEmpty) return msg;
-    if (code != null) return 'Username update failed (code: 0x${code.toRadixString(16)})';
+    if (code != null)
+      return 'Username update failed (code: 0x${code.toRadixString(16)})';
     return 'Username update failed';
   }
 
@@ -493,8 +494,8 @@ class _AppStartScreenState extends State<AppStartScreen> {
       await settings.saveUserNicknameForNode(accountId, 'Account');
       await settings.setLastAccountId(accountId);
     }
-    final chatServer =
-        preferredNode?.chatAddress ?? (lastAddr.isEmpty ? 'localhost:443' : lastAddr);
+    final chatServer = preferredNode?.chatAddress ??
+        (lastAddr.isEmpty ? 'localhost:443' : lastAddr);
 
     if (accountId.trim().isNotEmpty) {
       await settings.migrateLegacyAccountDataToNodeIfNeeded(accountId);
@@ -531,6 +532,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
           : await settings.loadUserAvatarForNode(accountId);
 
       final config = SgtpConfig(
+        accountId: accountId,
         serverAddr: chatServer,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,

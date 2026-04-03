@@ -17,6 +17,7 @@ import '../core/protocol/frame_builder.dart';
 import '../core/protocol/frame_parser.dart';
 import '../core/protocol/packet_types.dart';
 import '../core/uuid_v7.dart';
+import 'repositories/chat_history_repository.dart';
 import 'repositories/settings_repository.dart';
 import 'transport/http_sgtp_transport.dart';
 import 'transport/server_discovery.dart';
@@ -78,6 +79,7 @@ class _PendingFile {
 // ---------------------------------------------------------------------------
 
 class SgtpConfig {
+  final String? accountId;
   final String serverAddr;
   final Uint8List roomUUID;
   final SimpleKeyPairData identityKeyPair;
@@ -100,6 +102,7 @@ class SgtpConfig {
   final int mediaChunkSizeBytes;
 
   const SgtpConfig({
+    this.accountId,
     required this.serverAddr,
     required this.roomUUID,
     required this.identityKeyPair,
@@ -115,6 +118,7 @@ class SgtpConfig {
   });
 
   SgtpConfig copyWithRoomUUID(Uint8List roomUUID) => SgtpConfig(
+        accountId: accountId,
         serverAddr: serverAddr,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
@@ -130,6 +134,7 @@ class SgtpConfig {
       );
 
   SgtpConfig copyWithMeta({String? name, Uint8List? avatar}) => SgtpConfig(
+        accountId: accountId,
         serverAddr: serverAddr,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
@@ -147,11 +152,13 @@ class SgtpConfig {
   SgtpConfig copyWith(
           {Set<String>? whitelist,
           String? serverAddr,
+          String? accountId,
           int? mediaChunkSizeBytes,
           SgtpTransportFamily? transport,
           bool? useTls,
           String? nodeId}) =>
       SgtpConfig(
+        accountId: accountId ?? this.accountId,
         serverAddr: serverAddr ?? this.serverAddr,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
@@ -254,6 +261,16 @@ class SgtpReactionReceived extends SgtpEvent {
   });
 }
 
+class PersistedHistoryBatchResult {
+  final int loaded;
+  final int total;
+
+  const PersistedHistoryBatchResult({
+    required this.loaded,
+    required this.total,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Client state
 // ---------------------------------------------------------------------------
@@ -303,8 +320,7 @@ class SgtpClient {
   Timer? _ckRotationTimer;
   Timer?
       _keepaliveTimer; // actively pings all known peers to keep connections alive
-  Timer?
-      _handshakeRetryTimer; // retries handshake progression while waiting
+  Timer? _handshakeRetryTimer; // retries handshake progression while waiting
   bool _infoTimerStarted = false;
   final Set<String> _pendingHandshakes = {};
   final Map<String, Timer> _pendingHandshakeTimers = {};
@@ -321,7 +337,7 @@ class SgtpClient {
   /// Prevents duplicate "joined" messages from keepalive pings / prune races.
   final Set<String> _announcedJoins = {};
 
-  final List<_HistoryRecord> _historyStore = [];
+  ChatHistoryRepository? _historyRepository;
   bool _historyRequested = false;
   final Map<String, int> _hsiReplies = {};
   Timer? _hsiTimer;
@@ -341,6 +357,7 @@ class SgtpClient {
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
     _whitelist = Set.unmodifiable(config.whitelist);
+    _historyRepository = _buildHistoryRepository();
   }
 
   bool get isMaster => _isMaster;
@@ -353,6 +370,42 @@ class SgtpClient {
 
   /// When the socket last received any data. Used to detect dead TCP connections.
   DateTime get lastReceiveAt => _lastReceiveAt;
+
+  ChatHistoryRepository? _buildHistoryRepository() {
+    final accountId = (_config.accountId ?? _config.nodeId ?? '').trim();
+    final chatUUID = roomUUIDHex.trim();
+    if (accountId.isEmpty || chatUUID.isEmpty) return null;
+    return ChatHistoryRepository(
+      accountId: accountId,
+      serverAddress: _config.serverAddr,
+      chatUUID: chatUUID,
+    );
+  }
+
+  Future<int> persistedHistoryCount() async {
+    final repo = _historyRepository;
+    if (repo == null) return 0;
+    return repo.count();
+  }
+
+  Future<PersistedHistoryBatchResult> replayPersistedHistoryBatch({
+    required int offsetFromEnd,
+    int limit = 100,
+  }) async {
+    final repo = _historyRepository;
+    if (repo == null) {
+      return const PersistedHistoryBatchResult(loaded: 0, total: 0);
+    }
+    final total = await repo.count();
+    final records = await repo.readBatchFromEnd(
+      offsetFromEnd: offsetFromEnd,
+      limit: limit,
+    );
+    for (final record in records) {
+      await _emitRecordFromHistory(record);
+    }
+    return PersistedHistoryBatchResult(loaded: records.length, total: total);
+  }
 
   /// User avatar is local UI-only and is not exchanged in SGTP MESSAGE payloads.
   void setUserAvatar(Uint8List? avatar) {}
@@ -546,13 +599,13 @@ class SgtpClient {
       final cipher = await encrypt(plaintext, _chatKey!, nonce);
       await _sendFrame(
           buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
-      _historyStore.add(_HistoryRecord(
+      unawaited(_persistRecord(_HistoryRecord(
         senderUUID: _myUUID,
         messageUUID: msgUUID,
         timestamp: DateTime.now().millisecondsSinceEpoch,
         nonce: nonce,
         plaintext: plaintext,
-      ));
+      )));
       _eventController.add(SgtpMessageReceived(
           message: ChatMessage(
         id: uuidBytesToHex(msgUUID),
@@ -682,6 +735,13 @@ class SgtpClient {
         final cipher = await encrypt(plain, _chatKey!, nonce);
         await _sendFrame(
             buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+        unawaited(_persistRecord(_HistoryRecord(
+          senderUUID: _myUUID,
+          messageUUID: msgUUID,
+          timestamp: DateTime.now().millisecondsSinceEpoch,
+          nonce: nonce,
+          plaintext: plain,
+        )));
 
         // Report progress
         final progress = (i + 1) / totalChunks;
@@ -1277,112 +1337,134 @@ class SgtpClient {
     try {
       final plain =
           await decrypt(f.messageCiphertext, _chatKey!, f.messageNonce);
-      final msgId = uuidBytesToHex(f.messageUUID);
-      final recvAt = history
-          ? DateTime.fromMillisecondsSinceEpoch(f.timestamp)
-          : DateTime.now();
+      unawaited(_persistRecord(_HistoryRecord(
+        senderUUID: Uint8List.fromList(f.senderUUID),
+        messageUUID: Uint8List.fromList(f.messageUUID),
+        timestamp: f.timestamp,
+        nonce: f.messageNonce,
+        plaintext: plain,
+      )));
+      await _emitDecodedMessage(
+        msgId: uuidBytesToHex(f.messageUUID),
+        senderUUIDHex: sH,
+        plaintext: plain,
+        recvAt: history
+            ? DateTime.fromMillisecondsSinceEpoch(f.timestamp)
+            : DateTime.now(),
+        history: history,
+      );
+    } catch (_) {}
+  }
 
-      if (!history) {
-        _historyStore.add(_HistoryRecord(
-          senderUUID: Uint8List.fromList(f.senderUUID),
-          messageUUID: Uint8List.fromList(f.messageUUID),
-          timestamp: f.timestamp,
-          nonce: f.messageNonce,
-          plaintext: plain,
-        ));
-      }
+  Future<void> _emitRecordFromHistory(PersistedHistoryRecord record) async {
+    final msgId = uuidBytesToHex(record.messageUUID);
+    final sender = uuidBytesToHex(record.senderUUID);
+    await _emitDecodedMessage(
+      msgId: msgId,
+      senderUUIDHex: sender,
+      plaintext: record.plaintext,
+      recvAt: DateTime.fromMillisecondsSinceEpoch(record.timestamp),
+      history: true,
+    );
+  }
 
-      Map<String, dynamic>? p;
-      try {
-        p = json.decode(utf8.decode(plain)) as Map<String, dynamic>;
-      } catch (_) {}
-      if (p == null || p['v'] != 1) {
+  Future<void> _emitDecodedMessage({
+    required String msgId,
+    required String senderUUIDHex,
+    required Uint8List plaintext,
+    required DateTime recvAt,
+    required bool history,
+  }) async {
+    Map<String, dynamic>? p;
+    try {
+      p = json.decode(utf8.decode(plaintext)) as Map<String, dynamic>;
+    } catch (_) {}
+    if (p == null || p['v'] != 1) {
+      _eventController.add(SgtpMessageReceived(
+          message: ChatMessage(
+              id: msgId,
+              senderUUID: senderUUIDHex,
+              content: utf8.decode(plaintext),
+              receivedAt: recvAt,
+              isFromHistory: history,
+              isFromMe: false)));
+      return;
+    }
+    _maybeApplyChatAvatarFromPayload(p, senderUUIDHex, history);
+    final senderPub = p['pub'] as String?;
+    if (senderPub != null && !history)
+      _peerPublicKeys[senderUUIDHex] = senderPub;
+
+    switch (p['type'] as String?) {
+      case 'text':
         _eventController.add(SgtpMessageReceived(
             message: ChatMessage(
-                id: msgId,
-                senderUUID: sH,
-                content: utf8.decode(plain),
-                receivedAt: recvAt,
-                isFromHistory: history,
-                isFromMe: false)));
-        return;
-      }
-      _maybeApplyChatAvatarFromPayload(p, sH, history);
-      // Extract optional sender pub key embedded in message
-      final senderPub = p['pub'] as String?;
-      if (senderPub != null && !history) _peerPublicKeys[sH] = senderPub;
-
-      switch (p['type'] as String?) {
-        case 'text':
-          _eventController.add(SgtpMessageReceived(
-              message: ChatMessage(
-            id: msgId,
-            senderUUID: sH,
-            senderPublicKeyHex: senderPub ?? _peerPublicKeys[sH],
-            content: (p['text'] as String?) ?? '',
-            receivedAt: recvAt,
-            isFromHistory: history,
-            isFromMe: false,
-            replyToId: p['reply_to_id'] as String?,
-            replyToContent: p['reply_to_content'] as String?,
-            replyToSender: p['reply_to_sender'] as String?,
-          )));
-        case 'image':
-          await _mediaPayload(msgId, sH, p, 'image', history, recvAt,
-              senderPub: senderPub);
-        case 'gif':
-          await _mediaPayload(msgId, sH, p, 'gif', history, recvAt,
-              senderPub: senderPub);
-        case 'video':
-          await _mediaPayload(msgId, sH, p, 'video', history, recvAt,
-              senderPub: senderPub);
-        case 'video_note':
-          await _mediaPayload(msgId, sH, p, 'video_note', history, recvAt,
-              senderPub: senderPub);
-        case 'voice':
-          await _mediaPayload(msgId, sH, p, 'voice', history, recvAt,
-              senderPub: senderPub);
-        case 'message_read':
-          if (!history) {
-            final readMsgId = p['msg_id'] as String?;
-            if (readMsgId != null) {
-              _eventController.add(SgtpMessageReadReceived(
-                readMessageId: readMsgId,
-                readerUUID: sH,
-                readerPublicKeyHex: senderPub ?? _peerPublicKeys[sH],
-              ));
-            }
-          }
-        case 'reaction':
-          if (!history) {
-            final msgId = p['msg_id'] as String?;
-            final emoji = p['emoji'] as String?;
-            final add = (p['add'] as bool?) ?? true;
-            if (msgId != null && emoji != null) {
-              _eventController.add(SgtpReactionReceived(
-                messageId: msgId,
-                emoji: emoji,
-                senderUUID: sH,
-                add: add,
-              ));
-            }
-          }
-        case 'chat_meta':
-          // Another participant changed chat name/avatar
-          if (!history) {
-            final name = p['name'] as String? ?? 'Chat';
-            final b64 = p['avatar'] as String?;
-            final avatar = b64 != null ? base64.decode(b64) : null;
-            _currentChatName = name;
-            _currentChatAvatar = avatar;
-            _eventController.add(SgtpChatMetadataReceived(
-              chatName: name,
-              avatarBytes: avatar,
-              senderUUID: sH,
+          id: msgId,
+          senderUUID: senderUUIDHex,
+          senderPublicKeyHex: senderPub ?? _peerPublicKeys[senderUUIDHex],
+          content: (p['text'] as String?) ?? '',
+          receivedAt: recvAt,
+          isFromHistory: history,
+          isFromMe: false,
+          replyToId: p['reply_to_id'] as String?,
+          replyToContent: p['reply_to_content'] as String?,
+          replyToSender: p['reply_to_sender'] as String?,
+        )));
+      case 'image':
+        await _mediaPayload(msgId, senderUUIDHex, p, 'image', history, recvAt,
+            senderPub: senderPub);
+      case 'gif':
+        await _mediaPayload(msgId, senderUUIDHex, p, 'gif', history, recvAt,
+            senderPub: senderPub);
+      case 'video':
+        await _mediaPayload(msgId, senderUUIDHex, p, 'video', history, recvAt,
+            senderPub: senderPub);
+      case 'video_note':
+        await _mediaPayload(
+            msgId, senderUUIDHex, p, 'video_note', history, recvAt,
+            senderPub: senderPub);
+      case 'voice':
+        await _mediaPayload(msgId, senderUUIDHex, p, 'voice', history, recvAt,
+            senderPub: senderPub);
+      case 'message_read':
+        if (!history) {
+          final readMsgId = p['msg_id'] as String?;
+          if (readMsgId != null) {
+            _eventController.add(SgtpMessageReadReceived(
+              readMessageId: readMsgId,
+              readerUUID: senderUUIDHex,
+              readerPublicKeyHex: senderPub ?? _peerPublicKeys[senderUUIDHex],
             ));
           }
-      }
-    } catch (_) {}
+        }
+      case 'reaction':
+        if (!history) {
+          final msgId = p['msg_id'] as String?;
+          final emoji = p['emoji'] as String?;
+          final add = (p['add'] as bool?) ?? true;
+          if (msgId != null && emoji != null) {
+            _eventController.add(SgtpReactionReceived(
+              messageId: msgId,
+              emoji: emoji,
+              senderUUID: senderUUIDHex,
+              add: add,
+            ));
+          }
+        }
+      case 'chat_meta':
+        if (!history) {
+          final name = p['name'] as String? ?? 'Chat';
+          final b64 = p['avatar'] as String?;
+          final avatar = b64 != null ? base64.decode(b64) : null;
+          _currentChatName = name;
+          _currentChatAvatar = avatar;
+          _eventController.add(SgtpChatMetadataReceived(
+            chatName: name,
+            avatarBytes: avatar,
+            senderUUID: senderUUIDHex,
+          ));
+        }
+    }
   }
 
   Future<void> _mediaPayload(
@@ -1533,6 +1615,20 @@ class SgtpClient {
     return true;
   }
 
+  Future<void> _persistRecord(_HistoryRecord record) async {
+    final repo = _historyRepository;
+    if (repo == null) return;
+    try {
+      await repo.appendIfAbsent(PersistedHistoryRecord(
+        senderUUID: record.senderUUID,
+        messageUUID: record.messageUUID,
+        timestamp: record.timestamp,
+        nonce: record.nonce,
+        plaintext: record.plaintext,
+      ));
+    } catch (_) {}
+  }
+
   // ---------------------------------------------------------------------------
   // History: serve
   // ---------------------------------------------------------------------------
@@ -1543,8 +1639,9 @@ class SgtpClient {
     final peer = _peers[h];
     if (peer == null) return;
     if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
-    await _sendFrame(buildHsi(_roomUUID, Uint8List.fromList(f.senderUUID),
-        _myUUID, _historyStore.length));
+    final historyCount = await persistedHistoryCount();
+    await _sendFrame(buildHsi(
+        _roomUUID, Uint8List.fromList(f.senderUUID), _myUUID, historyCount));
   }
 
   Future<void> _onHsr(ParsedFrame f) async {
@@ -1553,7 +1650,7 @@ class SgtpClient {
     final peer = _peers[senderHex];
     if (peer == null) return;
     if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
-    if (_chatKey == null || _historyStore.isEmpty) {
+    if (_chatKey == null) {
       await _sendFrame(buildHsraEos(_roomUUID, recv, _myUUID, 0));
       return;
     }
@@ -1563,8 +1660,18 @@ class SgtpClient {
       offset = bd.getUint64(0, Endian.big);
       limit = bd.getUint64(8, Endian.big);
     }
-    final all = _historyStore.skip(offset).toList();
-    final toServe = limit > 0 ? all.take(limit).toList() : all;
+    final repo = _historyRepository;
+    if (repo == null) {
+      await _sendFrame(buildHsraEos(_roomUUID, recv, _myUUID, 0));
+      return;
+    }
+    final total = await repo.count();
+    if (offset >= total) {
+      await _sendFrame(buildHsraEos(_roomUUID, recv, _myUUID, 0));
+      return;
+    }
+    final size = limit > 0 ? limit : (total - offset);
+    final toServe = await repo.readRange(offset: offset, limit: size);
     const batch = 32;
     int batchNum = 0;
     for (var i = 0; i < toServe.length; i += batch) {

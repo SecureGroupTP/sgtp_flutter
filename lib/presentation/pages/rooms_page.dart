@@ -8,6 +8,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/qr_data.dart';
+import '../../data/repositories/chat_history_repository.dart';
 import '../../data/repositories/chat_metadata_repository.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../domain/entities/chat_metadata.dart';
@@ -40,17 +41,14 @@ class RoomsPage extends StatefulWidget {
 }
 
 class RoomsPageState extends State<RoomsPage> {
-  final _settingsRepo = SettingsRepository();
   late ChatMetadataRepository _chatMetadataRepo;
-  List<SavedChatRef> _savedChats = [];
-  Map<String, ChatMetadata> _savedChatMetadata = const {};
-  String _savedRoomsSignature = '';
+  List<ChatMetadata> _storedChats = const [];
 
   @override
   void initState() {
     super.initState();
     _chatMetadataRepo = ChatMetadataRepository(accountId: widget.accountId);
-    _loadSavedChats();
+    _loadStoredChats();
   }
 
   @override
@@ -58,66 +56,62 @@ class RoomsPageState extends State<RoomsPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.accountId != widget.accountId) {
       _chatMetadataRepo = ChatMetadataRepository(accountId: widget.accountId);
-      _savedRoomsSignature = '';
-      _savedChats = [];
-      _savedChatMetadata = const {};
-      _loadSavedChats();
+      _storedChats = const [];
+      _loadStoredChats();
     }
   }
 
-  Future<void> _loadSavedChats() async {
-    final refs = await _settingsRepo.loadSavedChatsForNode(widget.accountId);
+  Future<void> _loadStoredChats() async {
     final allMetadata = await _chatMetadataRepo.loadAllChats();
-    final metadataByUuid = <String, ChatMetadata>{
-      for (final chat in allMetadata) chat.uuid: chat,
-    };
     if (!mounted) return;
     setState(() {
-      _savedChats = refs;
-      _savedChatMetadata = {
-        for (final uuid in refs.map((r) => r.uuid))
-          if (metadataByUuid.containsKey(uuid)) uuid: metadataByUuid[uuid]!,
-      };
+      _storedChats = allMetadata;
     });
   }
 
-  Future<void> _saveChat(
+  Future<void> _upsertChat(
     String uuid, {
     String? serverAddress,
     String? name,
     Uint8List? avatarBytes,
   }) async {
-    if (name != null || avatarBytes != null) {
-      final existing = await _chatMetadataRepo.loadChat(uuid);
-      final now = DateTime.now();
-      await _chatMetadataRepo.saveChat(ChatMetadata(
-        uuid: uuid,
-        name: (name != null && name.isNotEmpty)
-            ? name
-            : (existing?.name ?? 'Chat'),
-        avatarBytes: avatarBytes ?? existing?.avatarBytes,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-        windowWidth: existing?.windowWidth,
-        windowHeight: existing?.windowHeight,
-      ));
-    }
-    await _settingsRepo.addSavedChatForNode(widget.accountId, uuid,
-        serverAddress: serverAddress);
-    await _loadSavedChats();
+    final server = (serverAddress ?? '').trim();
+    if (server.isEmpty) return;
+    final existing =
+        await _chatMetadataRepo.loadChat(uuid, serverAddress: server);
+    final now = DateTime.now();
+    await _chatMetadataRepo.saveChat(ChatMetadata(
+      uuid: uuid,
+      name:
+          (name != null && name.isNotEmpty) ? name : (existing?.name ?? 'Chat'),
+      serverAddress: server,
+      avatarBytes: avatarBytes ?? existing?.avatarBytes,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      windowWidth: existing?.windowWidth,
+      windowHeight: existing?.windowHeight,
+    ));
+    await _loadStoredChats();
   }
 
-  Future<void> _unsaveChat(String uuid) async {
-    await _settingsRepo.removeSavedChatForNode(widget.accountId, uuid);
-    await _loadSavedChats();
+  Future<void> _deleteStoredChat(ChatMetadata metadata) async {
+    await ChatHistoryRepository(
+      accountId: widget.accountId,
+      serverAddress: metadata.serverAddress,
+      chatUUID: metadata.uuid,
+    ).clear();
+    await _chatMetadataRepo.deleteChat(
+      metadata.uuid,
+      serverAddress: metadata.serverAddress,
+    );
+    await _loadStoredChats();
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<RoomsBloc, RoomsState>(
       listener: (context, state) {
-        unawaited(_syncSavedChatsFromActiveRooms(state));
-        _maybeRefreshSavedChats(state);
+        unawaited(_syncStoredChatsFromActiveRooms(state));
         if (state.error != null) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
@@ -140,9 +134,9 @@ class RoomsPageState extends State<RoomsPage> {
 
   Widget _buildBody(BuildContext context, RoomsState state) {
     final activeUUIDs = state.rooms.map((r) => r.roomUUID).toSet();
-    final savedNotActive =
-        _savedChats.where((r) => !activeUUIDs.contains(r.uuid)).toList();
-    final hasAnything = state.rooms.isNotEmpty || savedNotActive.isNotEmpty;
+    final storedNotActive =
+        _storedChats.where((c) => !activeUUIDs.contains(c.uuid)).toList();
+    final hasAnything = state.rooms.isNotEmpty || storedNotActive.isNotEmpty;
 
     if (!hasAnything) return const _EmptyState();
 
@@ -153,38 +147,24 @@ class RoomsPageState extends State<RoomsPage> {
         // ── Active rooms ─────────────────────────────────────────────────
         ...state.rooms.map((entry) => ActiveRoomTile(
               entry: entry,
-              isSaved: _savedChats.any((r) => r.uuid == entry.roomUUID),
               onTap: () => _openRoom(context, entry),
               onReconnect: () => entry.chatBloc.add(const ChatReconnect()),
               onRemove: () => context
                   .read<RoomsBloc>()
                   .add(RoomsRemoveRoom(entry.roomUUID)),
-              onToggleSave: () async {
-                if (_savedChats.any((r) => r.uuid == entry.roomUUID)) {
-                  await _unsaveChat(entry.roomUUID);
-                } else {
-                  final currentState = entry.chatBloc.state;
-                  await _saveChat(
-                    entry.roomUUID,
-                    serverAddress: entry.serverAddress,
-                    name: currentState.chatName,
-                    avatarBytes: currentState.chatAvatarBytes,
-                  );
-                }
-              },
             )),
 
-        // ── Saved chats (not currently joined) ───────────────────────────
-        if (savedNotActive.isNotEmpty) ...[
-          const _SectionHeader(title: 'Saved Chats'),
-          ...savedNotActive.map((ref) => SavedChatTile(
-                uuid: ref.uuid,
-                metadata: _savedChatMetadata[ref.uuid],
+        // ── Stored chats (not currently joined) ──────────────────────────
+        if (storedNotActive.isNotEmpty) ...[
+          const _SectionHeader(title: 'Stored Chats'),
+          ...storedNotActive.map((chat) => SavedChatTile(
+                uuid: chat.uuid,
+                metadata: chat,
                 onConnect: () => context.read<RoomsBloc>().add(RoomsJoinRoom(
-                      ref.uuid,
-                      serverAddress: ref.serverAddress,
+                      chat.uuid,
+                      serverAddress: chat.serverAddress,
                     )),
-                onRemove: () => _unsaveChat(ref.uuid),
+                onRemove: () => _deleteStoredChat(chat),
               )),
         ],
       ],
@@ -209,42 +189,19 @@ class RoomsPageState extends State<RoomsPage> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => _AddRoomSheet(
         roomsBloc: context.read<RoomsBloc>(),
-        onSaveChat: _saveChat,
+        onSaveChat: _upsertChat,
       ),
     );
   }
 
-  void _maybeRefreshSavedChats(RoomsState state) {
-    final nextSignature = _buildSavedRoomsSignature(state);
-    if (nextSignature == _savedRoomsSignature) return;
-    _savedRoomsSignature = nextSignature;
-    _loadSavedChats();
-  }
-
-  Future<void> _syncSavedChatsFromActiveRooms(RoomsState state) async {
-    final savedUuids = _savedChats.map((r) => r.uuid).toSet();
-    if (savedUuids.isEmpty) return;
-
-    final savedByUuid = {for (final r in _savedChats) r.uuid: r};
+  Future<void> _syncStoredChatsFromActiveRooms(RoomsState state) async {
     var changed = false;
     for (final room in state.rooms) {
-      if (!savedUuids.contains(room.roomUUID)) continue;
-
-      // Backfill server address for legacy saved chats (uuid-only).
-      final savedRef = savedByUuid[room.roomUUID];
-      if ((savedRef?.serverAddress == null ||
-              savedRef!.serverAddress!.isEmpty) &&
-          room.serverAddress.trim().isNotEmpty) {
-        await _settingsRepo.addSavedChatForNode(
-          widget.accountId,
-          room.roomUUID,
-          serverAddress: room.serverAddress.trim(),
-        );
-        changed = true;
-      }
-
       final chatState = room.chatBloc.state;
-      final existing = await _chatMetadataRepo.loadChat(room.roomUUID);
+      final existing = await _chatMetadataRepo.loadChat(
+        room.roomUUID,
+        serverAddress: room.serverAddress,
+      );
       final nextName = chatState.chatName.trim();
       final shouldSaveName = nextName.isNotEmpty && nextName != 'Chat';
       final hasAvatar = chatState.chatAvatarBytes != null &&
@@ -262,6 +219,7 @@ class RoomsPageState extends State<RoomsPage> {
       final now = DateTime.now();
       await _chatMetadataRepo.saveChat(ChatMetadata(
         uuid: room.roomUUID,
+        serverAddress: room.serverAddress,
         name:
             shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
         avatarBytes:
@@ -275,31 +233,8 @@ class RoomsPageState extends State<RoomsPage> {
     }
 
     if (changed && mounted) {
-      await _loadSavedChats();
+      await _loadStoredChats();
     }
-  }
-
-  String _buildSavedRoomsSignature(RoomsState state) {
-    final activeSaved = state.rooms
-        .where((room) => _savedChats.any((r) => r.uuid == room.roomUUID))
-        .map((room) {
-      final chatState = room.chatBloc.state;
-      return [
-        room.roomUUID,
-        room.serverAddress,
-        chatState.chatName,
-        '${chatState.chatAvatarBytes?.length ?? 0}',
-        chatState.status.name,
-        '${chatState.messages.length}',
-        '${chatState.readReceipts.length}',
-      ].join(':');
-    }).toList()
-      ..sort();
-    final saved = _savedChats
-        .map((r) => '${r.uuid}@${r.serverAddress ?? ''}')
-        .toList()
-      ..sort();
-    return [...saved, ...activeSaved].join('|');
   }
 }
 
@@ -367,20 +302,16 @@ class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
 
 class ActiveRoomTile extends StatelessWidget {
   final RoomEntry entry;
-  final bool isSaved;
   final VoidCallback onTap;
   final VoidCallback onReconnect;
   final VoidCallback onRemove;
-  final VoidCallback onToggleSave;
 
   const ActiveRoomTile({
     super.key,
     required this.entry,
-    required this.isSaved,
     required this.onTap,
     required this.onReconnect,
     required this.onRemove,
-    required this.onToggleSave,
   });
 
   @override
@@ -425,10 +356,8 @@ class ActiveRoomTile extends StatelessWidget {
               if (isOffline) _ReconnectButton(onPressed: onReconnect),
               _ActiveRoomMoreButton(
                 entry: entry,
-                isSaved: isSaved,
                 chatState: chatState,
                 onTap: onTap,
-                onToggleSave: onToggleSave,
                 onRemove: onRemove,
               ),
             ],
@@ -451,18 +380,14 @@ class ActiveRoomTile extends StatelessWidget {
 // stateless wrapper that has access to the needed callbacks.
 class _ActiveRoomMoreButton extends StatelessWidget {
   final RoomEntry entry;
-  final bool isSaved;
   final ChatState chatState;
   final VoidCallback onTap;
-  final VoidCallback onToggleSave;
   final VoidCallback onRemove;
 
   const _ActiveRoomMoreButton({
     required this.entry,
-    required this.isSaved,
     required this.chatState,
     required this.onTap,
-    required this.onToggleSave,
     required this.onRemove,
   });
 
@@ -485,15 +410,6 @@ class _ActiveRoomMoreButton extends StatelessWidget {
         const PopupMenuItem(
           value: _RoomAction.shareQR,
           child: _MenuItem(icon: Icons.qr_code_2_outlined, label: 'Share QR'),
-        ),
-        PopupMenuItem(
-          value: _RoomAction.save,
-          child: _MenuItem(
-            icon: isSaved
-                ? Icons.bookmark_remove_outlined
-                : Icons.bookmark_add_outlined,
-            label: isSaved ? 'Remove from saved' : 'Save chat',
-          ),
         ),
         const PopupMenuDivider(),
         const PopupMenuItem(
@@ -530,18 +446,13 @@ class _ActiveRoomMoreButton extends StatelessWidget {
                 chatState.chatName != 'Chat' ? chatState.chatName : entry.label,
           ),
         );
-      case _RoomAction.save:
-        onToggleSave();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(isSaved ? 'Removed from saved' : 'Chat saved'),
-        ));
       case _RoomAction.remove:
         onRemove();
     }
   }
 }
 
-enum _RoomAction { open, copyUUID, shareQR, save, remove }
+enum _RoomAction { open, copyUUID, shareQR, remove }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Saved chat tile
@@ -566,8 +477,8 @@ class SavedChatTile extends StatelessWidget {
     final hasMetadataName = metadata != null && metadata!.name.isNotEmpty;
     final title = hasMetadataName ? metadata!.name : '${uuid.substring(0, 8)}…';
     final subtitle = metadata?.updatedAt != null
-        ? 'Saved · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
-        : 'Saved · tap to connect';
+        ? 'Stored · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
+        : 'Stored · tap to connect';
     return _ChatTile(
       onTap: onConnect,
       leading: metadata?.avatarBytes != null
@@ -771,7 +682,7 @@ class _ReconnectButton extends StatelessWidget {
   }
 }
 
-/// Tiny icon button used in saved chat trailing area.
+/// Tiny icon button used in stored chat trailing area.
 class _IconAction extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -899,7 +810,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   final _shareHexCtrl = TextEditingController();
   bool _joining = false;
   bool _showBase64Input = false;
-  bool _saveAfterJoin = false;
   String? _decodeError;
 
   final _settingsRepo = SettingsRepository();
@@ -998,9 +908,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       transport: targetNode?.transport,
       useTls: targetNode?.useTls,
     ));
-    if (_saveAfterJoin) {
-      await widget.onSaveChat?.call(uuid, serverAddress: serverAddress);
-    }
+    await widget.onSaveChat?.call(uuid, serverAddress: serverAddress);
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -1120,25 +1028,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
               ),
             ],
 
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Checkbox(
-                  value: _saveAfterJoin,
-                  onChanged: (v) => setState(() => _saveAfterJoin = v ?? false),
-                  activeColor: AppColors.accent,
-                  checkColor: Colors.black,
-                ),
-                const SizedBox(width: 4),
-                const Expanded(
-                  child: Text(
-                    'Save this chat for quick reconnect',
-                    style:
-                        TextStyle(fontSize: 14, color: AppColors.textSecondary),
-                  ),
-                ),
-              ],
-            ),
             const SizedBox(height: 8),
             _SheetButton(
               label: 'Join room',

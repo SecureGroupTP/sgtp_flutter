@@ -146,7 +146,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : (accountIds.isNotEmpty ? accountIds.first : null);
 
     if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
-      await _settings.migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
+      await _settings
+          .migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
     }
 
     if (mounted) {
@@ -257,8 +258,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final nextAvatars = <String, Uint8List?>{};
     final nextNicks = <String, String>{};
     for (final accountId in accountIds) {
-      nextAvatars[accountId] =
-          await _settings.loadUserAvatarForNode(accountId);
+      nextAvatars[accountId] = await _settings.loadUserAvatarForNode(accountId);
       nextNicks[accountId] = await _settings.loadUserNicknameForNode(accountId);
     }
     if (!mounted) return;
@@ -548,7 +548,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final privBytes = await keyPair.extractPrivateKeyBytes();
       final pubBytes = Uint8List.fromList(pubKey.bytes);
       final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      await _settings.savePrivateKeyForNode(accountId, opensshBytes, 'identity');
+      await _settings.savePrivateKeyForNode(
+          accountId, opensshBytes, 'identity');
       return true;
     } catch (_) {
       return false;
@@ -560,7 +561,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final bytes = Uint8List.fromList(text.codeUnits);
       // Validate
       parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(accountId, bytes, 'pasted_identity');
+      await _settings.savePrivateKeyForNode(
+          accountId, bytes, 'pasted_identity');
       return true;
     } catch (_) {
       return false;
@@ -708,7 +710,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: () async {
                       final text = pasteCtrl.text.trim();
                       if (text.isEmpty) return;
-                      final ok = await _pastePrivateKeyForAccount(accountId, text);
+                      final ok =
+                          await _pastePrivateKeyForAccount(accountId, text);
                       if (!ctx.mounted) return;
                       if (ok) {
                         saved = true;
@@ -1042,6 +1045,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (accountId == null) return;
       if (accountId.trim().isEmpty) return;
       final newConfig = SgtpConfig(
+        accountId: accountId,
         serverAddr: server,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
@@ -1126,14 +1130,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _deleteAccount(String accountId) async {
     final id = accountId.trim();
     if (id.isEmpty) return;
-    final linkedServers = _nodes.where((n) => n.accountId.trim() == id).toList();
+    final linkedServers =
+        _nodes.where((n) => n.accountId.trim() == id).toList();
     final label = _accountName(id);
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
             title: const Text('Delete Account?'),
-            content: Text(
-                'Delete "$label"? '
+            content: Text('Delete "$label"? '
                 'Linked servers (${linkedServers.length}) will be kept and detached from this account. '
                 'Profile/key data for this account will no longer be used.'),
             actions: [
@@ -1226,8 +1230,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           '${tls ? 'https' : 'http'}:$port: ${labels.join(", ")}',
           tag: 'DISC');
     } catch (e) {
-      AppLogger.w(
-          'Discovery [${node.name}] ${node.host}: failed — $e', tag: 'DISC');
+      AppLogger.w('Discovery [${node.name}] ${node.host}: failed — $e',
+          tag: 'DISC');
     }
   }
 
@@ -1268,9 +1272,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final accountIds = await _settings.loadAccountIds();
     final preferred = await _settings.loadPreferredNode();
     final savedAccountId = await _settings.loadLastAccountId();
-    final nextAccountId = (savedAccountId != null && accountIds.contains(savedAccountId))
-        ? savedAccountId
-        : (accountIds.isNotEmpty ? accountIds.first : null);
+    final nextAccountId =
+        (savedAccountId != null && accountIds.contains(savedAccountId))
+            ? savedAccountId
+            : (accountIds.isNotEmpty ? accountIds.first : null);
     if (!mounted) return;
     setState(() {
       _nodes = nodes;
@@ -1662,7 +1667,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           chatPort: 443,
                           voicePort: 443,
                         );
-                        await _settings.upsertNode(node.copyWith(accountId: ''));
+                        await _settings
+                            .upsertNode(node.copyWith(accountId: ''));
                         await _reloadNodes();
                         if (!mounted) return;
                         if (ctx.mounted) Navigator.pop(ctx);
@@ -2041,8 +2047,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Text(
                 'Account: ${activeName}',
-                style:
-                    const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                style: const TextStyle(
+                    fontSize: 13, color: AppColors.textSecondary),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -2475,10 +2481,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ListTile(
                   dense: true,
                   onTap: _addServerOnly,
-                  leading: const Icon(Icons.add, color: AppColors.textSecondary),
+                  leading:
+                      const Icon(Icons.add, color: AppColors.textSecondary),
                   title: const Text(
                     'Add server',
-                    style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+                    style:
+                        TextStyle(fontSize: 14, color: AppColors.textPrimary),
                   ),
                 ),
               ],
@@ -2489,7 +2497,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 10),
           Text(
             'Active: ${selectedServer.chatAddress} • ${selectedServer.transport.id.toUpperCase()}${selectedServer.useTls ? " +TLS" : ""}',
-            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            style:
+                const TextStyle(fontSize: 12, color: AppColors.textSecondary),
           ),
         ],
         const SizedBox(height: 16),
@@ -2914,7 +2923,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: AppColors.statusRed),
+              style:
+                  FilledButton.styleFrom(backgroundColor: AppColors.statusRed),
               onPressed: () {
                 if (ctrl.text.trim() != code) {
                   setS(() => err = 'Code does not match');
@@ -3224,8 +3234,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       _optionsError = null;
     });
     try {
-      final (:opts, port: _, tls: _) =
-          await SgtpServerDiscovery.discover(host);
+      final (:opts, port: _, tls: _) = await SgtpServerDiscovery.discover(host);
       await widget.settings.saveNodeServerOptions(widget.baseId, opts);
       final savedAt =
           await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
@@ -3263,8 +3272,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     }
     widget.onSave(NodeConfig(
       id: widget.baseId,
-      accountId:
-          widget.existing?.accountId ?? widget.accountIdForNew ?? '',
+      accountId: widget.existing?.accountId ?? widget.accountIdForNew ?? '',
       name: name,
       host: host,
       chatPort: 443,

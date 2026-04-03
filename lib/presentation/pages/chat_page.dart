@@ -100,6 +100,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _scrollCtrl.addListener(_onScroll);
     _loadInputDevices();
     _messageCtrl.addListener(() {
       final has = _messageCtrl.text.trim().isNotEmpty;
@@ -122,6 +123,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _saveScrollPosition();
     WidgetsBinding.instance.removeObserver(this);
     _messageCtrl.dispose();
+    _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     _focusNode.dispose();
     _recorder.dispose();
@@ -209,6 +211,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         }
       }
     });
+  }
+
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    if (_scrollCtrl.position.pixels <= 80) {
+      _chatBloc?.add(const ChatLoadOlderHistory());
+    }
   }
 
   /// Persist the current scroll offset for this room so we can restore it later.
@@ -873,6 +882,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    _chatBloc ??= context.read<ChatBloc>();
     return BlocConsumer<ChatBloc, ChatState>(
       listener: (context, state) {
         // Always cache the bloc via context.read — it is always valid inside
@@ -1303,9 +1313,22 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     return ListView.builder(
       controller: _scrollCtrl,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: state.messages.length,
+      itemCount: state.messages.length + (state.isLoadingHistory ? 1 : 0),
       itemBuilder: (context, index) {
-        final msg = state.messages[index];
+        if (state.isLoadingHistory && index == 0) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        final msgIndex = index - (state.isLoadingHistory ? 1 : 0);
+        final msg = state.messages[msgIndex];
         final isInteractable = msg.type != MessageType.system &&
             msg.type != MessageType.messageRead;
 

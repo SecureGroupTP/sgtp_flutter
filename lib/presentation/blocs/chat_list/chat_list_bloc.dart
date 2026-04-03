@@ -63,6 +63,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       final newChat = ChatMetadata(
         uuid: uuid,
         name: event.name,
+        serverAddress: '',
         avatarBytes: event.avatarBytes,
         createdAt: now,
         updatedAt: now,
@@ -109,9 +110,8 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       debugPrint('[ChatListBloc] Updated chat: ${event.uuid}');
 
       // Update in list
-      final updatedChats = state.chats
-          .map((c) => c.uuid == event.uuid ? updated : c)
-          .toList();
+      final updatedChats =
+          state.chats.map((c) => c.uuid == event.uuid ? updated : c).toList();
 
       // Sort by updatedAt
       updatedChats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -119,8 +119,9 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       emit(state.copyWith(
         status: ChatListStatus.loaded,
         chats: updatedChats,
-        selectedChat:
-            state.selectedChat?.uuid == event.uuid ? updated : state.selectedChat,
+        selectedChat: state.selectedChat?.uuid == event.uuid
+            ? updated
+            : state.selectedChat,
       ));
     } catch (e) {
       debugPrint('[ChatListBloc] Error updating chat: $e');
@@ -140,7 +141,8 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       await _repository.deleteChat(event.uuid);
       debugPrint('[ChatListBloc] Deleted chat: ${event.uuid}');
 
-      final updatedChats = state.chats.where((c) => c.uuid != event.uuid).toList();
+      final updatedChats =
+          state.chats.where((c) => c.uuid != event.uuid).toList();
 
       emit(state.copyWith(
         status: ChatListStatus.loaded,
@@ -208,8 +210,9 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
 
       emit(state.copyWith(
         chats: updatedChats,
-        selectedChat:
-            state.selectedChat?.uuid == event.chatUUID ? updated : state.selectedChat,
+        selectedChat: state.selectedChat?.uuid == event.chatUUID
+            ? updated
+            : state.selectedChat,
       ));
 
       debugPrint('[ChatListBloc] Updated window size for ${event.chatUUID}');

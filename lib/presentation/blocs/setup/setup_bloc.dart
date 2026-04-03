@@ -41,8 +41,9 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     final nodeId = preferredNode?.id ?? '';
     final nodeAddress =
         preferredNode != null ? preferredNode.chatAddress : null;
-    final cachedOptions =
-        nodeId.trim().isNotEmpty ? await _settings.loadNodeServerOptions(nodeId) : null;
+    final cachedOptions = nodeId.trim().isNotEmpty
+        ? await _settings.loadNodeServerOptions(nodeId)
+        : null;
 
     // Restore private key
     final savedKey = await _settings.loadPrivateKey();
@@ -104,7 +105,8 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
     if (tls && opts != null && !opts.supports(event.transport, tls: true)) {
       tls = false;
     }
-    emit(state.copyWith(transport: event.transport, useTls: tls, clearError: true));
+    emit(state.copyWith(
+        transport: event.transport, useTls: tls, clearError: true));
   }
 
   void _onTlsChanged(SetupTlsChanged event, Emitter<SetupState> emit) {
@@ -140,8 +142,7 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
         useTls: tls,
       ));
     } catch (e) {
-      emit(state.copyWith(
-          isOptionsLoading: false, optionsError: 'Failed: $e'));
+      emit(state.copyWith(isOptionsLoading: false, optionsError: 'Failed: $e'));
     }
   }
 
@@ -291,6 +292,7 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
           .toSet();
 
       final config = SgtpConfig(
+        accountId: state.nodeId.trim().isEmpty ? null : state.nodeId.trim(),
         serverAddr: state.serverAddress.trim(),
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
@@ -343,7 +345,8 @@ class SetupBloc extends Bloc<SetupEvent, SetupState> {
       if (end <= 1) return null;
       final host = cleaned.substring(1, end);
       final rest = cleaned.substring(end + 1);
-      final port = (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
+      final port =
+          (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
       if (port <= 0 || port > 65535) return null;
       return (host, port);
     }
