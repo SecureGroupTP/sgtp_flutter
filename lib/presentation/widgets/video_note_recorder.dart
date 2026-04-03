@@ -26,6 +26,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
   bool _initialising = true;
   bool _recording = false;
+  bool _recordActionInFlight = false;
   String? _initError;
   DateTime? _recordStartAt;
 
@@ -133,30 +134,57 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
   Future<void> _startRecording() async {
     final ctrl = _ctrl;
-    if (ctrl == null || !ctrl.value.isInitialized || _recording) return;
+    if (ctrl == null ||
+        !ctrl.value.isInitialized ||
+        _recording ||
+        _recordActionInFlight) {
+      return;
+    }
+    _recordActionInFlight = true;
     try {
+      if (ctrl.value.isRecordingVideo) {
+        if (mounted) {
+          setState(() {
+            _recording = true;
+            _recordStartAt ??= DateTime.now();
+            _toggleMode = true;
+          });
+        }
+        return;
+      }
+      await ctrl.startVideoRecording();
       HapticFeedback.mediumImpact();
+      if (!mounted) return;
       setState(() {
         _recording = true;
         _recordStartAt = DateTime.now();
         _toggleMode = true; // default: tap-to-start, tap-to-stop
       });
-      await ctrl.startVideoRecording();
-    } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        setState(() => _recording = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start recording: $e')),
+        );
+      }
+    } finally {
+      _recordActionInFlight = false;
+    }
   }
 
   Future<Uint8List?> _stopRecording() async {
     final ctrl = _ctrl;
-    if (ctrl == null || !_recording) return null;
+    if (ctrl == null || !_recording || _recordActionInFlight) return null;
+    _recordActionInFlight = true;
     try {
       if (!ctrl.value.isRecordingVideo) {
-        setState(() => _recording = false);
+        if (mounted) setState(() => _recording = false);
         return null;
       }
       final xfile = await ctrl.stopVideoRecording();
       final startedAt = _recordStartAt;
       _recordStartAt = null;
-      setState(() => _recording = false);
+      if (mounted) setState(() => _recording = false);
 
       final elapsed = startedAt == null
           ? Duration.zero
@@ -174,9 +202,16 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         return null;
       }
       return bytes;
-    } catch (_) {
-      setState(() => _recording = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _recording = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to stop recording: $e')),
+        );
+      }
       return null;
+    } finally {
+      _recordActionInFlight = false;
     }
   }
 

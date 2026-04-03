@@ -1726,9 +1726,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         onHoldStart: canSend && !_isRecording
                             ? () => _startHoldRecordingOrCamera(context)
                             : null,
-                        onHoldEnd: canSend && _isRecording
-                            ? () => _stopHoldRecording(context)
-                            : null,
+                        onHoldEnd:
+                            canSend ? () => _stopHoldRecording(context) : null,
                         onTapStop: canSend && _isRecording
                             ? () => _stopAndSend(context)
                             : null,

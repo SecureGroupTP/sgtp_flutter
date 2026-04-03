@@ -125,6 +125,16 @@ class ChatMetadataRepository {
           final json = jsonDecode(content) as Map<String, dynamic>;
           return _parseJson(uuid, json, fallbackServerAddress: server);
         }
+        // Backward-compat: read old non-server-scoped location for this UUID.
+        final chatsDir = await _getChatsDirectory();
+        final legacyFile = File('${chatsDir.path}/$uuid/metadata.json');
+        if (await legacyFile.exists()) {
+          final content = await legacyFile.readAsString();
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          return _parseJson(uuid, json, fallbackServerAddress: server);
+        }
+        // Important: when server is specified, never fallback to another server.
+        return null;
       }
 
       final all = await loadAllChats();

@@ -385,7 +385,11 @@ class _HomeScreenState extends State<HomeScreen> {
           index: _currentIndex,
           children: [
             // 0 — Rooms
-            RoomsPage(key: _roomsPageKey, accountId: _accountId),
+            RoomsPage(
+              key: _roomsPageKey,
+              accountId: _accountId,
+              serverAddress: _serverAddress,
+            ),
             // 1 — Contacts
             ContactsScreen(
               accountId: _accountId,

@@ -34,7 +34,12 @@ bool get _isDesktop =>
 
 class RoomsPage extends StatefulWidget {
   final String accountId;
-  const RoomsPage({super.key, required this.accountId});
+  final String serverAddress;
+  const RoomsPage({
+    super.key,
+    required this.accountId,
+    required this.serverAddress,
+  });
 
   @override
   State<RoomsPage> createState() => RoomsPageState();
@@ -54,18 +59,35 @@ class RoomsPageState extends State<RoomsPage> {
   @override
   void didUpdateWidget(covariant RoomsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.accountId != widget.accountId) {
+    if (oldWidget.accountId != widget.accountId ||
+        oldWidget.serverAddress != widget.serverAddress) {
       _chatMetadataRepo = ChatMetadataRepository(accountId: widget.accountId);
       _storedChats = const [];
       _loadStoredChats();
     }
   }
 
+  String _serverKey(String raw) {
+    return raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .toLowerCase();
+  }
+
+  String _chatKey(String uuid, String serverAddress) {
+    return '$uuid@${_serverKey(serverAddress)}';
+  }
+
   Future<void> _loadStoredChats() async {
     final allMetadata = await _chatMetadataRepo.loadAllChats();
+    final targetServer = _serverKey(widget.serverAddress);
+    final filtered = allMetadata
+        .where((m) => _serverKey(m.serverAddress) == targetServer)
+        .toList();
     if (!mounted) return;
     setState(() {
-      _storedChats = allMetadata;
+      _storedChats = filtered;
     });
   }
 
@@ -133,9 +155,11 @@ class RoomsPageState extends State<RoomsPage> {
   }
 
   Widget _buildBody(BuildContext context, RoomsState state) {
-    final activeUUIDs = state.rooms.map((r) => r.roomUUID).toSet();
-    final storedNotActive =
-        _storedChats.where((c) => !activeUUIDs.contains(c.uuid)).toList();
+    final activeKeys =
+        state.rooms.map((r) => _chatKey(r.roomUUID, r.serverAddress)).toSet();
+    final storedNotActive = _storedChats
+        .where((c) => !activeKeys.contains(_chatKey(c.uuid, c.serverAddress)))
+        .toList();
     final hasAnything = state.rooms.isNotEmpty || storedNotActive.isNotEmpty;
 
     if (!hasAnything) return const _EmptyState();
