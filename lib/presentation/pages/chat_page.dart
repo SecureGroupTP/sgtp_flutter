@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image/image.dart' as img;
@@ -26,7 +28,8 @@ import '../../domain/entities/message.dart';
 import '../../core/notification_service.dart';
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key});
+  final String accountId;
+  const ChatPage({super.key, required this.accountId});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -44,8 +47,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   bool _infoShown = false;
   bool _isRecording = false;
   String? _recordingPath;
-  List<InputDevice> _inputDevices = [];
-  InputDevice? _selectedDevice;
+  List<InputDevice> _microphones = const [];
+  String? _selectedMicrophoneId;
+  List<CameraDescription> _cameras = const [];
+  String? _selectedCameraName;
+  bool _hasMicrophone = false;
+  bool _hasCamera = false;
 
   /// True when this page is in the foreground and the app is active.
   bool _isPageVisible = true;
@@ -101,7 +108,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _scrollCtrl.addListener(_onScroll);
-    _loadInputDevices();
+    _loadCaptureCapabilities();
     _messageCtrl.addListener(() {
       final has = _messageCtrl.text.trim().isNotEmpty;
       if (has != _hasText) setState(() => _hasText = has);
@@ -135,6 +142,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     switch (appState) {
       case AppLifecycleState.resumed:
         setState(() => _isPageVisible = true);
+        unawaited(_loadCaptureCapabilities());
         NotificationService.cancelAll();
         NotificationService.flushPendingMarkAsRead();
 
@@ -192,11 +200,64 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _loadInputDevices() async {
+  Future<void> _loadCaptureCapabilities() async {
+    List<InputDevice> microphones = const [];
+    List<CameraDescription> cameras = const [];
     try {
-      final devices = await _recorder.listInputDevices();
-      if (mounted) setState(() => _inputDevices = devices);
+      microphones = await _recorder.listInputDevices();
     } catch (_) {}
+    try {
+      cameras = await availableCameras();
+    } catch (_) {}
+
+    final savedMicId =
+        await _settingsRepo.loadPreferredMicrophoneForNode(widget.accountId);
+    final savedCameraName =
+        await _settingsRepo.loadPreferredCameraForNode(widget.accountId);
+
+    String? selectedMicId;
+    for (final mic in microphones) {
+      if (mic.id == savedMicId) {
+        selectedMicId = mic.id;
+        break;
+      }
+    }
+    selectedMicId ??= microphones.isNotEmpty ? microphones.first.id : null;
+
+    String? selectedCameraName;
+    for (final cam in cameras) {
+      if (cam.name == savedCameraName) {
+        selectedCameraName = cam.name;
+        break;
+      }
+    }
+    selectedCameraName ??= cameras.isNotEmpty ? cameras.first.name : null;
+
+    final hasMic = microphones.isNotEmpty;
+    final hasCam = cameras.isNotEmpty;
+    var videoMode = _isVideoNoteMode;
+    if (!hasCam) videoMode = false;
+    if (!hasMic && hasCam) videoMode = true;
+
+    if (!mounted) return;
+    setState(() {
+      _microphones = microphones;
+      _selectedMicrophoneId = selectedMicId;
+      _cameras = cameras;
+      _selectedCameraName = selectedCameraName;
+      _hasMicrophone = hasMic;
+      _hasCamera = hasCam;
+      _isVideoNoteMode = videoMode;
+    });
+  }
+
+  InputDevice? _selectedMicrophoneDevice() {
+    final id = _selectedMicrophoneId;
+    if (id == null || id.isEmpty) return null;
+    for (final mic in _microphones) {
+      if (mic.id == id) return mic;
+    }
+    return null;
   }
 
   void _scrollToBottom({bool jump = false}) {
@@ -612,7 +673,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// Toggle between voice and video-note mode (mobile short tap).
   void _toggleMode() {
     if (_isRecording) return; // can't switch while recording
-    setState(() => _isVideoNoteMode = !_isVideoNoteMode);
+    if (_hasMicrophone && _hasCamera) {
+      setState(() => _isVideoNoteMode = !_isVideoNoteMode);
+      return;
+    }
+    if (_hasCamera && !_hasMicrophone) {
+      setState(() => _isVideoNoteMode = true);
+      return;
+    }
+    if (_hasMicrophone && !_hasCamera) {
+      setState(() => _isVideoNoteMode = false);
+    }
   }
 
   /// Start hold-recording (mobile long-press down).
@@ -624,11 +695,21 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   /// In video-note mode: open camera recorder. In voice mode: start hold-recording.
   Future<void> _startHoldRecordingOrCamera(BuildContext context) async {
-    if (_isVideoNoteMode) {
+    final useCamera = _isVideoNoteMode && _hasCamera;
+    if (useCamera) {
       // Open full-screen camera recorder; get bytes back on close
+      CameraDescription? preferred;
+      for (final cam in _cameras) {
+        if (cam.name == _selectedCameraName) {
+          preferred = cam;
+          break;
+        }
+      }
       final bytes = await Navigator.of(context).push<Uint8List?>(
         MaterialPageRoute(
-          builder: (_) => const VideoNoteRecorderPage(),
+          builder: (_) => VideoNoteRecorderPage(
+            preferredCameraName: preferred?.name,
+          ),
           fullscreenDialog: true,
         ),
       );
@@ -639,6 +720,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _scrollToBottom();
       }
     } else {
+      if (!_hasMicrophone) return;
       await _startHoldRecording(context);
     }
   }
@@ -651,6 +733,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _startRecording(BuildContext context) async {
+    if (!_hasMicrophone) {
+      if (context.mounted) {
+        _showSnack(context, 'No microphone available');
+      }
+      return;
+    }
     if (!await _recorder.hasPermission()) {
       if (context.mounted) _showSnack(context, 'No microphone permission');
       return;
@@ -664,7 +752,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               encoder: AudioEncoder.aacLc,
               bitRate: 128000,
               sampleRate: 44100,
-              device: _selectedDevice),
+              device: _selectedMicrophoneDevice()),
           path: _recordingPath!);
       setState(() => _isRecording = true);
     } catch (e) {
@@ -1565,7 +1653,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 12),
 
-                  // Send / Mic button
+                  // Send / capture button
                   if (_hasText || (_isRecording && _isDesktop))
                     GestureDetector(
                       onTap: canSend && !_isRecording
@@ -1584,48 +1672,68 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                             color: Colors.white, size: 22),
                       ),
                     )
-                  else if (_isDesktop)
-                    GestureDetector(
-                      onLongPress:
-                          canSend ? () => _showMicPicker(context) : null,
-                      onTap: canSend ? () => _toggleRecording(context) : null,
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: _isRecording
-                              ? const Color(0xFFFF3B30)
-                              : const Color(0xFF1F1F24),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFF2C2C30)),
-                        ),
-                        child: Icon(
-                          _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
-                          color: _isRecording
-                              ? Colors.white
-                              : const Color(0xFFF5F5F5),
-                          size: 22,
-                        ),
-                      ),
-                    )
                   else
-                    _MobileModeButton(
-                      isVideoNoteMode: _isVideoNoteMode,
-                      isRecording: _isRecording,
-                      canSend: canSend,
-                      onTap: () {
-                        if (!_isRecording) _toggleMode();
-                      },
-                      onHoldStart: canSend && !_isRecording
-                          ? () => _startHoldRecordingOrCamera(context)
-                          : null,
-                      onHoldEnd: canSend && _isRecording
-                          ? () => _stopHoldRecording(context)
-                          : null,
-                      onTapStop: canSend && _isRecording
-                          ? () => _stopAndSend(context)
-                          : null,
-                    ),
+                    Builder(builder: (_) {
+                      final canCapture = _hasMicrophone || _hasCamera;
+                      if (!canCapture) {
+                        return GestureDetector(
+                          onTap: canSend ? () => _sendMessage(context) : null,
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: canSend
+                                  ? const Color(0xFF0A84FF)
+                                  : const Color(0xFF1F1F24),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.send,
+                                color: Colors.white, size: 22),
+                          ),
+                        );
+                      }
+                      if (_isDesktop && _hasMicrophone && !_hasCamera) {
+                        return GestureDetector(
+                          onTap:
+                              canSend ? () => _toggleRecording(context) : null,
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: _isRecording
+                                  ? const Color(0xFFFF3B30)
+                                  : const Color(0xFF1F1F24),
+                              shape: BoxShape.circle,
+                              border:
+                                  Border.all(color: const Color(0xFF2C2C30)),
+                            ),
+                            child: Icon(
+                              _isRecording
+                                  ? Icons.stop_rounded
+                                  : Icons.mic_rounded,
+                              color: _isRecording
+                                  ? Colors.white
+                                  : const Color(0xFFF5F5F5),
+                              size: 22,
+                            ),
+                          ),
+                        );
+                      }
+                      return _MobileModeButton(
+                        isVideoNoteMode: _isVideoNoteMode,
+                        isRecording: _isRecording,
+                        onTap: _toggleMode,
+                        onHoldStart: canSend && !_isRecording
+                            ? () => _startHoldRecordingOrCamera(context)
+                            : null,
+                        onHoldEnd: canSend && _isRecording
+                            ? () => _stopHoldRecording(context)
+                            : null,
+                        onTapStop: canSend && _isRecording
+                            ? () => _stopAndSend(context)
+                            : null,
+                      );
+                    }),
                 ],
               ),
             ),
@@ -1841,44 +1949,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       ],
     );
   }
-
-  void _showMicPicker(BuildContext context) async {
-    await _loadInputDevices();
-    if (!context.mounted) return;
-    if (_inputDevices.isEmpty) {
-      _showSnack(context, 'No microphones found');
-      return;
-    }
-    showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Select microphone',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              ..._inputDevices.map((device) => RadioListTile<InputDevice>(
-                    title: Text(device.label),
-                    value: device,
-                    groupValue: _selectedDevice,
-                    onChanged: (d) {
-                      setSheetState(() => _selectedDevice = d);
-                      setState(() => _selectedDevice = d);
-                      Navigator.pop(ctx);
-                    },
-                  )),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 enum _ChatMenuAction { disconnect }
@@ -1939,7 +2009,6 @@ class _SheetTile extends StatelessWidget {
 class _MobileModeButton extends StatelessWidget {
   final bool isVideoNoteMode;
   final bool isRecording;
-  final bool canSend;
   final VoidCallback onTap;
   final VoidCallback? onHoldStart;
   final VoidCallback? onHoldEnd;
@@ -1948,7 +2017,6 @@ class _MobileModeButton extends StatelessWidget {
   const _MobileModeButton({
     required this.isVideoNoteMode,
     required this.isRecording,
-    required this.canSend,
     required this.onTap,
     this.onHoldStart,
     this.onHoldEnd,
@@ -1973,12 +2041,6 @@ class _MobileModeButton extends StatelessWidget {
         : isVideoNoteMode
             ? Icons.radio_button_checked
             : Icons.mic_rounded;
-
-    // Mode indicator chip shown above button when idle
-    final String modeLabel = isVideoNoteMode ? 'Circle' : 'Voice';
-    final IconData modeIcon = isVideoNoteMode
-        ? Icons.radio_button_checked_outlined
-        : Icons.mic_outlined;
 
     return Column(
       mainAxisSize: MainAxisSize.min,

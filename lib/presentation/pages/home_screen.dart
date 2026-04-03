@@ -19,6 +19,7 @@ import '../blocs/rooms/rooms_bloc.dart';
 import '../blocs/rooms/rooms_event.dart';
 import '../widgets/app_nav_bar.dart';
 import 'contacts_screen.dart';
+import 'onboarding_page.dart';
 import 'rooms_page.dart';
 import 'settings_screen.dart';
 
@@ -479,8 +480,17 @@ class _AppStartScreenState extends State<AppStartScreen> {
   Future<void> _checkAndNavigate() async {
     final settings = SettingsRepository();
     final lastAddr = await settings.getLastAddress() ?? '';
-    final preferredNode = await settings.loadPreferredNode();
     var accountId = ((await settings.loadLastAccountId()) ?? '').trim();
+    final preferredNode = await settings.loadPreferredNode();
+    final allNodes = await settings.loadNodes();
+
+    if (accountId.isEmpty && preferredNode != null) {
+      final fromNode = preferredNode.effectiveAccountId.trim();
+      if (fromNode.isNotEmpty) {
+        accountId = fromNode;
+        await settings.setLastAccountId(accountId);
+      }
+    }
     if (accountId.isEmpty) {
       final all = await settings.loadAccountIds();
       if (all.isNotEmpty) {
@@ -488,6 +498,23 @@ class _AppStartScreenState extends State<AppStartScreen> {
         await settings.setLastAccountId(accountId);
       }
     }
+    final nickname = accountId.isEmpty
+        ? ''
+        : await settings.loadUserNicknameForNode(accountId);
+    final hasServerConfigured = preferredNode != null || allNodes.isNotEmpty;
+    final hasProfileConfigured =
+        accountId.isNotEmpty && nickname.trim().isNotEmpty;
+    if (!hasServerConfigured || !hasProfileConfigured) {
+      if (!mounted) return;
+      final completed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => const OnboardingPage()),
+      );
+      if (completed == true && mounted) {
+        await _checkAndNavigate();
+      }
+      return;
+    }
+
     if (accountId.isEmpty) {
       accountId = uuidBytesToHex(generateUUIDv7());
       await settings.upsertAccountId(accountId);

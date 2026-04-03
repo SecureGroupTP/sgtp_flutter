@@ -175,7 +175,7 @@ class RoomsPageState extends State<RoomsPage> {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => BlocProvider.value(
         value: entry.chatBloc,
-        child: const ChatPage(),
+        child: ChatPage(accountId: widget.accountId),
       ),
     ));
   }

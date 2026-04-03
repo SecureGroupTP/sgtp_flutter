@@ -3,12 +3,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:camera/camera.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_theme.dart';
@@ -96,6 +99,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _compressPhotos = false;
   bool _compressVideos = false;
   int _mediaChunkSizeBytes = SgtpConstants.defaultMediaChunkSize;
+  bool _captureDevicesLoading = false;
+  List<InputDevice> _microphones = const [];
+  String? _selectedMicrophoneId;
+  List<CameraDescription> _cameras = const [];
+  String? _selectedCameraName;
 
   // Interaction preferences (Fix 7)
   String _doubleTapDesktop = 'react'; // 'react' | 'reply'
@@ -167,6 +175,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final lastAddr = await _settings.getLastAddress();
       if (lastAddr != null && _standaloneServerAddress.isEmpty) {
         setState(() => _standaloneServerAddress = lastAddr.trim());
+      }
+      if (mounted) {
+        setState(() {
+          _microphones = const [];
+          _selectedMicrophoneId = null;
+          _cameras = const [];
+          _selectedCameraName = null;
+        });
       }
     }
 
@@ -249,6 +265,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _wlEntries = entries;
       _nicknames = _buildNicknames(entries);
     });
+    await _loadCaptureDevicesForAccount(accountId);
 
     widget.onUserAvatarChanged?.call(avatar);
     if (applyConfig) _tryApplyConfig();
@@ -270,6 +287,293 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ..clear()
         ..addAll(nextNicks);
     });
+  }
+
+  Future<void> _loadCaptureDevicesForAccount(String accountId) async {
+    if (accountId.trim().isEmpty) return;
+    if (mounted) setState(() => _captureDevicesLoading = true);
+
+    List<InputDevice> microphones = const [];
+    List<CameraDescription> cameras = const [];
+    try {
+      microphones = await AudioRecorder().listInputDevices();
+    } catch (_) {}
+    try {
+      cameras = await availableCameras();
+    } catch (_) {}
+
+    final savedMicId =
+        await _settings.loadPreferredMicrophoneForNode(accountId);
+    final savedCameraName =
+        await _settings.loadPreferredCameraForNode(accountId);
+
+    String? selectedMicId;
+    for (final mic in microphones) {
+      if (mic.id == savedMicId) {
+        selectedMicId = mic.id;
+        break;
+      }
+    }
+    selectedMicId ??= microphones.isNotEmpty ? microphones.first.id : null;
+
+    String? selectedCameraName;
+    for (final cam in cameras) {
+      if (cam.name == savedCameraName) {
+        selectedCameraName = cam.name;
+        break;
+      }
+    }
+    selectedCameraName ??= cameras.isNotEmpty ? cameras.first.name : null;
+
+    if (!mounted) return;
+    setState(() {
+      _microphones = microphones;
+      _selectedMicrophoneId = selectedMicId;
+      _cameras = cameras;
+      _selectedCameraName = selectedCameraName;
+      _captureDevicesLoading = false;
+    });
+  }
+
+  String _cameraLabel(CameraDescription cam) {
+    return switch (cam.lensDirection) {
+      CameraLensDirection.front => 'Front camera',
+      CameraLensDirection.back => 'Back camera',
+      CameraLensDirection.external => 'External camera',
+    };
+  }
+
+  String _selectedMicrophoneLabel() {
+    final id = _selectedMicrophoneId;
+    if (id == null || id.isEmpty) return 'Not available';
+    for (final mic in _microphones) {
+      if (mic.id == id) return mic.label;
+    }
+    return 'Selected';
+  }
+
+  String _selectedCameraLabel() {
+    final name = _selectedCameraName;
+    if (name == null || name.isEmpty) return 'Not available';
+    for (final cam in _cameras) {
+      if (cam.name == name) return _cameraLabel(cam);
+    }
+    return 'Selected';
+  }
+
+  Future<void> _pickMicrophone() async {
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    if (_microphones.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No microphones found')),
+      );
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            const Text(
+              'Microphone',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary),
+            ),
+            const SizedBox(height: 8),
+            ..._microphones.map((device) => ListTile(
+                  title: Text(device.label),
+                  trailing: device.id == _selectedMicrophoneId
+                      ? const Icon(Icons.check, color: AppColors.accent)
+                      : null,
+                  onTap: () async {
+                    await _settings.savePreferredMicrophoneForNode(
+                        accountId, device.id);
+                    if (!mounted) return;
+                    setState(() => _selectedMicrophoneId = device.id);
+                    if (context.mounted) Navigator.pop(ctx);
+                  },
+                )),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickCamera() async {
+    final accountId = _activeAccountId();
+    if (accountId == null) return;
+    if (_cameras.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No cameras found')),
+      );
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            const Text(
+              'Camera',
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary),
+            ),
+            const SizedBox(height: 8),
+            ..._cameras.map((camera) => ListTile(
+                  title: Text(_cameraLabel(camera)),
+                  subtitle:
+                      Text(camera.name, style: const TextStyle(fontSize: 12)),
+                  trailing: camera.name == _selectedCameraName
+                      ? const Icon(Icons.check, color: AppColors.accent)
+                      : null,
+                  onTap: () async {
+                    await _settings.savePreferredCameraForNode(
+                        accountId, camera.name);
+                    if (!mounted) return;
+                    setState(() => _selectedCameraName = camera.name);
+                    if (context.mounted) Navigator.pop(ctx);
+                  },
+                )),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _testMicrophone() async {
+    final selected = _selectedMicrophoneId;
+    if (selected == null || selected.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a microphone first')),
+      );
+      return;
+    }
+    InputDevice? input;
+    for (final mic in _microphones) {
+      if (mic.id == selected) {
+        input = mic;
+        break;
+      }
+    }
+    if (input == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selected microphone is unavailable')),
+      );
+      return;
+    }
+
+    final recorder = AudioRecorder();
+    StreamSubscription<Amplitude>? sub;
+    var peakDb = -120.0;
+    String? path;
+    try {
+      final hasPermission = await recorder.hasPermission();
+      if (!hasPermission) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Microphone permission is missing')),
+        );
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      path =
+          '${dir.path}/mic_test_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      await recorder.start(
+        RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+          device: input,
+        ),
+        path: path,
+      );
+      sub = recorder
+          .onAmplitudeChanged(const Duration(milliseconds: 120))
+          .listen((amp) {
+        if (amp.current > peakDb) peakDb = amp.current;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Testing microphone for 3 seconds...')),
+        );
+      }
+      await Future.delayed(const Duration(seconds: 3));
+      await recorder.stop();
+      await sub.cancel();
+
+      if (!mounted) return;
+      final ok = peakDb > -45;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(ok
+              ? 'Microphone works (signal detected)'
+              : 'No clear microphone signal detected'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Microphone test failed: $e')),
+      );
+    } finally {
+      try {
+        await recorder.stop();
+      } catch (_) {}
+      await sub?.cancel();
+      await recorder.dispose();
+      if (path != null) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _testCamera() async {
+    final selected = _selectedCameraName;
+    if (selected == null || selected.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a camera first')),
+      );
+      return;
+    }
+    CameraDescription? selectedCamera;
+    for (final cam in _cameras) {
+      if (cam.name == selected) {
+        selectedCamera = cam;
+        break;
+      }
+    }
+    if (selectedCamera == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selected camera is unavailable')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _CameraTestPage(camera: selectedCamera!),
+      ),
+    );
   }
 
   // ── Private key: browse ──────────────────────────────────────────────────
@@ -2646,6 +2950,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
             );
           }).toList(),
         ),
+        const SizedBox(height: 18),
+        const Divider(color: AppColors.border),
+        const SizedBox(height: 12),
+        const Text(
+          'Voice & Video Notes',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 10),
+        if (_captureDevicesLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                SizedBox(width: 10),
+                Text(
+                  'Loading capture devices...',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          )
+        else ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Microphone: ${_selectedMicrophoneLabel()}',
+                  style: const TextStyle(color: AppColors.textPrimary),
+                ),
+              ),
+              TextButton(
+                onPressed: _microphones.isNotEmpty ? _pickMicrophone : null,
+                child: const Text('Choose'),
+              ),
+              TextButton(
+                onPressed:
+                    _selectedMicrophoneId != null ? _testMicrophone : null,
+                child: const Text('Check'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Camera: ${_selectedCameraLabel()}',
+                  style: const TextStyle(color: AppColors.textPrimary),
+                ),
+              ),
+              TextButton(
+                onPressed: _cameras.isNotEmpty ? _pickCamera : null,
+                child: const Text('Choose'),
+              ),
+              TextButton(
+                onPressed: _selectedCameraName != null ? _testCamera : null,
+                child: const Text('Check'),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -3717,6 +4087,86 @@ class _AddAccountOption extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CameraTestPage extends StatefulWidget {
+  final CameraDescription camera;
+
+  const _CameraTestPage({required this.camera});
+
+  @override
+  State<_CameraTestPage> createState() => _CameraTestPageState();
+}
+
+class _CameraTestPageState extends State<_CameraTestPage> {
+  CameraController? _controller;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    try {
+      final controller = CameraController(
+        widget.camera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      if (!mounted) return;
+      setState(() {
+        _controller = controller;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('Camera check'),
+        backgroundColor: Colors.black,
+      ),
+      body: Center(
+        child: _loading
+            ? const CircularProgressIndicator()
+            : (_error != null || controller == null)
+                ? Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      _error ?? 'Failed to initialize camera',
+                      style: const TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : AspectRatio(
+                    aspectRatio: controller.value.aspectRatio,
+                    child: CameraPreview(controller),
+                  ),
       ),
     );
   }

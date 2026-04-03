@@ -13,7 +13,8 @@ import '../../domain/entities/node.dart';
 class SettingsRepository {
   static const _savedAddressesKey = 'sgtp_saved_addresses';
   static const _lastAddressKey = 'sgtp_last_address';
-  static const _nodesJsonKey = 'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort}]
+  static const _nodesJsonKey =
+      'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort}]
   static const _lastNodeIdKey = 'sgtp_last_node_id';
   static const _lastAccountIdKey = 'sgtp_last_account_id';
   static const _accountIdsKey = 'sgtp_account_ids_v1';
@@ -31,6 +32,8 @@ class SettingsRepository {
   static const _compressPhotosKey = 'sgtp_compress_photos_enabled';
   static const _compressVideosKey = 'sgtp_compress_videos_enabled';
   static const _mediaChunkSizeKey = 'sgtp_media_chunk_size_bytes';
+  static const _preferredMicIdKey = 'sgtp_preferred_mic_id';
+  static const _preferredCameraNameKey = 'sgtp_preferred_camera_name';
   static const _qrPresetIndexKey = 'sgtp_qr_preset_index';
   static const _qrPrimaryColorKey = 'sgtp_qr_primary_color';
   static const _qrSecondaryColorKey = 'sgtp_qr_secondary_color';
@@ -296,7 +299,8 @@ class SettingsRepository {
 
   // ── Server options (transport discovery cache) ────────────────────────────
 
-  Future<void> saveNodeServerOptions(String nodeId, SgtpServerOptions options) async {
+  Future<void> saveNodeServerOptions(
+      String nodeId, SgtpServerOptions options) async {
     final id = nodeId.trim();
     if (id.isEmpty) return;
     final p = await SharedPreferences.getInstance();
@@ -497,7 +501,8 @@ class SettingsRepository {
     await p.setStringList(_scopedKey(_whitelistJsonKey, nodeId), jsonList);
   }
 
-  Future<List<WhitelistEntry>> loadWhitelistEntriesForNode(String nodeId) async {
+  Future<List<WhitelistEntry>> loadWhitelistEntriesForNode(
+      String nodeId) async {
     final p = await SharedPreferences.getInstance();
     final jsonList = p.getStringList(_scopedKey(_whitelistJsonKey, nodeId));
     if (jsonList == null) return [];
@@ -567,7 +572,8 @@ class SettingsRepository {
 
   Future<void> saveUserAvatarForNode(String nodeId, Uint8List bytes) async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_scopedKey(_userAvatarB64Key, nodeId), base64.encode(bytes));
+    await p.setString(
+        _scopedKey(_userAvatarB64Key, nodeId), base64.encode(bytes));
   }
 
   Future<Uint8List?> loadUserAvatarForNode(String nodeId) async {
@@ -628,6 +634,47 @@ class SettingsRepository {
     await p.setBool(_compressPhotosKey, settings.compressPhotos);
     await p.setBool(_compressVideosKey, settings.compressVideos);
     await p.setInt(_mediaChunkSizeKey, settings.mediaChunkSizeBytes);
+  }
+
+  // ── Capture devices ──────────────────────────────────────────────────────
+
+  Future<String?> loadPreferredMicrophoneForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_scopedKey(_preferredMicIdKey, nodeId))?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw;
+  }
+
+  Future<void> savePreferredMicrophoneForNode(
+      String nodeId, String? microphoneId) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_preferredMicIdKey, nodeId);
+    final value = (microphoneId ?? '').trim();
+    if (value.isEmpty) {
+      await p.remove(key);
+      return;
+    }
+    await p.setString(key, value);
+  }
+
+  Future<String?> loadPreferredCameraForNode(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final raw =
+        p.getString(_scopedKey(_preferredCameraNameKey, nodeId))?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw;
+  }
+
+  Future<void> savePreferredCameraForNode(
+      String nodeId, String? cameraName) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_preferredCameraNameKey, nodeId);
+    final value = (cameraName ?? '').trim();
+    if (value.isEmpty) {
+      await p.remove(key);
+      return;
+    }
+    await p.setString(key, value);
   }
 
   // ── QR style ─────────────────────────────────────────────────────────────

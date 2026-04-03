@@ -11,7 +11,8 @@ import 'package:flutter/services.dart';
 ///
 /// Pops with `Uint8List` video bytes on success, or `null` on cancel.
 class VideoNoteRecorderPage extends StatefulWidget {
-  const VideoNoteRecorderPage({super.key});
+  final String? preferredCameraName;
+  const VideoNoteRecorderPage({super.key, this.preferredCameraName});
 
   @override
   State<VideoNoteRecorderPage> createState() => _VideoNoteRecorderPageState();
@@ -24,7 +25,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   int _cameraIndex = 0; // 0 = front, 1 = back
 
   bool _initialising = true;
-  bool _recording    = false;
+  bool _recording = false;
   String? _initError;
   DateTime? _recordStartAt;
 
@@ -64,21 +65,32 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   }
 
   Future<void> _initCamera({int index = 0}) async {
-    setState(() { _initialising = true; _initError = null; });
+    setState(() {
+      _initialising = true;
+      _initError = null;
+    });
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        setState(() { _initError = 'No cameras found'; _initialising = false; });
+        setState(() {
+          _initError = 'No cameras found';
+          _initialising = false;
+        });
         return;
       }
       _cameras = cameras;
 
-      // Prefer front camera (index 0 in list is usually back on Android,
-      // so we search explicitly).
+      // Prefer camera selected in settings, then front camera fallback.
       int target = index;
-      if (index == 0) {
-        final frontIdx = cameras.indexWhere(
-            (c) => c.lensDirection == CameraLensDirection.front);
+      final preferred = widget.preferredCameraName;
+      if (preferred != null && preferred.isNotEmpty) {
+        final prefIdx = cameras.indexWhere((c) => c.name == preferred);
+        if (prefIdx >= 0) {
+          target = prefIdx;
+        }
+      } else if (index == 0) {
+        final frontIdx = cameras
+            .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
         target = frontIdx >= 0 ? frontIdx : 0;
       }
       _cameraIndex = target;
@@ -91,11 +103,17 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       );
       await ctrl.initialize();
       if (mounted) {
-        setState(() { _ctrl = ctrl; _initialising = false; });
+        setState(() {
+          _ctrl = ctrl;
+          _initialising = false;
+        });
       }
     } catch (e) {
       if (mounted) {
-        setState(() { _initError = e.toString(); _initialising = false; });
+        setState(() {
+          _initError = e.toString();
+          _initialising = false;
+        });
       }
     }
   }
@@ -265,10 +283,13 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
           // ── Top bar: cancel + "Video note" label ─────────────────────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
                     _CircleBtn(
@@ -302,7 +323,10 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
           // ── Recording indicator ───────────────────────────────────────
           if (_recording)
             Positioned(
-              top: 0, left: 0, right: 0, bottom: 0,
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
               child: IgnorePointer(
                 child: Center(
                   child: SizedBox(
@@ -310,8 +334,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                     height: 240,
                     child: CircularProgressIndicator(
                       strokeWidth: 4,
-                      valueColor: const AlwaysStoppedAnimation(
-                          Color(0xFFFF3B30)),
+                      valueColor:
+                          const AlwaysStoppedAnimation(Color(0xFFFF3B30)),
                     ),
                   ),
                 ),
@@ -320,7 +344,9 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
           // ── Bottom controls: hold-to-record button ────────────────────
           Positioned(
-            bottom: 0, left: 0, right: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 32),
@@ -348,7 +374,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                       onTapCancel: _onPressCancel,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
-                        width:  _recording ? 80 : 72,
+                        width: _recording ? 80 : 72,
                         height: _recording ? 80 : 72,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
@@ -358,15 +384,18 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                           boxShadow: [
                             BoxShadow(
                               color: (_recording
-                                  ? const Color(0xFFFF3B30)
-                                  : Colors.white).withAlpha(60),
+                                      ? const Color(0xFFFF3B30)
+                                      : Colors.white)
+                                  .withAlpha(60),
                               blurRadius: 24,
                               spreadRadius: 2,
                             ),
                           ],
                         ),
                         child: Icon(
-                          _recording ? Icons.stop_rounded : Icons.videocam_rounded,
+                          _recording
+                              ? Icons.stop_rounded
+                              : Icons.videocam_rounded,
                           color: _recording ? Colors.white : Colors.black,
                           size: 32,
                         ),
@@ -385,7 +414,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   Widget _buildPreview() {
     if (_initialising) {
       return const SizedBox(
-        width: 240, height: 240,
+        width: 240,
+        height: 240,
         child: Center(
           child: CircularProgressIndicator(color: Colors.white),
         ),
@@ -393,7 +423,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     }
     if (_initError != null) {
       return SizedBox(
-        width: 240, height: 240,
+        width: 240,
+        height: 240,
         child: Center(
           child: Text(_initError!,
               style: const TextStyle(color: Colors.white70, fontSize: 13),
@@ -465,7 +496,8 @@ class _CircleBtn extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 40, height: 40,
+        width: 40,
+        height: 40,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: Colors.black.withAlpha(120),
