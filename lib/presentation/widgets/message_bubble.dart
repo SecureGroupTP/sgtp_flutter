@@ -1062,6 +1062,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   StreamSubscription<bool>? _playingSub;
   bool _loading = false;
   bool _initialized = false;
+  bool _failed = false;
   bool _playing = false;
   bool _hasVideoTrack = true;
   Duration _duration = Duration.zero;
@@ -1072,10 +1073,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   Future<void> _ensureAudible(Player? player) async {
     final p = player;
     if (p == null) return;
-    final volume = p.state.volume;
-    if (volume <= 0) {
-      await p.setVolume(100);
-    }
+    await p.setVolume(100);
   }
 
   bool _hasRenderableVideoTrack(Player player) {
@@ -1150,11 +1148,16 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     Player? player;
     VideoController? controller;
     StreamSubscription<bool>? playingSub;
+    StreamSubscription<String>? errorSub;
     try {
       final tmpDir = await getTemporaryDirectory();
       String path;
       if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
         path = widget.localPath!;
+        // Verify file exists — temp cache can be cleared by the OS.
+        if (!await File(path).exists()) {
+          throw Exception('Video file not found');
+        }
         _ownsTempFile = false;
       } else {
         final bytes = widget.videoBytes;
@@ -1171,16 +1174,23 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
 
       player = Player();
 
+      // Track player errors so we can surface them instead of silently showing black.
+      String? playerError;
+      errorSub = player.stream.error.listen((e) => playerError = e);
+
       // Listen to playback state (also used for overlay visibility).
       playingSub = player.stream.playing.listen((p) {
         if (!mounted) return;
         setState(() => _playing = p);
       });
 
-      // Open without autoplay: avoids mute-state races on some platforms.
       await player.open(Media(Uri.file(path).toString()), play: false);
       await player.setVolume(100);
       await _waitForVideoMetadata(player);
+
+      // Surface any player error (e.g. unsupported codec, file unreadable).
+      if (playerError != null) throw Exception(playerError);
+
       final aspectRatio = _resolveVideoNoteAspectRatio(player);
       final isDeclaredAudioOnly =
           (widget.mediaMime ?? '').toLowerCase().startsWith('audio/');
@@ -1190,10 +1200,10 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       // Probe a short decode step to materialize the first frame metadata.
       if (!hasVideoTrack && !isDeclaredAudioOnly) {
         try {
-        await _ensureAudible(player);
-        await player.play();
-        await Future<void>.delayed(const Duration(milliseconds: 220));
-        await player.pause();
+          await _ensureAudible(player);
+          await player.play();
+          await Future<void>.delayed(const Duration(milliseconds: 220));
+          await player.pause();
           await _waitForVideoMetadata(player);
           hasVideoTrack = _hasRenderableVideoTrack(player);
         } catch (_) {}
@@ -1210,16 +1220,31 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       }
 
       if (autoplay) {
+        await _ensureAudible(player);
         await player.play();
       } else {
+        // Seek to start and decode the first frame so the thumbnail is visible.
         await player.seek(Duration.zero);
+        if (hasVideoTrack) {
+          // Brief play+pause forces the first frame to be decoded by the renderer.
+          await player.play();
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          await player.pause();
+          await player.seek(Duration.zero);
+        }
       }
 
       if (!mounted) {
+        await errorSub.cancel();
         await player.dispose();
         await playingSub.cancel();
         return;
       }
+
+      // Error stream is no longer needed after successful init.
+      try {
+        await errorSub.cancel();
+      } catch (_) {}
 
       final prevSub = _playingSub;
       _playingSub = playingSub;
@@ -1244,20 +1269,21 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         await playingSub?.cancel();
       } catch (_) {}
       try {
+        await errorSub?.cancel();
+      } catch (_) {}
+      try {
         await player?.dispose();
       } catch (_) {}
       if (!mounted) return;
-      setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Video error: $e'),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-      ));
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
     }
   }
 
   Future<void> _togglePlay() async {
-    if (_loading) return;
+    if (_loading || _failed) return;
     if (!_initialized) {
       await _preparePreview(autoplay: true);
       return;
@@ -1366,34 +1392,45 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
               ),
             ),
 
+          // Error state — broken video icon instead of silent black circle.
+          if (_failed)
+            Center(
+              child: Icon(
+                Icons.broken_image_rounded,
+                color: Colors.white.withAlpha(180),
+                size: 48,
+              ),
+            ),
+
           // Play / loading overlay
-          GestureDetector(
-            onTap: _togglePlay,
-            child: Container(
-              color: Colors.transparent,
-              alignment: Alignment.center,
-              child: AnimatedOpacity(
-                opacity: (_playing && _initialized) ? 0.0 : 1.0,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(140),
-                    shape: BoxShape.circle,
+          if (!_failed)
+            GestureDetector(
+              onTap: _togglePlay,
+              child: Container(
+                color: Colors.transparent,
+                alignment: Alignment.center,
+                child: AnimatedOpacity(
+                  opacity: (_playing && _initialized) ? 0.0 : 1.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withAlpha(140),
+                      shape: BoxShape.circle,
+                    ),
+                    child: _loading
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.play_arrow_rounded,
+                            color: Colors.white, size: 30),
                   ),
-                  child: _loading
-                      ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.play_arrow_rounded,
-                          color: Colors.white, size: 30),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
