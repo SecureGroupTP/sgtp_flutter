@@ -1174,6 +1174,12 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
 
       player = Player();
 
+      // VideoController must be created before player.open() so the native
+      // texture surface is ready when the decoder starts producing frames.
+      // We create it unconditionally here and discard it later if the media
+      // turns out to be audio-only.
+      controller = VideoController(player);
+
       // Track player errors so we can surface them instead of silently showing black.
       String? playerError;
       errorSub = player.stream.error.listen((e) => playerError = e);
@@ -1215,8 +1221,9 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
           (widget.mediaMime ?? '').toLowerCase().startsWith('video/')) {
         hasVideoTrack = true;
       }
-      if (hasVideoTrack) {
-        controller = VideoController(player);
+      if (!hasVideoTrack) {
+        // Audio-only: discard the pre-created controller.
+        controller = null;
       }
 
       await _ensureAudible(player);
