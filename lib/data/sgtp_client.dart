@@ -404,6 +404,10 @@ class SgtpClient {
       _keepaliveTimer; // actively pings all known peers to keep connections alive
   Timer? _handshakeRetryTimer; // retries handshake progression while waiting
   bool _infoTimerStarted = false;
+  // Serial frame-processing chain: each frame waits for the previous one to
+  // finish before starting. This prevents hundreds of concurrent _dispatch
+  // calls each holding a decoded media chunk in memory simultaneously.
+  Future<void> _frameChain = Future.value();
   final Set<String> _pendingHandshakes = {};
   final Map<String, Timer> _pendingHandshakeTimers = {};
   bool _chatRequestSent = false;
@@ -1101,7 +1105,7 @@ class SgtpClient {
   void _onData(List<int> data) {
     _lastReceiveAt = DateTime.now();
     _receiveBuffer.addAll(data);
-    _processBuffer();
+    _scheduleNextFrame();
   }
 
   void _onTransportError(Object e) {
@@ -1118,21 +1122,22 @@ class SgtpClient {
     }
   }
 
-  void _processBuffer() {
-    while (true) {
-      final r = tryExtractFrame(_receiveBuffer);
-      if (r == null) break;
-      _receiveBuffer.removeRange(0, r.bytesConsumed);
-      _handleFrame(r.frame);
-    }
-  }
-
-  void _handleFrame(ParsedFrame frame) async {
-    try {
-      await _dispatch(frame);
-    } catch (e) {
-      AppLogger.w('Frame error: $e', tag: 'SGTP');
-    }
+  // Extract and dispatch at most ONE frame, then schedule the next via the
+  // chain. This means ParsedFrame objects are created one at a time — the raw
+  // frame bytes (~150 KB for a media chunk) are never all in memory at once.
+  void _scheduleNextFrame() {
+    final r = tryExtractFrame(_receiveBuffer);
+    if (r == null) return;
+    _receiveBuffer.removeRange(0, r.bytesConsumed);
+    _frameChain = _frameChain.then((_) async {
+      try {
+        await _dispatch(r.frame);
+      } catch (e) {
+        AppLogger.w('Frame error: $e', tag: 'SGTP');
+      }
+      // After this frame is fully processed, extract the next one (if any).
+      _scheduleNextFrame();
+    });
   }
 
   bool _tsOk(int ts) =>
@@ -2343,6 +2348,7 @@ class SgtpClient {
       timer.cancel();
     }
     _pendingHandshakeTimers.clear();
+    _frameChain = Future.value();
     for (final fut in _pendingFiles.values) {
       fut.then((pf) => pf.close()).catchError((_) {});
     }
