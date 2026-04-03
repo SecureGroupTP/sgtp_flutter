@@ -1069,6 +1069,15 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   String? _tmpPath;
   bool _ownsTempFile = false;
 
+  Future<void> _ensureAudible(Player? player) async {
+    final p = player;
+    if (p == null) return;
+    final volume = p.state.volume;
+    if (volume <= 0) {
+      await p.setVolume(100);
+    }
+  }
+
   bool _hasRenderableVideoTrack(Player player) {
     final params = player.state.videoParams;
     final width = params.dw ?? player.state.width ?? 0;
@@ -1181,9 +1190,10 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       // Probe a short decode step to materialize the first frame metadata.
       if (!hasVideoTrack && !isDeclaredAudioOnly) {
         try {
-          await player.play();
-          await Future<void>.delayed(const Duration(milliseconds: 220));
-          await player.pause();
+        await _ensureAudible(player);
+        await player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 220));
+        await player.pause();
           await _waitForVideoMetadata(player);
           hasVideoTrack = _hasRenderableVideoTrack(player);
         } catch (_) {}
@@ -1252,7 +1262,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       await _preparePreview(autoplay: true);
       return;
     }
-    await _player?.setVolume(100);
+    await _ensureAudible(_player);
     await _player?.playOrPause();
   }
 
@@ -1716,6 +1726,15 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
   bool _preferPortraitZoom = true;
   bool _ownsTempFile = false;
 
+  Future<void> _ensureAudible(Player? player) async {
+    final p = player;
+    if (p == null) return;
+    final volume = p.state.volume;
+    if (volume <= 0) {
+      await p.setVolume(100);
+    }
+  }
+
   bool get _isDesktop =>
       !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
@@ -1762,6 +1781,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
       final player = Player();
       final controller = VideoController(player);
       await player.open(Media(Uri.file(path).toString()), play: true);
+      await _ensureAudible(player);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveAspectRatio(player);
 
@@ -2227,6 +2247,7 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
   }
 
   Future<void> _togglePlayback(Player player) async {
+    await _ensureAudible(player);
     final duration = player.state.duration;
     final position = player.state.position;
     final isAtEnd = duration > Duration.zero &&
