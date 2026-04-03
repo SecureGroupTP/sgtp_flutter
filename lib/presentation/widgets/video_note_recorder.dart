@@ -5,11 +5,21 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+class VideoNoteCaptureResult {
+  final XFile xFile;
+  final String mime;
+
+  const VideoNoteCaptureResult({
+    required this.xFile,
+    required this.mime,
+  });
+}
+
 /// Full-screen video-note recorder overlay.
 /// Shows live circular camera preview (front camera by default),
 /// a hold-to-record button, and a swap-camera button.
 ///
-/// Pops with `Uint8List` video bytes on success, or `null` on cancel.
+/// Pops with [VideoNoteCaptureResult] on success, or `null` on cancel.
 class VideoNoteRecorderPage extends StatefulWidget {
   final String? preferredCameraName;
   const VideoNoteRecorderPage({super.key, this.preferredCameraName});
@@ -172,7 +182,18 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     }
   }
 
-  Future<Uint8List?> _stopRecording() async {
+  String _mimeForPath(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.avi')) return 'video/x-msvideo';
+    if (lower.endsWith('.mkv')) return 'video/x-matroska';
+    if (lower.endsWith('.m4v')) return 'video/x-m4v';
+    return 'video/mp4';
+  }
+
+  Future<VideoNoteCaptureResult?> _stopRecording() async {
     final ctrl = _ctrl;
     if (ctrl == null || !_recording || _recordActionInFlight) return null;
     _recordActionInFlight = true;
@@ -189,11 +210,10 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       final elapsed = startedAt == null
           ? Duration.zero
           : DateTime.now().difference(startedAt);
-      final bytes = await File(xfile.path).readAsBytes();
-      try {
-        await File(xfile.path).delete();
-      } catch (_) {}
       if (elapsed < _minRecordDuration) {
+        try {
+          await File(xfile.path).delete();
+        } catch (_) {}
         if (!mounted) return null;
         HapticFeedback.selectionClick();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -201,7 +221,19 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         );
         return null;
       }
-      return bytes;
+      final file = File(xfile.path);
+      if (!await file.exists() || await file.length() == 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Recorded file is empty')),
+          );
+        }
+        return null;
+      }
+      return VideoNoteCaptureResult(
+        xFile: xfile,
+        mime: _mimeForPath(xfile.path),
+      );
     } catch (e) {
       if (mounted) {
         setState(() => _recording = false);
@@ -216,8 +248,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   }
 
   Future<void> _stopAndConfirmSend() async {
-    final bytes = await _stopRecording();
-    if (bytes == null || !mounted) return;
+    final capture = await _stopRecording();
+    if (capture == null || !mounted) return;
 
     HapticFeedback.lightImpact();
     final send = await showDialog<bool>(
@@ -242,16 +274,31 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     );
     if (!mounted) return;
     if (send == true) {
-      Navigator.of(context).pop(bytes);
+      Navigator.of(context).pop(capture);
+      return;
+    }
+    try {
+      await File(capture.xFile.path).delete();
+    } catch (_) {}
+  }
+
+  Future<void> _stopAndDiscardRecording() async {
+    try {
+      final xfile = await _ctrl?.stopVideoRecording();
+      if (xfile != null) {
+        try {
+          await File(xfile.path).delete();
+        } catch (_) {}
+      }
+    } catch (_) {
+      // no-op
     }
   }
 
   void _cancel() {
     if (_recording) {
       () async {
-        try {
-          await _ctrl?.stopVideoRecording();
-        } catch (_) {}
+        await _stopAndDiscardRecording();
       }();
     }
     if (mounted) Navigator.of(context).pop(null);

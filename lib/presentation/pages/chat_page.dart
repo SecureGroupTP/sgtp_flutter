@@ -88,7 +88,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// to log how long the app stayed backgrounded before resuming.
   DateTime? _wentToBackground;
 
-  static const _videoExtensions = {'mp4', 'mov', 'avi', 'webm', 'mkv', '3gp'};
+  static const _videoExtensions = {
+    'mp4',
+    'mov',
+    'avi',
+    'webm',
+    'mkv',
+    'm4v',
+    '3gp'
+  };
 
   // Quick emoji set for reactions
   static const _quickEmojis = [
@@ -626,10 +634,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         .pickFiles(type: FileType.video, withData: false);
     if (result == null || result.xFiles.isEmpty) return;
     final xFile = result.xFiles.first;
+    final ext = xFile.name.split('.').last.toLowerCase();
+    if (!_videoExtensions.contains(ext)) {
+      if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
+      return;
+    }
     if (!context.mounted) return;
     context
         .read<ChatBloc>()
-        .add(ChatSendVideoNoteFile(xFile: xFile, mime: 'video/mp4'));
+        .add(ChatSendVideoNoteFile(xFile: xFile, mime: _videoMimeForExt(ext)));
     _scrollToBottom();
   }
 
@@ -644,12 +657,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
       return;
     }
-    final mime = switch (ext) {
-      'mp4' => 'video/mp4',
-      'mov' => 'video/quicktime',
-      'webm' => 'video/webm',
-      _ => 'video/mp4',
-    };
+    final mime = _videoMimeForExt(ext);
     if (!context.mounted) return;
     if (mediaSettings.shouldCompressVideos) {
       _showSnack(
@@ -700,7 +708,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Future<void> _startHoldRecordingOrCamera(BuildContext context) async {
     final useCamera = _isVideoNoteMode && _hasCamera;
     if (useCamera) {
-      // Open full-screen camera recorder; get bytes back on close
+      // Open full-screen camera recorder; get recorded file + detected MIME.
       CameraDescription? preferred;
       for (final cam in _cameras) {
         if (cam.name == _selectedCameraName) {
@@ -708,7 +716,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           break;
         }
       }
-      final bytes = await Navigator.of(context).push<Uint8List?>(
+      final capture = await Navigator.of(context).push<VideoNoteCaptureResult?>(
         MaterialPageRoute(
           builder: (_) => VideoNoteRecorderPage(
             preferredCameraName: preferred?.name,
@@ -716,10 +724,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           fullscreenDialog: true,
         ),
       );
-      if (bytes != null && context.mounted) {
+      if (capture != null && context.mounted) {
         context
             .read<ChatBloc>()
-            .add(ChatSendVideoNote(bytes: bytes, mime: 'video/mp4'));
+            .add(ChatSendVideoNoteFile(
+              xFile: capture.xFile,
+              mime: capture.mime,
+            ));
         _scrollToBottom();
       }
     } else {
@@ -797,6 +808,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       if (context.mounted) _showSnack(context, 'Error: $e');
     }
   }
+
+  String _videoMimeForExt(String ext) => switch (ext.toLowerCase()) {
+        'mp4' => 'video/mp4',
+        'mov' => 'video/quicktime',
+        'webm' => 'video/webm',
+        'avi' => 'video/x-msvideo',
+        'mkv' => 'video/x-matroska',
+        'm4v' => 'video/x-m4v',
+        '3gp' => 'video/3gpp',
+        _ => 'video/mp4',
+      };
 
   Future<void> _pasteImageFromClipboard(BuildContext context) async {
     try {

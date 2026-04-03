@@ -1069,6 +1069,13 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   String? _tmpPath;
   bool _ownsTempFile = false;
 
+  bool _hasRenderableVideoTrack(Player player) {
+    final params = player.state.videoParams;
+    final width = params.dw ?? player.state.width ?? 0;
+    final height = params.dh ?? player.state.height ?? 0;
+    return width > 0 && height > 0;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1114,6 +1121,10 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         'video/mp4' => 'mp4',
         'video/quicktime' => 'mov',
         'video/webm' => 'webm',
+        'video/x-msvideo' => 'avi',
+        'video/x-matroska' => 'mkv',
+        'video/x-m4v' => 'm4v',
+        'video/3gpp' => '3gp',
         'audio/m4a' => 'm4a',
         'audio/mp4' => 'm4a',
         'audio/x-m4a' => 'm4a',
@@ -1162,9 +1173,28 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       await player.setVolume(100);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveVideoNoteAspectRatio(player);
-      final hasVideoTrack =
-          (player.state.videoParams.dw ?? player.state.width ?? 0) > 0 &&
-              (player.state.videoParams.dh ?? player.state.height ?? 0) > 0;
+      final isDeclaredAudioOnly =
+          (widget.mediaMime ?? '').toLowerCase().startsWith('audio/');
+      var hasVideoTrack = _hasRenderableVideoTrack(player);
+
+      // Some containers expose duration before video dimensions.
+      // Probe a short decode step to materialize the first frame metadata.
+      if (!hasVideoTrack && !isDeclaredAudioOnly) {
+        try {
+          await player.play();
+          await Future<void>.delayed(const Duration(milliseconds: 220));
+          await player.pause();
+          await _waitForVideoMetadata(player);
+          hasVideoTrack = _hasRenderableVideoTrack(player);
+        } catch (_) {}
+      }
+
+      // For declared video MIME, prefer rendering path even if metadata is late.
+      if (!hasVideoTrack &&
+          !isDeclaredAudioOnly &&
+          (widget.mediaMime ?? '').toLowerCase().startsWith('video/')) {
+        hasVideoTrack = true;
+      }
       if (hasVideoTrack) {
         controller = VideoController(player);
       }
