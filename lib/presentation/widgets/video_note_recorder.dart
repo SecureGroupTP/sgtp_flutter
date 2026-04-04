@@ -66,7 +66,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   AudioRecorder? _audioRecorder;
   String? _audioRecordPath;
 
-  bool get _useSeparateMic => widget.preferredMicrophone != null;
+  bool get _useSeparateMic => !kIsWeb && widget.preferredMicrophone != null;
 
   @override
   void initState() {
@@ -90,12 +90,12 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
   void _cleanupAudioFile() {
     final p = _audioRecordPath;
-    if (p != null) {
+    if (p != null && !kIsWeb) {
       try {
         File(p).deleteSync();
       } catch (_) {}
-      _audioRecordPath = null;
     }
+    _audioRecordPath = null;
   }
 
   @override
@@ -226,7 +226,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
   Future<void> _startAudioRecording() async {
     final recorder = _audioRecorder;
-    if (recorder == null) return;
+    if (recorder == null || kIsWeb) return;
     try {
       final tmpDir = await getTemporaryDirectory();
       final path =
@@ -287,9 +287,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
           ? Duration.zero
           : DateTime.now().difference(startedAt);
       if (elapsed < _minRecordDuration) {
-        try {
-          await File(xfile.path).delete();
-        } catch (_) {}
+        await _deleteXFileIfPossible(xfile);
         if (audioPath != null) {
           try {
             await File(audioPath).delete();
@@ -304,8 +302,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         return null;
       }
 
-      final videoFile = File(xfile.path);
-      if (!await videoFile.exists() || await videoFile.length() == 0) {
+      final videoLength = await _xFileLength(xfile);
+      if (videoLength == null || videoLength == 0) {
         if (audioPath != null) {
           try {
             await File(audioPath).delete();
@@ -388,6 +386,25 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     }
   }
 
+  Future<int?> _xFileLength(XFile file) async {
+    try {
+      return await file.length();
+    } catch (_) {
+      try {
+        return (await file.readAsBytes()).length;
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  Future<void> _deleteXFileIfPossible(XFile file) async {
+    if (kIsWeb) return;
+    try {
+      await File(file.path).delete();
+    } catch (_) {}
+  }
+
   static const _mergerChannel =
       MethodChannel('com.example.sgtp_flutter/video_merger');
 
@@ -467,18 +484,14 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       Navigator.of(context).pop(capture);
       return;
     }
-    try {
-      await File(capture.xFile.path).delete();
-    } catch (_) {}
+    await _deleteXFileIfPossible(capture.xFile);
   }
 
   Future<void> _stopAndDiscardRecording() async {
     try {
       final xfile = await _ctrl?.stopVideoRecording();
       if (xfile != null) {
-        try {
-          await File(xfile.path).delete();
-        } catch (_) {}
+        await _deleteXFileIfPossible(xfile);
       }
     } catch (_) {}
     // Also stop and discard any separate audio.

@@ -3,6 +3,8 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -319,14 +321,32 @@ class _OnboardingPageState extends State<OnboardingPage> {
   }
 
   Future<void> _pickAvatar() async {
+    Uint8List? bytes;
+
     final file = await _picker.pickImage(
       source: ImageSource.gallery,
       maxWidth: 512,
       maxHeight: 512,
       imageQuality: 80,
     );
-    if (file == null) return;
-    final bytes = await file.readAsBytes();
+    if (file != null) {
+      bytes = await file.readAsBytes();
+    }
+
+    if ((bytes == null || bytes.isEmpty) && kIsWeb) {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        withData: true,
+      );
+      final data = (picked != null && picked.files.isNotEmpty)
+          ? picked.files.first.bytes
+          : null;
+      if (data != null && data.isNotEmpty) {
+        bytes = data;
+      }
+    }
+
+    if (bytes == null || bytes.isEmpty) return;
     if (!mounted) return;
     setState(() => _avatarBytes = bytes);
   }

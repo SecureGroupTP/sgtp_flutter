@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:audioplayers/audioplayers.dart' hide PlayerState;
+import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1127,12 +1128,11 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     StreamSubscription<bool>? playingSub;
     StreamSubscription<String>? errorSub;
     try {
-      final tmpDir = await getTemporaryDirectory();
       String path;
       if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
         path = widget.localPath!;
-        // Verify file exists — temp cache can be cleared by the OS.
-        if (!await File(path).exists()) {
+        // Verify file exists on native — temp cache can be cleared by the OS.
+        if (!kIsWeb && !await File(path).exists()) {
           throw Exception('Video file not found');
         }
         _ownsTempFile = false;
@@ -1141,11 +1141,21 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         if (bytes == null || bytes.isEmpty) {
           throw Exception('Video data is unavailable');
         }
-        final ext = _tempExtForMime(widget.mediaMime);
-        final file = File('${tmpDir.path}/vnote_${bytes.hashCode}.$ext');
-        if (!file.existsSync()) await file.writeAsBytes(bytes);
-        path = file.path;
-        _ownsTempFile = true;
+        if (kIsWeb) {
+          path = XFile.fromData(
+            bytes,
+            mimeType: widget.mediaMime ?? 'video/mp4',
+            name: 'vnote_${bytes.hashCode}.${_tempExtForMime(widget.mediaMime)}',
+          ).path;
+          _ownsTempFile = false;
+        } else {
+          final tmpDir = await getTemporaryDirectory();
+          final ext = _tempExtForMime(widget.mediaMime);
+          final file = File('${tmpDir.path}/vnote_${bytes.hashCode}.$ext');
+          if (!file.existsSync()) await file.writeAsBytes(bytes);
+          path = file.path;
+          _ownsTempFile = true;
+        }
       }
       _tmpPath = path;
 
@@ -1167,7 +1177,8 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         setState(() => _playing = p);
       });
 
-      await player.open(Media(Uri.file(path).toString()), play: false);
+      final source = kIsWeb ? path : Uri.file(path).toString();
+      await player.open(Media(source), play: false);
       await player.setVolume(100);
       await _waitForVideoMetadata(player);
 
@@ -1495,7 +1506,6 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
     if (_initialized || _loading) return;
     setState(() => _loading = true);
     try {
-      final tmpDir = await getTemporaryDirectory();
       String path;
       if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
         path = widget.localPath!;
@@ -1505,19 +1515,30 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
         if (bytes == null || bytes.isEmpty) {
           throw Exception('Video data is unavailable');
         }
-        final ext = widget.mediaName.split('.').last;
-        final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-        if (!file.existsSync()) {
-          await file.writeAsBytes(bytes);
+        if (kIsWeb) {
+          path = XFile.fromData(
+            bytes,
+            mimeType: 'video/mp4',
+            name: widget.mediaName,
+          ).path;
+          _ownsTempFile = false;
+        } else {
+          final tmpDir = await getTemporaryDirectory();
+          final ext = widget.mediaName.split('.').last;
+          final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
+          if (!file.existsSync()) {
+            await file.writeAsBytes(bytes);
+          }
+          path = file.path;
+          _ownsTempFile = true;
         }
-        path = file.path;
-        _ownsTempFile = true;
       }
       _tmpPath = path;
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media(Uri.file(path).toString()), play: true);
+      final source = kIsWeb ? path : Uri.file(path).toString();
+      await player.open(Media(source), play: true);
       await player.setVolume(0);
       await _waitForVideoMetadata(player);
       final params = player.state.videoParams;
@@ -1767,7 +1788,6 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
 
   Future<void> _init() async {
     try {
-      final tmpDir = await getTemporaryDirectory();
       String path;
       if (widget.localPath != null && widget.localPath!.trim().isNotEmpty) {
         path = widget.localPath!;
@@ -1777,19 +1797,30 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
         if (bytes == null || bytes.isEmpty) {
           throw Exception('Video data is unavailable');
         }
-        final ext = widget.mediaName.split('.').last;
-        final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-        if (!file.existsSync()) {
-          await file.writeAsBytes(bytes);
+        if (kIsWeb) {
+          path = XFile.fromData(
+            bytes,
+            mimeType: 'video/mp4',
+            name: widget.mediaName,
+          ).path;
+          _ownsTempFile = false;
+        } else {
+          final tmpDir = await getTemporaryDirectory();
+          final ext = widget.mediaName.split('.').last;
+          final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
+          if (!file.existsSync()) {
+            await file.writeAsBytes(bytes);
+          }
+          path = file.path;
+          _ownsTempFile = true;
         }
-        path = file.path;
-        _ownsTempFile = true;
       }
       _tmpPath = path;
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media(Uri.file(path).toString()), play: true);
+      final source = kIsWeb ? path : Uri.file(path).toString();
+      await player.open(Media(source), play: true);
       await _ensureAudible(player);
       await _waitForVideoMetadata(player);
       final aspectRatio = _resolveAspectRatio(player);
@@ -2459,7 +2490,11 @@ class _VoicePlayerState extends State<_VoicePlayer> {
   Future<void> _prefetchDuration() async {
     try {
       await _prepareTmp();
-      await _player.setSourceDeviceFile(_tmpPath!);
+      if (kIsWeb) {
+        await _player.setSource(UrlSource(_tmpPath!));
+      } else {
+        await _player.setSourceDeviceFile(_tmpPath!);
+      }
     } catch (_) {}
   }
 
@@ -2474,10 +2509,18 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     if (bytes == null || bytes.isEmpty) {
       throw Exception('Audio data is unavailable');
     }
+    if (kIsWeb) {
+      _tmpPath = XFile.fromData(
+        bytes,
+        mimeType: widget.mediaMime,
+        name: 'voice_play_${bytes.hashCode}.${_mimeToExt(widget.mediaMime)}',
+      ).path;
+      _ownsTempFile = false;
+      return;
+    }
     final tmpDir = await getTemporaryDirectory();
     final ext = _mimeToExt(widget.mediaMime);
-    final file =
-        File('${tmpDir.path}/voice_play_${bytes.hashCode}.$ext');
+    final file = File('${tmpDir.path}/voice_play_${bytes.hashCode}.$ext');
     if (!file.existsSync()) await file.writeAsBytes(bytes);
     _tmpPath = file.path;
     _ownsTempFile = true;
@@ -2503,7 +2546,11 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     setState(() => _loading = true);
     try {
       await _prepareTmp();
-      await _player.play(DeviceFileSource(_tmpPath!));
+      if (kIsWeb) {
+        await _player.play(UrlSource(_tmpPath!));
+      } else {
+        await _player.play(DeviceFileSource(_tmpPath!));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(

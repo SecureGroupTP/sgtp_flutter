@@ -1307,6 +1307,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _pickUserAvatar() async {
     final accountId = _activeAccountId();
     if (accountId == null) return;
+    Uint8List? bytes;
+
     final picker = ImagePicker();
     final file = await picker.pickImage(
       source: ImageSource.gallery,
@@ -1314,8 +1316,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
       maxHeight: 512,
       imageQuality: 80,
     );
-    if (file == null) return;
-    final bytes = await file.readAsBytes();
+    if (file != null) {
+      bytes = await file.readAsBytes();
+    }
+
+    if ((bytes == null || bytes.isEmpty) && kIsWeb) {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        withData: true,
+      );
+      final data = (picked != null && picked.files.isNotEmpty)
+          ? picked.files.first.bytes
+          : null;
+      if (data != null && data.isNotEmpty) {
+        bytes = data;
+      }
+    }
+
+    if (bytes == null || bytes.isEmpty) return;
     await _settings.saveUserAvatarForNode(accountId, bytes);
     setState(() {
       _userAvatar = bytes;

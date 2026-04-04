@@ -792,7 +792,11 @@ class SgtpClient {
       void Function(double progress)? onProgress,
       bool persistChunks = true}) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
-    final chunkSize = _config.mediaChunkSizeBytes;
+    // Web signing/encryption overhead per frame is noticeably higher.
+    // Use larger chunks there to avoid multi-second pauses between chunks.
+    final chunkSize = kIsWeb
+        ? max(_config.mediaChunkSizeBytes, 512 * 1024)
+        : _config.mediaChunkSizeBytes;
     final fileId = echoMessage?.id ?? uuidBytesToHex(generateUUIDv7());
     final totalChunks = (totalSize / chunkSize).ceil().clamp(1, 9999);
 

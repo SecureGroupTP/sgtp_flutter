@@ -210,6 +210,23 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCaptureCapabilities() async {
+    if (kIsWeb) {
+      // Avoid camera permission prompts on every chat open in browsers.
+      // Actual permission request happens only when user starts capture.
+      if (!mounted) return;
+      setState(() {
+        _microphones = const [];
+        _selectedMicrophoneId = null;
+        _cameras = const [];
+        _selectedCameraName = null;
+        _hasMicrophone = true;
+        // Virtual camera capability for UI mode switching.
+        // Actual web capture falls back to mic-only circular notes.
+        _hasCamera = true;
+      });
+      return;
+    }
+
     List<InputDevice> microphones = const [];
     List<CameraDescription> cameras = const [];
     try {
@@ -703,6 +720,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// In video-note mode: open camera recorder. In voice mode: start hold-recording.
   Future<void> _startHoldRecordingOrCamera(BuildContext context) async {
     final useCamera = _isVideoNoteMode && _hasCamera;
+    if (kIsWeb && useCamera) {
+      // Web fallback: keep "video note" UX, but use mic-only circular notes
+      // to avoid unstable camera recorder paths in browsers.
+      if (_hasMicrophone) {
+        await _startHoldRecording(context);
+      } else {
+        await _pickAndSendVideoNote(context);
+      }
+      return;
+    }
     if (useCamera) {
       // Open full-screen camera recorder; get recorded file + detected MIME.
       CameraDescription? preferred;
