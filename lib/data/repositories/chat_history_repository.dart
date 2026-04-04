@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class PersistedHistoryRecord {
   final Uint8List senderUUID;
@@ -97,7 +99,84 @@ class ChatHistoryRepository {
     return File('${(await _recordsDirectory()).path}/$messageIdHex.json');
   }
 
+  // ── web (SharedPreferences) helpers ────────────────────────────────────────
+
+  static String _webSrvKey(String serverAddress) {
+    final raw = serverAddress.trim().toLowerCase();
+    if (raw.isEmpty) return 'default';
+    return base64Url.encode(utf8.encode(raw)).replaceAll('=', '');
+  }
+
+  String get _webBase {
+    final acc = accountId.trim().isEmpty ? 'default' : accountId.trim();
+    return 'sgtp_hist_v1_${acc}_${_webSrvKey(serverAddress)}_$chatUUID';
+  }
+
+  String get _webOrderKey => '${_webBase}_order';
+  String _webRecKey(String id) => '${_webBase}_rec_$id';
+
+  Future<List<String>> _webReadOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_webOrderKey);
+    if (raw == null) return [];
+    return (jsonDecode(raw) as List).cast<String>();
+  }
+
+  Future<void> _webWriteOrder(List<String> order) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_webOrderKey, jsonEncode(order));
+  }
+
+  Future<int> _webCount() async => (await _webReadOrder()).length;
+
+  Future<int> _webAppendIfAbsent(PersistedHistoryRecord record) async {
+    final msgId = record.messageIdHex;
+    if (msgId.isEmpty) return 0;
+    final prefs = await SharedPreferences.getInstance();
+    final recKey = _webRecKey(msgId);
+    if (prefs.containsKey(recKey)) return 0;
+    await prefs.setString(recKey, jsonEncode(record.toJson()));
+    final order = await _webReadOrder();
+    if (!order.contains(msgId)) {
+      order.add(msgId);
+      await _webWriteOrder(order);
+    }
+    return 1;
+  }
+
+  Future<List<PersistedHistoryRecord>> _webReadRange({
+    required int offset,
+    required int limit,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final order = await _webReadOrder();
+    if (offset >= order.length || limit <= 0) return const [];
+    final end = (offset + limit).clamp(0, order.length);
+    final out = <PersistedHistoryRecord>[];
+    for (final id in order.sublist(offset, end)) {
+      final raw = prefs.getString(_webRecKey(id));
+      if (raw == null) continue;
+      try {
+        out.add(PersistedHistoryRecord.fromJson(
+            jsonDecode(raw) as Map<String, dynamic>));
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  Future<void> _webClear() async {
+    final prefs = await SharedPreferences.getInstance();
+    final order = await _webReadOrder();
+    for (final id in order) {
+      await prefs.remove(_webRecKey(id));
+    }
+    await prefs.remove(_webOrderKey);
+  }
+
+  // ── public API ─────────────────────────────────────────────────────────────
+
   Future<int> count() async {
+    if (kIsWeb) return _webCount();
     final countFile = await _countFile();
     if (await countFile.exists()) {
       final raw = await countFile.readAsString();
@@ -110,6 +189,7 @@ class ChatHistoryRepository {
   }
 
   Future<int> appendIfAbsent(PersistedHistoryRecord record) async {
+    if (kIsWeb) return _webAppendIfAbsent(record);
     final messageId = record.messageIdHex;
     if (messageId.isEmpty) return 0;
 
@@ -139,6 +219,7 @@ class ChatHistoryRepository {
     required int offset,
     required int limit,
   }) async {
+    if (kIsWeb) return _webReadRange(offset: offset, limit: limit);
     if (limit <= 0 || offset < 0) return const [];
     final ids = await _readOrderIdsRange(offset: offset, limit: limit);
     final out = <PersistedHistoryRecord>[];
@@ -172,6 +253,7 @@ class ChatHistoryRepository {
   }
 
   Future<void> clear() async {
+    if (kIsWeb) { await _webClear(); return; }
     final dir = await _chatDir();
     if (await dir.exists()) {
       await dir.delete(recursive: true);

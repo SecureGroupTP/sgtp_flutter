@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import '../constants.dart';
+import '../uint64_utils.dart';
 import 'packet_types.dart';
 
 void _writeHeader(
@@ -18,7 +19,7 @@ void _writeHeader(
   bd.setUint16(48, version, Endian.big);
   bd.setUint16(50, packetType, Endian.big);
   bd.setUint32(52, payloadLength, Endian.big);
-  bd.setUint64(56, DateTime.now().millisecondsSinceEpoch, Endian.big);
+  bdSetUint64(bd, 56, DateTime.now().millisecondsSinceEpoch, Endian.big);
 }
 
 Uint8List _allocFrame(int payloadLength) =>
@@ -83,7 +84,7 @@ Uint8List buildInfoResponse(
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.info, payloadLength);
   int off = SgtpConstants.headerSize;
-  bd.setUint64(off, peerUUIDs.length, Endian.big); off += 8;
+  bdSetUint64(bd, off, peerUUIDs.length, Endian.big); off += 8;
   for (final uuid in peerUUIDs) {
     frame.setRange(off, off + 16, uuid); off += 16;
   }
@@ -110,7 +111,7 @@ Uint8List buildChatRequest(
   _writeHeader(bd, roomUUID, masterUUID, senderUUID, PacketType.chatRequest, payloadLength);
 
   int off = SgtpConstants.headerSize;
-  bd.setUint64(off, peerUUIDs.length, Endian.big); off += 8;
+  bdSetUint64(bd, off, peerUUIDs.length, Endian.big); off += 8;
   for (final uuid in peerUUIDs) {
     frame.setRange(off, off + 16, uuid); off += 16;
   }
@@ -142,9 +143,9 @@ Uint8List buildChatKey(
     version: version,
   );
   int off = SgtpConstants.headerSize;
-  bd.setUint64(off, epoch, Endian.big); off += 8;
+  bdSetUint64(bd, off, epoch, Endian.big); off += 8;
   if (version >= 0x0002) {
-    bd.setUint64(off, nonce, Endian.big);
+    bdSetUint64(bd, off, nonce, Endian.big);
     off += 8;
   }
   frame.setRange(off, off + 48, encryptedKey48);
@@ -169,7 +170,7 @@ Uint8List buildMessage(
       PacketType.message, payloadLength);
   int off = SgtpConstants.headerSize;
   frame.setRange(off, off + 16, messageUUID); off += 16;
-  bd.setUint64(off, nonce, Endian.big); off += 8;
+  bdSetUint64(bd, off, nonce, Endian.big); off += 8;
   frame.setRange(off, off + ciphertext.length, ciphertext);
   return frame;
 }
@@ -190,7 +191,7 @@ Uint8List buildFin(Uint8List roomUUID, Uint8List senderUUID, int nonce, Uint8Lis
   _writeHeader(bd, roomUUID, SgtpConstants.broadcastUUID, senderUUID,
       PacketType.fin, payloadLength);
   int off = SgtpConstants.headerSize;
-  bd.setUint64(off, nonce, Endian.big); off += 8;
+  bdSetUint64(bd, off, nonce, Endian.big); off += 8;
   frame.setRange(off, off + 16, tag16);
   return frame;
 }
@@ -209,7 +210,7 @@ Uint8List buildHsi(
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.hsi, payloadLength);
-  bd.setUint64(SgtpConstants.headerSize, messageCount, Endian.big);
+  bdSetUint64(bd, SgtpConstants.headerSize, messageCount, Endian.big);
   return frame;
 }
 
@@ -220,8 +221,8 @@ Uint8List buildHsr(
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.hsr, payloadLength);
-  bd.setUint64(SgtpConstants.headerSize,     offset, Endian.big);
-  bd.setUint64(SgtpConstants.headerSize + 8, limit,  Endian.big);
+  bdSetUint64(bd, SgtpConstants.headerSize,     offset, Endian.big);
+  bdSetUint64(bd, SgtpConstants.headerSize + 8, limit, Endian.big);
   return frame;
 }
 
@@ -236,10 +237,10 @@ Uint8List buildHsra(
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.hsra, payloadLength);
   int off = SgtpConstants.headerSize;
-  bd.setUint64(off, batchNumber, Endian.big); off += 8;
-  bd.setUint64(off, count,       Endian.big); off += 8;
+  bdSetUint64(bd, off, batchNumber, Endian.big); off += 8;
+  bdSetUint64(bd, off, count, Endian.big); off += 8;
   var blobCursor = 0;
-  for (final m in messages) { bd.setUint64(off, blobCursor, Endian.big); off += 8; blobCursor += m.length; }
+  for (final m in messages) { bdSetUint64(bd, off, blobCursor, Endian.big); off += 8; blobCursor += m.length; }
   for (final m in messages) { frame.setRange(off, off + m.length, m); off += m.length; }
   return frame;
 }
@@ -251,7 +252,7 @@ Uint8List buildHsraEos(
   final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
   _writeHeader(bd, roomUUID, receiverUUID, senderUUID, PacketType.hsra, payloadLength);
-  bd.setUint64(SgtpConstants.headerSize,     totalSent, Endian.big);
-  bd.setUint64(SgtpConstants.headerSize + 8, 0,         Endian.big);
+  bdSetUint64(bd, SgtpConstants.headerSize,     totalSent, Endian.big);
+  bdSetUint64(bd, SgtpConstants.headerSize + 8, 0, Endian.big);
   return frame;
 }

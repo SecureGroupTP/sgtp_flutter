@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../core/app_logger.dart';
 import '../core/constants.dart';
+import '../core/uint64_utils.dart';
 import '../core/sgtp_server_options.dart';
 import '../core/sgtp_transport.dart';
 import '../core/crypto/chacha20_utils.dart';
@@ -1861,6 +1862,7 @@ class SgtpClient {
 
   Future<String?> _cachePlayableMedia(
       String fileId, String mime, Uint8List bytes) async {
+    if (kIsWeb) return null;
     try {
       final dir = await getTemporaryDirectory();
       final cacheDir = Directory('${dir.path}/sgtp_media_cache');
@@ -2026,8 +2028,8 @@ class SgtpClient {
     int offset = 0, limit = 0;
     if (f.payloadLength >= 16) {
       final bd = ByteData.view(f.payload.buffer, f.payload.offsetInBytes);
-      offset = bd.getUint64(0, Endian.big);
-      limit = bd.getUint64(8, Endian.big);
+      offset = bdGetUint64(bd, 0, Endian.big);
+      limit = bdGetUint64(bd, 8, Endian.big);
     }
     final repo = _historyRepository;
     if (repo == null) {
@@ -2191,7 +2193,7 @@ class SgtpClient {
   (int nonce, Uint8List ciphertext) _sharedKeyCipherParams(ParsedFrame f) {
     if (f.version >= 0x0002 && f.payloadLength >= 8) {
       final bd = ByteData.view(f.payload.buffer, f.payload.offsetInBytes, 8);
-      final nonce = bd.getUint64(0, Endian.big);
+      final nonce = bdGetUint64(bd, 0, Endian.big);
       final ciphertext = Uint8List.fromList(f.payload.sublist(8));
       return (nonce, ciphertext);
     }
@@ -2204,7 +2206,7 @@ class SgtpClient {
       bytes[i] = _secureRandom.nextInt(256);
     }
     final bd = ByteData.view(bytes.buffer);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   Future<void> _sendPing(Uint8List r,

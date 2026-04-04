@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import '../constants.dart';
+import '../uint64_utils.dart';
 
 /// A parsed SGTP frame with all header fields extracted.
 class ParsedFrame {
@@ -37,7 +38,7 @@ class ParsedFrame {
 
   int get infoCount {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   List<Uint8List> get infoUUIDs {
@@ -56,7 +57,7 @@ class ParsedFrame {
 
   int get chatRequestCount {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   List<Uint8List> get chatRequestUUIDs {
@@ -75,7 +76,7 @@ class ParsedFrame {
 
   int get epoch {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   /// Nonce used to encrypt/decrypt the CHAT_KEY payload.
@@ -85,7 +86,7 @@ class ParsedFrame {
   int get chatKeyEncryptionNonce {
     if (version >= 0x0002 && payload.length >= 16) {
       final bd = ByteData.view(payload.buffer, payload.offsetInBytes + 8, 8);
-      return bd.getUint64(0, Endian.big);
+      return bdGetUint64(bd, 0, Endian.big);
     }
     return epoch;
   }
@@ -106,7 +107,7 @@ class ParsedFrame {
 
   int get messageNonce {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes + 16, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   Uint8List get messageCiphertext =>
@@ -116,7 +117,7 @@ class ParsedFrame {
 
   int get finNonce {
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   Uint8List get finTag =>
@@ -128,7 +129,7 @@ class ParsedFrame {
   int get hsiMessageCount {
     if (payload.length < 8) return 0;
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   // ---- HSRA accessors ----
@@ -137,14 +138,14 @@ class ParsedFrame {
   int get hsraBatchNumber {
     if (payload.length < 8) return 0;
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   /// For HSRA: payload[8:16] = message_count; 0 means end-of-stream.
   int get hsraMessageCount {
     if (payload.length < 16) return 0;
     final bd = ByteData.view(payload.buffer, payload.offsetInBytes + 8, 8);
-    return bd.getUint64(0, Endian.big);
+    return bdGetUint64(bd, 0, Endian.big);
   }
 
   bool get hsraIsEndOfStream => hsraMessageCount == 0;
@@ -159,7 +160,7 @@ class ParsedFrame {
     for (var i = 0; i < count; i++) {
       final bd = ByteData.view(
           payload.buffer, payload.offsetInBytes + 16 + i * 8, 8);
-      offsets.add(bd.getUint64(0, Endian.big));
+      offsets.add(bdGetUint64(bd, 0, Endian.big));
     }
 
     final blobStart = 16 + count * 8;
@@ -191,7 +192,7 @@ ParsedFrame? tryParseFrame(Uint8List raw) {
   final version      = bd.getUint16(48, Endian.big);
   final packetType   = bd.getUint16(50, Endian.big);
   final payloadLength = bd.getUint32(52, Endian.big);
-  final timestamp    = bd.getUint64(56, Endian.big);
+  final timestamp    = bdGetUint64(bd, 56, Endian.big);
 
   final totalExpected =
       SgtpConstants.headerSize + payloadLength + SgtpConstants.signatureSize;

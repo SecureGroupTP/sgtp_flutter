@@ -2,8 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../domain/entities/chat_metadata.dart';
 
@@ -54,7 +55,66 @@ class ChatMetadataRepository {
     return File('${chatDir.path}/metadata.json');
   }
 
+  // ── web (SharedPreferences) helpers ────────────────────────────────────────
+
+  static const _webKeyPrefix = 'sgtp_chat_meta_v1_';
+
+  String _webKey(String uuid, String serverAddress) {
+    final id = (accountId ?? '').trim();
+    return '$_webKeyPrefix${id}_${_serverKey(serverAddress)}_$uuid';
+  }
+
+  Future<void> _webSave(ChatMetadata m) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_webKey(m.uuid, m.serverAddress), jsonEncode(_toJson(m)));
+  }
+
+  Future<ChatMetadata?> _webLoad(String uuid, String serverAddress) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_webKey(uuid, serverAddress));
+    if (raw == null) return null;
+    return _parseJson(uuid, jsonDecode(raw) as Map<String, dynamic>,
+        fallbackServerAddress: serverAddress);
+  }
+
+  Future<List<ChatMetadata>> _webLoadAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    final chats = <ChatMetadata>[];
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(_webKeyPrefix)) continue;
+      try {
+        final raw = prefs.getString(key);
+        if (raw == null) continue;
+        final json = jsonDecode(raw) as Map<String, dynamic>;
+        final uuid = json['uuid'] as String? ?? '';
+        if (uuid.isEmpty) continue;
+        chats.add(_parseJson(uuid, json));
+      } catch (e) {
+        debugPrint('[ChatMetadata] Web: error parsing key $key: $e');
+      }
+    }
+    chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return chats;
+  }
+
+  Future<void> _webDelete(String uuid, String? serverAddress) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (serverAddress != null && serverAddress.isNotEmpty) {
+      await prefs.remove(_webKey(uuid, serverAddress));
+    } else {
+      final toRemove = prefs.getKeys()
+          .where((k) => k.startsWith(_webKeyPrefix) && k.endsWith('_$uuid'))
+          .toList();
+      for (final k in toRemove) {
+        await prefs.remove(k);
+      }
+    }
+  }
+
+  // ── public API ─────────────────────────────────────────────────────────────
+
   Future<List<ChatMetadata>> loadAllChats() async {
+    if (kIsWeb) return _webLoadAll();
     try {
       final chatsDir = await _getChatsDirectory();
       if (!await chatsDir.exists()) return [];
@@ -116,6 +176,16 @@ class ChatMetadataRepository {
   }
 
   Future<ChatMetadata?> loadChat(String uuid, {String? serverAddress}) async {
+    if (kIsWeb) {
+      final server = (serverAddress ?? '').trim();
+      if (server.isNotEmpty) return _webLoad(uuid, server);
+      final all = await _webLoadAll();
+      try {
+        return all.firstWhere((c) => c.uuid == uuid);
+      } catch (_) {
+        return null;
+      }
+    }
     try {
       final server = (serverAddress ?? '').trim();
       if (server.isNotEmpty) {
@@ -149,6 +219,10 @@ class ChatMetadataRepository {
   }
 
   Future<void> saveChat(ChatMetadata metadata) async {
+    if (kIsWeb) {
+      await _webSave(metadata);
+      return;
+    }
     try {
       final file = await _getMetadataFile(
         metadata.uuid,
@@ -176,6 +250,10 @@ class ChatMetadataRepository {
   }
 
   Future<void> deleteChat(String uuid, {String? serverAddress}) async {
+    if (kIsWeb) {
+      await _webDelete(uuid, serverAddress);
+      return;
+    }
     try {
       final chatsDir = await _getChatsDirectory();
       final server = (serverAddress ?? '').trim();

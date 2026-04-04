@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
+import '../uint64_utils.dart';
 
 /// Convert a uint64 nonce to a 12-byte nonce for ChaCha20-Poly1305.
 /// Format: [0, 0, 0, 0, b7, b6, b5, b4, b3, b2, b1, b0] (big-endian 8 bytes, prefixed with 4 zeros)
@@ -9,7 +10,7 @@ Uint8List makeNonce12(int nonce64) {
   // First 4 bytes are zero
   bd.setUint32(0, 0, Endian.big);
   // Last 8 bytes are the nonce in big-endian
-  bd.setUint64(4, nonce64, Endian.big);
+  bdSetUint64(bd, 4, nonce64, Endian.big);
   return nonce;
 }
 
