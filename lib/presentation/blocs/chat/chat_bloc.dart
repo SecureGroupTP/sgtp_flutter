@@ -306,23 +306,35 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onSendVideoNoteFile(
       ChatSendVideoNoteFile event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    final prepared = event.metadata != null
-        ? PreparedVideoNote(
-            xFile: event.xFile,
-            mime: event.mime,
-            metadata: event.metadata!,
-          )
-        : await VideoNotePipeline.prepare(
-            sourceFile: event.xFile,
-            isFrontCamera: event.isFrontCameraSource,
-            hasAudio: true,
-          );
-    await _client!.sendVideoNoteFromXFile(
-      prepared.xFile,
-      prepared.mime,
-      metadata: prepared.metadata,
-    );
-    await _touchChatActivity();
+    try {
+      AppLogger.i(
+        '[ChatBloc] Video note send start: ${event.xFile.path}',
+        tag: 'VIDEO',
+      );
+      final prepared = event.metadata != null
+          ? PreparedVideoNote(
+              xFile: event.xFile,
+              mime: event.mime,
+              metadata: event.metadata!,
+            )
+          : await VideoNotePipeline.prepare(sourceFile: event.xFile);
+      AppLogger.i(
+        '[ChatBloc] Video note prepared: mime=${prepared.mime}, '
+        '${prepared.metadata.width}x${prepared.metadata.height}, '
+        'duration=${prepared.metadata.durationMs}ms',
+        tag: 'VIDEO',
+      );
+      await _client!.sendVideoNoteFromXFile(
+        prepared.xFile,
+        prepared.mime,
+        metadata: prepared.metadata,
+      );
+      AppLogger.i('[ChatBloc] Video note send handed to client', tag: 'VIDEO');
+      await _touchChatActivity();
+    } catch (e) {
+      AppLogger.e('[ChatBloc] Video note send failed: $e', tag: 'VIDEO');
+      rethrow;
+    }
   }
 
   Future<void> _onSendMessageRead(

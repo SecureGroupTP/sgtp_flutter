@@ -1071,10 +1071,17 @@ class SgtpClient {
     String mime, {
     VideoNoteMetadata? metadata,
   }) async {
+    AppLogger.i(
+      'sendVideoNoteFromXFile start: path=${xFile.path}, mime=$mime, '
+      'meta=${metadata?.width}x${metadata?.height}, duration=${metadata?.durationMs}',
+      tag: 'VIDEO',
+    );
     final name =
         'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     final echoId = uuidBytesToHex(generateUUIDv7());
     final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
+    AppLogger.d('Video note cached locally: ${localPath ?? xFile.path}',
+        tag: 'VIDEO');
     await _sendMediaFromXFile(
       xFile,
       name,
@@ -1095,6 +1102,7 @@ class SgtpClient {
         isFromMe: true,
       ),
     );
+    AppLogger.i('sendVideoNoteFromXFile completed: $name', tag: 'VIDEO');
   }
 
   String _ext(String mime) => switch (mime) {

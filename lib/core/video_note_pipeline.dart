@@ -4,12 +4,12 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
-import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image/image.dart' as img;
+import 'package:media_kit/media_kit.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../core/app_logger.dart';
 import '../domain/entities/video_note_metadata.dart';
 
 class PreparedVideoNote {
@@ -31,8 +31,13 @@ class VideoNotePipeline {
   static Future<PreparedVideoNote> prepare({
     required XFile sourceFile,
   }) async {
+    AppLogger.i('Preparing video note from ${sourceFile.path}', tag: 'VIDEO');
     if (kIsWeb) {
       throw UnsupportedError('Video note processing is not supported on web.');
+    }
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      return _preparePassthrough(sourceFile);
     }
 
     final tmpDir = await getTemporaryDirectory();
@@ -47,7 +52,7 @@ class VideoNotePipeline {
       'format=yuv420p',
     ];
 
-    await _runFfmpeg([
+    await _runDesktopFfmpeg([
       '-y',
       '-i',
       sourceFile.path,
@@ -95,10 +100,9 @@ class VideoNotePipeline {
 
     final videoFile = File(normalizedPath);
     final fileSize = await videoFile.length();
-    final mediaInfo = await _probeMediaInfo(normalizedPath);
+    final mediaInfo = await _probeDesktopMediaInfo(normalizedPath);
     final durationMs = mediaInfo.durationMs.clamp(0, maxDurationSeconds * 1000);
-
-    final thumbnail = await _buildThumbnail(normalizedPath, tmpDir.path);
+    final thumbnail = await _buildDesktopThumbnail(normalizedPath, tmpDir.path);
 
     return PreparedVideoNote(
       xFile: XFile(normalizedPath),
@@ -118,48 +122,42 @@ class VideoNotePipeline {
     );
   }
 
-  static Future<void> _runFfmpeg(List<String> arguments) async {
-    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
-      final session = await FFmpegKit.execute(_quoteArgs(arguments));
-      final returnCode = await session.getReturnCode();
-      if (!ReturnCode.isSuccess(returnCode)) {
-        final logs = await session.getAllLogsAsString();
-        throw StateError('ffmpeg normalize failed: $logs');
-      }
-      return;
-    }
+  static Future<PreparedVideoNote> _preparePassthrough(XFile sourceFile) async {
+    final info = await _probeWithMediaKit(sourceFile.path);
+    final file = File(sourceFile.path);
+    final fileSize = await file.length();
+    AppLogger.i(
+      'Using mobile passthrough video note: ${sourceFile.path}, ${info.width}x${info.height}, ${info.durationMs}ms',
+      tag: 'VIDEO',
+    );
+    return PreparedVideoNote(
+      xFile: sourceFile,
+      mime: _mimeForPath(sourceFile.path),
+      metadata: VideoNoteMetadata(
+        durationMs: info.durationMs,
+        width: info.width,
+        height: info.height,
+        hasAudio: info.hasAudio,
+        fileSizeBytes: fileSize,
+      ),
+    );
+  }
 
+  static Future<void> _runDesktopFfmpeg(List<String> arguments) async {
+    AppLogger.d('Desktop ffmpeg: ${arguments.join(' ')}', tag: 'VIDEO');
     final result = await Process.run('ffmpeg', arguments);
     if (result.exitCode != 0) {
+      AppLogger.e('Desktop ffmpeg failed: ${result.stderr}', tag: 'VIDEO');
       throw StateError('ffmpeg normalize failed: ${result.stderr}');
     }
   }
 
-  static Future<_MediaProbeResult> _probeMediaInfo(String path) async {
-    final arguments = [
-      '-i',
-      path,
-      '-f',
-      'null',
-      '-',
-    ];
-
-    String logs = '';
-    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
-      final session = await FFmpegKit.execute(_quoteArgs(arguments));
-      logs = await session.getAllLogsAsString() ?? '';
-      final returnCode = await session.getReturnCode();
-      if (!ReturnCode.isSuccess(returnCode) &&
-          !(logs.contains('Duration:') || logs.contains('Stream #'))) {
-        throw StateError('ffmpeg probe failed: $logs');
-      }
-    } else {
-      final result = await Process.run('ffmpeg', arguments);
-      logs = '${result.stdout}\n${result.stderr}';
-      if (result.exitCode != 0 &&
-          !(logs.contains('Duration:') || logs.contains('Stream #'))) {
-        throw StateError('ffmpeg probe failed: ${result.stderr}');
-      }
+  static Future<_MediaProbeResult> _probeDesktopMediaInfo(String path) async {
+    final result = await Process.run('ffmpeg', ['-i', path, '-f', 'null', '-']);
+    final logs = '${result.stdout}\n${result.stderr}';
+    if (result.exitCode != 0 &&
+        !(logs.contains('Duration:') || logs.contains('Stream #'))) {
+      throw StateError('ffmpeg probe failed: ${result.stderr}');
     }
 
     final durationMatch = RegExp(
@@ -177,17 +175,21 @@ class VideoNotePipeline {
         (((hours * 60 + minutes) * 60) + seconds) * 1000 + fractionMs;
     final hasAudio =
         RegExp(r'Stream #.*Audio:', caseSensitive: false).hasMatch(logs);
+    AppLogger.d(
+      'Desktop probe result: duration=${durationMs}ms, hasAudio=$hasAudio',
+      tag: 'VIDEO',
+    );
     return _MediaProbeResult(durationMs: durationMs, hasAudio: hasAudio);
   }
 
-  static Future<_ThumbnailResult> _buildThumbnail(
+  static Future<_ThumbnailResult> _buildDesktopThumbnail(
     String videoPath,
     String tempDirPath,
   ) async {
     final candidates = <int>[500, 1000, 1500, 2000, 2500];
     _ThumbnailResult? best;
     for (final ms in candidates) {
-      final thumb = await _extractThumbnailAt(
+      final thumb = await _extractDesktopThumbnailAt(
         videoPath: videoPath,
         tempDirPath: tempDirPath,
         timestampMs: ms,
@@ -214,14 +216,14 @@ class VideoNotePipeline {
     );
   }
 
-  static Future<_ThumbnailResult?> _extractThumbnailAt({
+  static Future<_ThumbnailResult?> _extractDesktopThumbnailAt({
     required String videoPath,
     required String tempDirPath,
     required int timestampMs,
   }) async {
     final outputPath = '$tempDirPath/videonote_thumb_$timestampMs.jpg';
     try {
-      await _runFfmpeg([
+      await _runDesktopFfmpeg([
         '-y',
         '-ss',
         (timestampMs / 1000).toStringAsFixed(3),
@@ -273,11 +275,64 @@ class VideoNotePipeline {
     );
   }
 
-  static String _quoteArgs(List<String> arguments) {
-    return arguments.map((arg) {
-      final escaped = arg.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
-      return '"$escaped"';
-    }).join(' ');
+  static Future<_PassthroughProbeResult> _probeWithMediaKit(String path) async {
+    final player = Player();
+    try {
+      AppLogger.d('MediaKit probe start: $path', tag: 'VIDEO');
+      await player.open(Media(Uri.file(path).toString()), play: false);
+      final stopwatch = Stopwatch()..start();
+      while (stopwatch.elapsed < const Duration(seconds: 3)) {
+        final width = player.state.videoParams.dw ?? player.state.width ?? 0;
+        final height = player.state.videoParams.dh ?? player.state.height ?? 0;
+        final duration = player.state.duration;
+        if ((width > 0 && height > 0) || duration > Duration.zero) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+
+      var width = player.state.videoParams.dw ?? player.state.width ?? 0;
+      var height = player.state.videoParams.dh ?? player.state.height ?? 0;
+      if (width <= 0 || height <= 0) {
+        try {
+          await player.play();
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          await player.pause();
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          width = player.state.videoParams.dw ?? player.state.width ?? 0;
+          height = player.state.videoParams.dh ?? player.state.height ?? 0;
+        } catch (e) {
+          AppLogger.w('MediaKit probe play/pause fallback failed: $e',
+              tag: 'VIDEO');
+        }
+      }
+
+      if (width <= 0 || height <= 0) {
+        width = targetSize;
+        height = targetSize;
+      }
+      AppLogger.d(
+        'MediaKit probe result: ${player.state.duration.inMilliseconds}ms, ${width}x$height',
+        tag: 'VIDEO',
+      );
+      return _PassthroughProbeResult(
+        durationMs: player.state.duration.inMilliseconds,
+        width: width,
+        height: height,
+        hasAudio: true,
+      );
+    } finally {
+      await player.dispose();
+    }
+  }
+
+  static String _mimeForPath(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.m4v')) return 'video/x-m4v';
+    if (lower.endsWith('.3gp')) return 'video/3gpp';
+    return 'video/mp4';
   }
 }
 
@@ -287,6 +342,20 @@ class _MediaProbeResult {
 
   const _MediaProbeResult({
     required this.durationMs,
+    required this.hasAudio,
+  });
+}
+
+class _PassthroughProbeResult {
+  final int durationMs;
+  final int width;
+  final int height;
+  final bool hasAudio;
+
+  const _PassthroughProbeResult({
+    required this.durationMs,
+    required this.width,
+    required this.height,
     required this.hasAudio,
   });
 }

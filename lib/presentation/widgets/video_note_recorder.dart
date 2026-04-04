@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/app_logger.dart';
 import '../../core/video_note_pipeline.dart';
 import '../../domain/entities/video_note_metadata.dart';
 
@@ -48,6 +50,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   bool _initializing = true;
   bool _isRecording = false;
   bool _isProcessing = false;
+  bool _audioEnabledController = false;
   String? _error;
   Duration _elapsed = Duration.zero;
 
@@ -79,13 +82,19 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     }
   }
 
-  Future<void> _initCamera({int index = 0, bool selectDefault = false}) async {
+  Future<void> _initCamera({
+    int index = 0,
+    bool selectDefault = false,
+    bool enableAudio = false,
+  }) async {
     setState(() {
       _initializing = true;
       _error = null;
     });
     try {
       final cameras = await availableCameras();
+      AppLogger.i('Recorder available cameras: ${cameras.length}',
+          tag: 'VIDEO');
       if (cameras.isEmpty) {
         setState(() {
           _initializing = false;
@@ -116,12 +125,19 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       final controller = CameraController(
         cameras[target],
         ResolutionPreset.medium,
-        enableAudio: true,
-        fps: 30,
-        videoBitrate: 1200000,
-        audioBitrate: 64000,
+        enableAudio: enableAudio,
       );
       await controller.initialize();
+      await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      if (enableAudio && Platform.isIOS) {
+        await controller.prepareForVideoRecording();
+      }
+      AppLogger.i(
+        'Recorder camera initialized: index=$target, audio=$enableAudio, '
+        'aspect=${controller.value.aspectRatio}, '
+        'preview=${controller.value.previewSize?.width}x${controller.value.previewSize?.height}',
+        tag: 'VIDEO',
+      );
 
       if (!mounted) {
         await controller.dispose();
@@ -131,9 +147,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       setState(() {
         _controller = controller;
         _cameraIndex = target;
+        _audioEnabledController = enableAudio;
         _initializing = false;
       });
     } catch (e) {
+      AppLogger.e('Recorder init failed: $e', tag: 'VIDEO');
       if (!mounted) return;
       setState(() {
         _initializing = false;
@@ -143,21 +161,47 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   }
 
   Future<void> _swapCamera() async {
-    if (_isRecording || _isProcessing || _cameras.length < 2) return;
+    if (_isProcessing || _cameras.length < 2) return;
     final next = (_cameraIndex + 1) % _cameras.length;
-    await _initCamera(index: next);
+    if (_isRecording) {
+      final controller = _controller;
+      if (controller == null || !controller.value.isInitialized) return;
+      try {
+        AppLogger.i(
+          'Recorder switch camera while recording: $_cameraIndex -> $next',
+          tag: 'VIDEO',
+        );
+        await controller.setDescription(_cameras[next]);
+        await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+        if (!mounted) return;
+        setState(() => _cameraIndex = next);
+      } catch (e) {
+        AppLogger.e(
+          'Recorder switch camera while recording failed: $e',
+          tag: 'VIDEO',
+        );
+        _showSnack('Failed to switch camera: $e');
+      }
+      return;
+    }
+    await _initCamera(index: next, enableAudio: _audioEnabledController);
   }
 
   Future<void> _startRecording() async {
-    final controller = _controller;
-    if (controller == null ||
-        !controller.value.isInitialized ||
-        _isRecording ||
-        _isProcessing) {
+    if (_isRecording || _isProcessing) {
       return;
     }
     try {
+      AppLogger.i('Recorder start requested', tag: 'VIDEO');
+      if (!_audioEnabledController) {
+        await _initCamera(index: _cameraIndex, enableAudio: true);
+      }
+      final controller = _controller;
+      if (controller == null || !controller.value.isInitialized) {
+        return;
+      }
       await controller.startVideoRecording();
+      AppLogger.i('Recorder video recording started', tag: 'VIDEO');
       HapticFeedback.mediumImpact();
       _stopwatch
         ..reset()
@@ -177,6 +221,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         _elapsed = Duration.zero;
       });
     } catch (e) {
+      AppLogger.e('Recorder start failed: $e', tag: 'VIDEO');
       _showSnack('Failed to start recording: $e');
     }
   }
@@ -190,12 +235,16 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     final elapsed = _stopwatch.elapsed;
 
     try {
+      AppLogger.i(
+          'Recorder stop requested, elapsed=${elapsed.inMilliseconds}ms',
+          tag: 'VIDEO');
       setState(() {
         _isProcessing = true;
         _isRecording = false;
         _elapsed = elapsed;
       });
       final recorded = await controller.stopVideoRecording();
+      AppLogger.i('Recorder raw file: ${recorded.path}', tag: 'VIDEO');
       if (elapsed < _minDuration) {
         await _deleteFile(recorded.path);
         if (!mounted) return;
@@ -207,7 +256,13 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       final prepared = await VideoNotePipeline.prepare(
         sourceFile: recorded,
       );
-      await _deleteFile(recorded.path);
+      AppLogger.i(
+        'Recorder prepared file: ${prepared.xFile.path}, mime=${prepared.mime}, ${prepared.metadata.width}x${prepared.metadata.height}, duration=${prepared.metadata.durationMs}ms',
+        tag: 'VIDEO',
+      );
+      if (prepared.xFile.path != recorded.path) {
+        await _deleteFile(recorded.path);
+      }
 
       if (!mounted) return;
       setState(() => _isProcessing = false);
@@ -219,6 +274,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         ),
       );
     } catch (e) {
+      AppLogger.e('Recorder finalize failed: $e', tag: 'VIDEO');
       if (!mounted) return;
       setState(() {
         _isProcessing = false;
@@ -291,10 +347,9 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                   ),
                   const Spacer(),
                   IconButton(
-                    onPressed:
-                        (_isProcessing || _isRecording || _cameras.length < 2)
-                            ? null
-                            : _swapCamera,
+                    onPressed: (_isProcessing || _cameras.length < 2)
+                        ? null
+                        : _swapCamera,
                     icon: const Icon(Icons.cameraswitch_rounded,
                         color: Colors.white),
                   ),
@@ -407,25 +462,70 @@ class _CameraPreviewFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final previewSize = controller.value.previewSize;
-    final width = previewSize?.width ?? 1;
-    final height = previewSize?.height ?? 1;
-    final aspectRatio = (width > 0 && height > 0) ? width / height : 1.0;
-    final fitted = applyBoxFit(
-      BoxFit.cover,
-      Size(aspectRatio, 1),
-      const Size(1, 1),
-    ).destination;
-    return FittedBox(
-      fit: BoxFit.cover,
-      child: SizedBox(
-        width: fitted.width * 1000,
-        height: fitted.height * 1000,
-        child: AspectRatio(
-          aspectRatio: aspectRatio,
-          child: CameraPreview(controller),
-        ),
-      ),
+    return ValueListenableBuilder<CameraValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        if (!value.isInitialized) {
+          return const SizedBox.shrink();
+        }
+
+        final previewSize = _orientedPreviewSize(value);
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final viewportSize = constraints.biggest;
+            if (!viewportSize.width.isFinite ||
+                !viewportSize.height.isFinite ||
+                viewportSize.isEmpty) {
+              return const SizedBox.shrink();
+            }
+
+            final fittedSize = _coverSize(
+              viewportSize: viewportSize,
+              previewSize: previewSize,
+            );
+
+            return Center(
+              child: SizedBox(
+                width: fittedSize.width,
+                height: fittedSize.height,
+                child: CameraPreview(controller),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Size _orientedPreviewSize(CameraValue value) {
+    final baseSize = value.previewSize ?? const Size(1, 1);
+    final orientation = _applicableOrientation(value);
+    final isLandscape = orientation == DeviceOrientation.landscapeLeft ||
+        orientation == DeviceOrientation.landscapeRight;
+    return isLandscape ? baseSize : Size(baseSize.height, baseSize.width);
+  }
+
+  DeviceOrientation _applicableOrientation(CameraValue value) {
+    if (value.isRecordingVideo && value.recordingOrientation != null) {
+      return value.recordingOrientation!;
+    }
+    return value.previewPauseOrientation ??
+        value.lockedCaptureOrientation ??
+        value.deviceOrientation;
+  }
+
+  Size _coverSize({
+    required Size viewportSize,
+    required Size previewSize,
+  }) {
+    final scale = math.max(
+      viewportSize.width / previewSize.width,
+      viewportSize.height / previewSize.height,
+    );
+    return Size(
+      previewSize.width * scale,
+      previewSize.height * scale,
     );
   }
 }
