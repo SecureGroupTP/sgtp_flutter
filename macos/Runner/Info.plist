@@ -30,6 +30,8 @@
 	<string>NSApplication</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required to record voice messages.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is required to record circular video messages.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Access to Documents is required to open key files.</string>
 	<key>NSDownloadsFolderUsageDescription</key>

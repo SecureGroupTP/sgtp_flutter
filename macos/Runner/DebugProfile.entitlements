@@ -13,6 +13,8 @@
     <!-- Microphone access for voice messages -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
     <!-- File access: read-write so the app can open key files from any picker location -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>

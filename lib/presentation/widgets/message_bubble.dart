@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/app_theme.dart';
 import '../../core/interaction_prefs.dart';
 import '../../domain/entities/message.dart';
+import '../../domain/entities/video_note_metadata.dart';
 import 'user_avatar.dart';
 
 Size _fitSizeForAspectRatio({
@@ -624,12 +625,10 @@ class MessageBubble extends StatelessWidget {
     return peerAvatars[message.senderUUID];
   }
 
-
   /// Read receipts indicator widget (content only, no layout wrapper).
   Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
-    final isMedia =
-        message.type == MessageType.video ||
+    final isMedia = message.type == MessageType.video ||
         message.type == MessageType.videoNote ||
         message.type == MessageType.voice;
 
@@ -964,6 +963,7 @@ class MessageBubble extends StatelessWidget {
                 videoBytes: message.videoBytes,
                 localPath: message.localMediaPath,
                 mediaMime: message.mediaMime,
+                metadata: message.videoNoteMetadata,
               ),
             ),
           ),
@@ -1051,7 +1051,13 @@ class _VideoNotePlayer extends StatefulWidget {
   final Uint8List? videoBytes;
   final String? localPath;
   final String? mediaMime;
-  const _VideoNotePlayer({this.videoBytes, this.localPath, this.mediaMime});
+  final VideoNoteMetadata? metadata;
+  const _VideoNotePlayer({
+    this.videoBytes,
+    this.localPath,
+    this.mediaMime,
+    this.metadata,
+  });
 
   @override
   State<_VideoNotePlayer> createState() => _VideoNotePlayerState();
@@ -1145,7 +1151,8 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
           path = XFile.fromData(
             bytes,
             mimeType: widget.mediaMime ?? 'video/mp4',
-            name: 'vnote_${bytes.hashCode}.${_tempExtForMime(widget.mediaMime)}',
+            name:
+                'vnote_${bytes.hashCode}.${_tempExtForMime(widget.mediaMime)}',
           ).path;
           _ownsTempFile = false;
         } else {
@@ -1318,17 +1325,26 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   @override
   Widget build(BuildContext context) {
     final player = _player;
+    final thumbnailBytes = widget.metadata?.thumbnailBytes;
+    final dominantColor = _parseHexColor(widget.metadata?.dominantColorHex) ??
+        const Color(0xFF2C2C30);
+    final duration = widget.metadata?.durationMs != null
+        ? Duration(milliseconds: widget.metadata!.durationMs)
+        : _duration;
     return SizedBox.expand(
       child: Stack(
         fit: StackFit.expand,
         children: [
           // Placeholder — always show gradient so circle isn't transparent
           Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFF1F1F24), Color(0xFF2C2C30)],
+                colors: [
+                  dominantColor.withAlpha(220),
+                  const Color(0xFF1F1F24),
+                ],
               ),
             ),
           ),
@@ -1338,6 +1354,21 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
             Positioned.fill(
               child: _coverFillVideo(
                 controller: _controller!,
+              ),
+            ),
+
+          if (thumbnailBytes != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _playing ? 0.0 : 1.0,
+                  duration: const Duration(milliseconds: 150),
+                  child: Image.memory(
+                    thumbnailBytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                ),
               ),
             ),
 
@@ -1367,9 +1398,8 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
                         final duration = durSnap.data ?? _duration;
                         final maxMs = duration.inMilliseconds;
                         final valueMs = position.inMilliseconds;
-                        final progress = maxMs > 0
-                            ? (valueMs / maxMs).clamp(0.0, 1.0)
-                            : 0.0;
+                        final progress =
+                            maxMs > 0 ? (valueMs / maxMs).clamp(0.0, 1.0) : 0.0;
                         return CustomPaint(
                           painter: _VideoNoteProgressRingPainter(
                             progress: progress,
@@ -1422,9 +1452,49 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
                 ),
               ),
             ),
+
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 12,
+            child: Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withAlpha(120),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    _formatDuration(duration),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  String _formatDuration(Duration value) {
+    final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = value.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  Color? _parseHexColor(String? value) {
+    if (value == null) return null;
+    final hex = value.replaceFirst('#', '');
+    if (hex.length != 6) return null;
+    final parsed = int.tryParse('FF$hex', radix: 16);
+    return parsed == null ? null : Color(parsed);
   }
 }
 

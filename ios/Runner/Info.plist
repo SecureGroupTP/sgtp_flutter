@@ -43,6 +43,8 @@
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required to record voice messages.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is required to record circular video messages.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

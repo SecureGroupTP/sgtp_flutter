@@ -2,13 +2,15 @@ import 'dart:typed_data';
 
 import 'package:equatable/equatable.dart';
 
+import 'video_note_metadata.dart';
+
 enum MessageType {
   text,
   image,
   gif,
   video,
   voice,
-  videoNote,   // Circular video message (кружок)
+  videoNote, // Circular video message (кружок)
   system,
   messageRead,
   reaction,
@@ -47,6 +49,9 @@ class ChatMessage extends Equatable {
   /// Local on-disk path for media payload. Used to avoid keeping large
   /// playable media fully in RAM.
   final String? localMediaPath;
+
+  /// Extra metadata for circular video messages.
+  final VideoNoteMetadata? videoNoteMetadata;
 
   final MessageType type;
 
@@ -101,6 +106,7 @@ class ChatMessage extends Equatable {
     this.mediaMime,
     this.mediaName,
     this.localMediaPath,
+    this.videoNoteMetadata,
     this.type = MessageType.text,
     required this.receivedAt,
     required this.isFromHistory,
@@ -127,6 +133,7 @@ class ChatMessage extends Equatable {
     String? mediaMime,
     String? mediaName,
     String? localMediaPath,
+    VideoNoteMetadata? videoNoteMetadata,
     MessageType? type,
     DateTime? receivedAt,
     bool? isFromHistory,
@@ -142,38 +149,58 @@ class ChatMessage extends Equatable {
     double? sendProgress,
   }) {
     return ChatMessage(
-      id:                   id ?? this.id,
-      senderUUID:           senderUUID ?? this.senderUUID,
-      senderPublicKeyHex:   senderPublicKeyHex ?? this.senderPublicKeyHex,
-      content:              content ?? this.content,
-      imageBytes:           imageBytes ?? this.imageBytes,
-      videoBytes:           videoBytes ?? this.videoBytes,
-      audioBytes:           audioBytes ?? this.audioBytes,
-      mediaMime:            mediaMime ?? this.mediaMime,
-      mediaName:            mediaName ?? this.mediaName,
-      localMediaPath:       localMediaPath ?? this.localMediaPath,
-      type:                 type ?? this.type,
-      receivedAt:           receivedAt ?? this.receivedAt,
-      isFromHistory:        isFromHistory ?? this.isFromHistory,
-      isFromMe:             isFromMe ?? this.isFromMe,
-      senderAvatarBytes:    senderAvatarBytes ?? this.senderAvatarBytes,
-      readMessageId:        readMessageId ?? this.readMessageId,
-      readBy:               readBy ?? this.readBy,
-      replyToId:            replyToId ?? this.replyToId,
-      replyToContent:       replyToContent ?? this.replyToContent,
-      replyToSender:        replyToSender ?? this.replyToSender,
-      reactions:            reactions ?? this.reactions,
-      isSending:            isSending ?? this.isSending,
-      sendProgress:         sendProgress ?? this.sendProgress,
+      id: id ?? this.id,
+      senderUUID: senderUUID ?? this.senderUUID,
+      senderPublicKeyHex: senderPublicKeyHex ?? this.senderPublicKeyHex,
+      content: content ?? this.content,
+      imageBytes: imageBytes ?? this.imageBytes,
+      videoBytes: videoBytes ?? this.videoBytes,
+      audioBytes: audioBytes ?? this.audioBytes,
+      mediaMime: mediaMime ?? this.mediaMime,
+      mediaName: mediaName ?? this.mediaName,
+      localMediaPath: localMediaPath ?? this.localMediaPath,
+      videoNoteMetadata: videoNoteMetadata ?? this.videoNoteMetadata,
+      type: type ?? this.type,
+      receivedAt: receivedAt ?? this.receivedAt,
+      isFromHistory: isFromHistory ?? this.isFromHistory,
+      isFromMe: isFromMe ?? this.isFromMe,
+      senderAvatarBytes: senderAvatarBytes ?? this.senderAvatarBytes,
+      readMessageId: readMessageId ?? this.readMessageId,
+      readBy: readBy ?? this.readBy,
+      replyToId: replyToId ?? this.replyToId,
+      replyToContent: replyToContent ?? this.replyToContent,
+      replyToSender: replyToSender ?? this.replyToSender,
+      reactions: reactions ?? this.reactions,
+      isSending: isSending ?? this.isSending,
+      sendProgress: sendProgress ?? this.sendProgress,
     );
   }
 
   @override
   List<Object?> get props => [
-        id, senderUUID, senderPublicKeyHex, content,
-        imageBytes, videoBytes, audioBytes, mediaMime, mediaName, localMediaPath,
-        type, receivedAt, isFromHistory, isFromMe, senderAvatarBytes,
-        readMessageId, readBy, replyToId, replyToContent, replyToSender,
-        reactions, isSending, sendProgress,
+        id,
+        senderUUID,
+        senderPublicKeyHex,
+        content,
+        imageBytes,
+        videoBytes,
+        audioBytes,
+        mediaMime,
+        mediaName,
+        localMediaPath,
+        videoNoteMetadata,
+        type,
+        receivedAt,
+        isFromHistory,
+        isFromMe,
+        senderAvatarBytes,
+        readMessageId,
+        readBy,
+        replyToId,
+        replyToContent,
+        replyToSender,
+        reactions,
+        isSending,
+        sendProgress,
       ];
 }

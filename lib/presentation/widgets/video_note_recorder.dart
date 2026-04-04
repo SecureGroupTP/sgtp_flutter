@@ -1,39 +1,32 @@
-import 'dart:io';
 import 'dart:async';
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:record/record.dart';
+
+import '../../core/video_note_pipeline.dart';
+import '../../domain/entities/video_note_metadata.dart';
 
 class VideoNoteCaptureResult {
   final XFile xFile;
   final String mime;
+  final VideoNoteMetadata metadata;
 
   const VideoNoteCaptureResult({
     required this.xFile,
     required this.mime,
+    required this.metadata,
   });
 }
 
-/// Full-screen video-note recorder overlay.
-/// Shows live circular camera preview (front camera by default),
-/// a hold-to-record button, and a swap-camera button.
-///
-/// Pops with [VideoNoteCaptureResult] on success, or `null` on cancel.
 class VideoNoteRecorderPage extends StatefulWidget {
   final String? preferredCameraName;
-
-  /// When set, audio is recorded separately using this microphone and merged
-  /// into the final video. Falls back to camera audio if merging fails.
-  final InputDevice? preferredMicrophone;
 
   const VideoNoteRecorderPage({
     super.key,
     this.preferredCameraName,
-    this.preferredMicrophone,
   });
 
   @override
@@ -42,653 +35,356 @@ class VideoNoteRecorderPage extends StatefulWidget {
 
 class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     with WidgetsBindingObserver {
-  List<CameraDescription> _cameras = [];
-  CameraController? _ctrl;
+  static const _maxDuration = Duration(seconds: 60);
+  static const _minDuration = Duration(milliseconds: 400);
+
+  final Stopwatch _stopwatch = Stopwatch();
+  Timer? _ticker;
+
+  List<CameraDescription> _cameras = const [];
+  CameraController? _controller;
   int _cameraIndex = 0;
 
-  bool _initialising = true;
-  bool _recording = false;
-  bool _merging = false;
-  bool _recordActionInFlight = false;
-  String? _initError;
-  DateTime? _recordStartAt;
+  bool _initializing = true;
+  bool _isRecording = false;
+  bool _isProcessing = false;
+  String? _error;
+  Duration _elapsed = Duration.zero;
 
-  static const Duration _minRecordDuration = Duration(milliseconds: 400);
-  static const Duration _holdIntentThreshold = Duration(milliseconds: 350);
+  CameraDescription? get _currentCamera =>
+      _cameras.isEmpty ? null : _cameras[_cameraIndex];
 
-  bool _pointerDown = false;
-  bool _toggleMode = false;
-  bool _holdIntent = false;
-  Timer? _holdIntentTimer;
-  bool _pressWasRecording = false;
-
-  // Separate audio recording for mic selection support.
-  AudioRecorder? _audioRecorder;
-  String? _audioRecordPath;
-
-  bool get _useSeparateMic => !kIsWeb && widget.preferredMicrophone != null;
+  bool get _isFrontCamera =>
+      _currentCamera?.lensDirection == CameraLensDirection.front;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    if (_useSeparateMic) {
-      _audioRecorder = AudioRecorder();
-    }
-    _initCamera(selectDefault: true);
+    unawaited(_initCamera(selectDefault: true));
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _holdIntentTimer?.cancel();
-    _ctrl?.dispose();
-    _audioRecorder?.dispose();
-    _cleanupAudioFile();
+    _ticker?.cancel();
+    _stopwatch.stop();
+    unawaited(_controller?.dispose());
     super.dispose();
-  }
-
-  void _cleanupAudioFile() {
-    final p = _audioRecordPath;
-    if (p != null && !kIsWeb) {
-      try {
-        File(p).deleteSync();
-      } catch (_) {}
-    }
-    _audioRecordPath = null;
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final ctrl = _ctrl;
-    if (ctrl == null || !ctrl.value.isInitialized) return;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
     if (state == AppLifecycleState.inactive) {
-      ctrl.dispose();
-    } else if (state == AppLifecycleState.resumed) {
-      _initCamera(index: _cameraIndex);
+      unawaited(controller.dispose());
+      _controller = null;
+    } else if (state == AppLifecycleState.resumed && !_isProcessing) {
+      unawaited(_initCamera(index: _cameraIndex));
     }
   }
 
   Future<void> _initCamera({int index = 0, bool selectDefault = false}) async {
     setState(() {
-      _initialising = true;
-      _initError = null;
+      _initializing = true;
+      _error = null;
     });
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
         setState(() {
-          _initError = 'No cameras found';
-          _initialising = false;
+          _initializing = false;
+          _error = 'No cameras found';
         });
         return;
       }
       _cameras = cameras;
 
-      int target = index;
+      var target = index.clamp(0, cameras.length - 1);
       if (selectDefault) {
-        // On first launch only: apply preferredCameraName from settings, or
-        // fall back to the front camera as a sensible default for video notes.
-        final preferred = widget.preferredCameraName;
-        if (preferred != null && preferred.isNotEmpty) {
-          final prefIdx = cameras.indexWhere((c) => c.name == preferred);
-          if (prefIdx >= 0) target = prefIdx;
+        final preferredName = widget.preferredCameraName;
+        if (preferredName != null && preferredName.isNotEmpty) {
+          final preferredIndex =
+              cameras.indexWhere((camera) => camera.name == preferredName);
+          if (preferredIndex >= 0) {
+            target = preferredIndex;
+          }
         } else {
-          final frontIdx = cameras
-              .indexWhere((c) => c.lensDirection == CameraLensDirection.front);
-          target = frontIdx >= 0 ? frontIdx : 0;
+          final frontIndex = cameras.indexWhere(
+            (camera) => camera.lensDirection == CameraLensDirection.front,
+          );
+          target = frontIndex >= 0 ? frontIndex : 0;
         }
-        // Explicit swaps (selectDefault == false) always use the given index
-        // so the user can freely switch between cameras regardless of settings.
       }
-      _cameraIndex = target;
 
-      await _ctrl?.dispose();
-      final ctrl = CameraController(
+      await _controller?.dispose();
+      final controller = CameraController(
         cameras[target],
-        ResolutionPreset.high,
-        // When using a separate mic, disable camera audio to avoid conflicts.
-        enableAudio: !_useSeparateMic,
+        ResolutionPreset.medium,
+        enableAudio: true,
+        fps: 30,
+        videoBitrate: 1200000,
+        audioBitrate: 64000,
       );
-      await ctrl.initialize();
-      if (mounted) {
-        setState(() {
-          _ctrl = ctrl;
-          _initialising = false;
-        });
+      await controller.initialize();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
       }
+
+      setState(() {
+        _controller = controller;
+        _cameraIndex = target;
+        _initializing = false;
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _initError = e.toString();
-          _initialising = false;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _initializing = false;
+        _error = 'Failed to initialize camera: $e';
+      });
     }
   }
 
   Future<void> _swapCamera() async {
-    if (_cameras.length < 2) return;
-    if (_recording) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Can't switch camera while recording")),
-      );
-      return;
-    }
+    if (_isRecording || _isProcessing || _cameras.length < 2) return;
     final next = (_cameraIndex + 1) % _cameras.length;
     await _initCamera(index: next);
   }
 
   Future<void> _startRecording() async {
-    final ctrl = _ctrl;
-    if (ctrl == null ||
-        !ctrl.value.isInitialized ||
-        _recording ||
-        _recordActionInFlight) {
+    final controller = _controller;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _isRecording ||
+        _isProcessing) {
       return;
     }
-    _recordActionInFlight = true;
     try {
-      if (ctrl.value.isRecordingVideo) {
-        if (mounted) {
-          setState(() {
-            _recording = true;
-            _recordStartAt ??= DateTime.now();
-            _toggleMode = true;
-          });
-        }
-        return;
-      }
-      await ctrl.startVideoRecording();
-      // Start separate audio recording immediately after camera.
-      if (_useSeparateMic) {
-        unawaited(_startAudioRecording());
-      }
+      await controller.startVideoRecording();
       HapticFeedback.mediumImpact();
-      if (!mounted) return;
+      _stopwatch
+        ..reset()
+        ..start();
+      _ticker?.cancel();
+      _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
+        if (!mounted) return;
+        final elapsed = _stopwatch.elapsed;
+        if (elapsed >= _maxDuration) {
+          unawaited(_stopAndPrepare());
+          return;
+        }
+        setState(() => _elapsed = elapsed);
+      });
       setState(() {
-        _recording = true;
-        _recordStartAt = DateTime.now();
-        _toggleMode = true;
+        _isRecording = true;
+        _elapsed = Duration.zero;
       });
     } catch (e) {
-      if (mounted) {
-        setState(() => _recording = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start recording: $e')),
-        );
-      }
-    } finally {
-      _recordActionInFlight = false;
+      _showSnack('Failed to start recording: $e');
     }
   }
 
-  Future<void> _startAudioRecording() async {
-    final recorder = _audioRecorder;
-    if (recorder == null || kIsWeb) return;
+  Future<void> _stopAndPrepare() async {
+    final controller = _controller;
+    if (controller == null || !_isRecording || _isProcessing) return;
+
+    _ticker?.cancel();
+    _stopwatch.stop();
+    final elapsed = _stopwatch.elapsed;
+
     try {
-      final tmpDir = await getTemporaryDirectory();
-      final path =
-          '${tmpDir.path}/vnote_audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
-      await recorder.start(
-        RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-          device: widget.preferredMicrophone,
-        ),
-        path: path,
+      setState(() {
+        _isProcessing = true;
+        _isRecording = false;
+        _elapsed = elapsed;
+      });
+      final recorded = await controller.stopVideoRecording();
+      if (elapsed < _minDuration) {
+        await _deleteFile(recorded.path);
+        if (!mounted) return;
+        setState(() => _isProcessing = false);
+        _showSnack('Hold a bit longer to record');
+        return;
+      }
+
+      final prepared = await VideoNotePipeline.prepare(
+        sourceFile: recorded,
+        isFrontCamera: _isFrontCamera,
+        hasAudio: true,
       );
-      _audioRecordPath = path;
-    } catch (_) {
-      // Audio recording failed; merge will be skipped and camera audio used.
-      _audioRecordPath = null;
-    }
-  }
+      await _deleteFile(recorded.path);
 
-  String _mimeForPath(String path) {
-    final lower = path.toLowerCase();
-    if (lower.endsWith('.mp4')) return 'video/mp4';
-    if (lower.endsWith('.mov')) return 'video/quicktime';
-    if (lower.endsWith('.webm')) return 'video/webm';
-    if (lower.endsWith('.avi')) return 'video/x-msvideo';
-    if (lower.endsWith('.mkv')) return 'video/x-matroska';
-    if (lower.endsWith('.m4v')) return 'video/x-m4v';
-    return 'video/mp4';
-  }
-
-  Future<VideoNoteCaptureResult?> _stopRecording() async {
-    final ctrl = _ctrl;
-    if (ctrl == null || !_recording || _recordActionInFlight) return null;
-    _recordActionInFlight = true;
-    try {
-      if (!ctrl.value.isRecordingVideo) {
-        if (mounted) setState(() => _recording = false);
-        return null;
-      }
-      final xfile = await ctrl.stopVideoRecording();
-
-      // Stop separate audio recording in parallel.
-      String? audioPath;
-      if (_useSeparateMic) {
-        try {
-          audioPath = await _audioRecorder?.stop();
-        } catch (_) {}
-        // Use the path we saved at start (some backends return null on stop).
-        audioPath ??= _audioRecordPath;
-      }
-
-      final startedAt = _recordStartAt;
-      _recordStartAt = null;
-      if (mounted) setState(() => _recording = false);
-
-      final elapsed = startedAt == null
-          ? Duration.zero
-          : DateTime.now().difference(startedAt);
-      if (elapsed < _minRecordDuration) {
-        await _deleteXFileIfPossible(xfile);
-        if (audioPath != null) {
-          try {
-            await File(audioPath).delete();
-          } catch (_) {}
-        }
-        _audioRecordPath = null;
-        if (!mounted) return null;
-        HapticFeedback.selectionClick();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Hold a bit longer to record')),
-        );
-        return null;
-      }
-
-      final videoLength = await _xFileLength(xfile);
-      if (videoLength == null || videoLength == 0) {
-        if (audioPath != null) {
-          try {
-            await File(audioPath).delete();
-          } catch (_) {}
-        }
-        _audioRecordPath = null;
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Recorded file is empty')),
-          );
-        }
-        return null;
-      }
-
-      // Merge separate audio track into the video.
-      if (audioPath != null && await File(audioPath).exists()) {
-        if (mounted) setState(() => _merging = true);
-        try {
-          final merged = await _mergeVideoAudio(
-            videoPath: xfile.path,
-            audioPath: audioPath,
-          );
-          if (merged != null) {
-            // Clean up originals.
-            try {
-              await File(xfile.path).delete();
-            } catch (_) {}
-            try {
-              await File(audioPath).delete();
-            } catch (_) {}
-            _audioRecordPath = null;
-            return VideoNoteCaptureResult(
-              xFile: XFile(merged),
-              mime: 'video/mp4',
-            );
-          }
-        } finally {
-          if (mounted) setState(() => _merging = false);
-        }
-        // Merge failed — fall back to video without the selected mic.
-        try {
-          await File(audioPath).delete();
-        } catch (_) {}
-        _audioRecordPath = null;
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Could not apply selected mic — using default audio.',
-              ),
-            ),
-          );
-        }
-        // Re-enable camera audio and fall through to return original video.
-        // The camera video has no audio since enableAudio was false.
-        // For now, return the video-only file.
-        return VideoNoteCaptureResult(
-          xFile: xfile,
-          mime: _mimeForPath(xfile.path),
-        );
-      }
-
-      return VideoNoteCaptureResult(
-        xFile: xfile,
-        mime: _mimeForPath(xfile.path),
+      if (!mounted) return;
+      setState(() => _isProcessing = false);
+      Navigator.of(context).pop(
+        VideoNoteCaptureResult(
+          xFile: prepared.xFile,
+          mime: prepared.mime,
+          metadata: prepared.metadata,
+        ),
       );
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _recording = false;
-          _merging = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to stop recording: $e')),
-        );
-      }
-      return null;
-    } finally {
-      _recordActionInFlight = false;
+      if (!mounted) return;
+      setState(() {
+        _isProcessing = false;
+        _isRecording = false;
+      });
+      _showSnack('Failed to finalize video note: $e');
     }
   }
 
-  Future<int?> _xFileLength(XFile file) async {
-    try {
-      return await file.length();
-    } catch (_) {
+  Future<void> _cancel() async {
+    if (_isRecording) {
       try {
-        return (await file.readAsBytes()).length;
-      } catch (_) {
-        return null;
-      }
-    }
-  }
-
-  Future<void> _deleteXFileIfPossible(XFile file) async {
-    if (kIsWeb) return;
-    try {
-      await File(file.path).delete();
-    } catch (_) {}
-  }
-
-  static const _mergerChannel =
-      MethodChannel('com.example.sgtp_flutter/video_merger');
-
-  /// Merges [videoPath] (video-only) with [audioPath] into a new MP4 file.
-  ///
-  /// On Android / iOS uses a native platform channel (MediaMuxer /
-  /// AVMutableComposition — no extra library required).
-  /// On Windows / Linux falls back to a system `ffmpeg` process.
-  Future<String?> _mergeVideoAudio({
-    required String videoPath,
-    required String audioPath,
-  }) async {
-    if (kIsWeb) return null;
-    final tmpDir = await getTemporaryDirectory();
-    final outputPath =
-        '${tmpDir.path}/vnote_merged_${DateTime.now().millisecondsSinceEpoch}.mp4';
-
-    // --- Native channel (Android / iOS / macOS) ---
-    if (!Platform.isWindows && !Platform.isLinux) {
-      try {
-        final result = await _mergerChannel.invokeMethod<String>(
-          'mergeVideoAudio',
-          {'videoPath': videoPath, 'audioPath': audioPath, 'outputPath': outputPath},
-        );
-        if (result != null && await File(result).exists()) return result;
+        final file = await _controller?.stopVideoRecording();
+        if (file != null) {
+          await _deleteFile(file.path);
+        }
       } catch (_) {}
-    }
-
-    // --- System ffmpeg process (Windows / Linux / fallback) ---
-    try {
-      final result = await Process.run('ffmpeg', [
-        '-i', videoPath,
-        '-i', audioPath,
-        '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-c:v', 'copy',
-        '-c:a', 'aac',
-        '-shortest',
-        '-y',
-        outputPath,
-      ]);
-      if (result.exitCode == 0 && await File(outputPath).exists()) {
-        return outputPath;
-      }
-    } catch (_) {}
-
-    return null;
-  }
-
-  Future<void> _stopAndConfirmSend() async {
-    final capture = await _stopRecording();
-    if (capture == null || !mounted) return;
-
-    HapticFeedback.lightImpact();
-    final send = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Send this video note?'),
-        actions: [
-          OutlinedButton(
-            onPressed: () => Navigator.pop(context, false),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFFFF453A),
-              side: const BorderSide(color: Color(0xFFFF453A)),
-            ),
-            child: const Text('No'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Yes'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    if (send == true) {
-      Navigator.of(context).pop(capture);
-      return;
-    }
-    await _deleteXFileIfPossible(capture.xFile);
-  }
-
-  Future<void> _stopAndDiscardRecording() async {
-    try {
-      final xfile = await _ctrl?.stopVideoRecording();
-      if (xfile != null) {
-        await _deleteXFileIfPossible(xfile);
-      }
-    } catch (_) {}
-    // Also stop and discard any separate audio.
-    try {
-      await _audioRecorder?.stop();
-    } catch (_) {}
-    _cleanupAudioFile();
-  }
-
-  void _cancel() {
-    if (_recording) {
-      () async {
-        await _stopAndDiscardRecording();
-      }();
     }
     if (mounted) Navigator.of(context).pop(null);
   }
 
-  void _onPressDown() {
-    _pointerDown = true;
-    _pressWasRecording = _recording;
-    _holdIntent = false;
-    _holdIntentTimer?.cancel();
-
-    if (_recording) return;
-
-    _startRecording();
-    _holdIntentTimer = Timer(_holdIntentThreshold, () {
-      if (!mounted) return;
-      if (_pointerDown && _recording) {
-        setState(() => _holdIntent = true);
-        HapticFeedback.selectionClick();
-      }
-    });
+  Future<void> _deleteFile(String path) async {
+    if (kIsWeb || path.isEmpty) return;
+    try {
+      await File(path).delete();
+    } catch (_) {}
   }
 
-  void _onPressUp() {
-    _pointerDown = false;
-    _holdIntentTimer?.cancel();
-
-    if (!_recording) return;
-
-    if (_holdIntent) {
-      _stopAndConfirmSend();
-      return;
-    }
-
-    if (_toggleMode && _pressWasRecording) {
-      _stopAndConfirmSend();
-    }
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
-  void _onPressCancel() {
-    _pointerDown = false;
-    _holdIntentTimer?.cancel();
-    if (_recording && _holdIntent) {
-      _stopAndConfirmSend();
-    }
+  String _format(Duration value) {
+    final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = value.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = _controller;
+    final previewReady = controller != null && controller.value.isInitialized;
+    final progress =
+        (_elapsed.inMilliseconds / _maxDuration.inMilliseconds).clamp(0.0, 1.0);
+
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          const ColoredBox(color: Colors.black),
-
-          Center(child: _buildPreview()),
-
-          // Top bar
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    _CircleBtn(icon: Icons.close, onTap: _cancel),
-                    const Spacer(),
-                    const Text(
-                      'Video note',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (_cameras.length > 1)
-                      _CircleBtn(
-                        icon: Icons.flip_camera_ios_outlined,
-                        onTap: _swapCamera,
-                      )
-                    else
-                      const SizedBox(width: 40),
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          // Recording progress ring
-          if (_recording)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Center(
-                  child: SizedBox(
-                    width: 240,
-                    height: 240,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 4,
-                      valueColor:
-                          const AlwaysStoppedAnimation(Color(0xFFFF3B30)),
+      backgroundColor: const Color(0xFF06070A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: _isProcessing ? null : _cancel,
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _isProcessing ? 'Preparing…' : _format(_elapsed),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ),
-              ),
-            ),
-
-          // Merging overlay
-          if (_merging)
-            Positioned.fill(
-              child: ColoredBox(
-                color: Colors.black54,
-                child: const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(color: Colors.white),
-                      SizedBox(height: 16),
-                      Text(
-                        'Processing audio…',
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
-                      ),
-                    ],
+                  const Spacer(),
+                  IconButton(
+                    onPressed:
+                        (_isProcessing || _isRecording || _cameras.length < 2)
+                            ? null
+                            : _swapCamera,
+                    icon: const Icon(Icons.cameraswitch_rounded,
+                        color: Colors.white),
                   ),
-                ),
+                ],
               ),
             ),
-
-          // Bottom controls
-          if (!_merging)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: Stack(
+                    alignment: Alignment.center,
                     children: [
-                      AnimatedOpacity(
-                        opacity: _recording ? 0.0 : 1.0,
-                        duration: const Duration(milliseconds: 200),
-                        child: const Text(
-                          'Tap or hold to record',
-                          style:
-                              TextStyle(color: Colors.white70, fontSize: 14),
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: _isRecording
+                                ? const Color(0xFF0A84FF)
+                                : const Color(0x33FFFFFF),
+                            width: 6,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      GestureDetector(
-                        onTapDown: (_) => _onPressDown(),
-                        onTapUp: (_) => _onPressUp(),
-                        onTapCancel: _onPressCancel,
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 150),
-                          width: _recording ? 80 : 72,
-                          height: _recording ? 80 : 72,
-                          decoration: BoxDecoration(
+                      ClipOval(
+                        child: Container(
+                          color: const Color(0xFF151821),
+                          child: previewReady
+                              ? Transform(
+                                  alignment: Alignment.center,
+                                  transform:
+                                      (_isFrontCamera && Platform.isWindows)
+                                          ? Matrix4.diagonal3Values(
+                                              -1.0,
+                                              1.0,
+                                              1.0,
+                                            )
+                                          : Matrix4.identity(),
+                                  child: FittedBox(
+                                    fit: BoxFit.cover,
+                                    child: SizedBox(
+                                      width: controller
+                                              .value.previewSize?.height ??
+                                          1,
+                                      height:
+                                          controller.value.previewSize?.width ??
+                                              1,
+                                      child: CameraPreview(controller),
+                                    ),
+                                  ),
+                                )
+                              : Center(
+                                  child: _initializing
+                                      ? const CircularProgressIndicator()
+                                      : Text(
+                                          _error ?? 'Camera unavailable',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                ),
+                        ),
+                      ),
+                      if (_isProcessing)
+                        Container(
+                          decoration: const BoxDecoration(
+                            color: Color(0x9906070A),
                             shape: BoxShape.circle,
-                            color: _recording
-                                ? const Color(0xFFFF3B30)
-                                : Colors.white,
-                            boxShadow: [
-                              BoxShadow(
-                                color: (_recording
-                                        ? const Color(0xFFFF3B30)
-                                        : Colors.white)
-                                    .withAlpha(60),
-                                blurRadius: 24,
-                                spreadRadius: 2,
-                              ),
-                            ],
                           ),
-                          child: Icon(
-                            _recording
-                                ? Icons.stop_rounded
-                                : Icons.videocam_rounded,
-                            color: _recording ? Colors.white : Colors.black,
-                            size: 32,
+                          child: const Padding(
+                            padding: EdgeInsets.all(28),
+                            child: CircularProgressIndicator(),
+                          ),
+                        ),
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CircularProgressIndicator(
+                            value: progress,
+                            strokeWidth: 6,
+                            color: const Color(0xFFFF453A),
+                            backgroundColor: Colors.transparent,
                           ),
                         ),
                       ),
@@ -697,98 +393,38 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPreview() {
-    if (_initialising) {
-      return const SizedBox(
-        width: 240,
-        height: 240,
-        child: Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        ),
-      );
-    }
-    if (_initError != null) {
-      return SizedBox(
-        width: 240,
-        height: 240,
-        child: Center(
-          child: Text(
-            _initError!,
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
-    }
-    final ctrl = _ctrl;
-    if (ctrl == null) return const SizedBox.shrink();
-
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        SizedBox(
-          width: 240,
-          height: 240,
-          child: ClipOval(child: _coverCameraPreview(ctrl)),
-        ),
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: 240,
-          height: 240,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: _recording
-                  ? const Color(0xFFFF3B30)
-                  : const Color(0xFF0A84FF),
-              width: _recording ? 4 : 3,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  GestureDetector(
+                    onTap: _isProcessing
+                        ? null
+                        : (_isRecording ? _stopAndPrepare : _startRecording),
+                    child: Container(
+                      width: 86,
+                      height: 86,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _isRecording
+                            ? const Color(0xFFFF453A)
+                            : const Color(0xFF0A84FF),
+                      ),
+                      child: Icon(
+                        _isRecording
+                            ? Icons.stop_rounded
+                            : Icons.fiber_manual_record,
+                        color: Colors.white,
+                        size: _isRecording ? 38 : 44,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
         ),
-      ],
-    );
-  }
-
-  Widget _coverCameraPreview(CameraController ctrl) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = constraints.biggest;
-        final preview = CameraPreview(ctrl);
-        final previewAspect = ctrl.value.aspectRatio;
-        final widgetAspect = size.width / size.height;
-        final scale = previewAspect / widgetAspect;
-        return Transform.scale(
-          scale: scale < 1 ? 1 / scale : scale,
-          child: Center(child: preview),
-        );
-      },
-    );
-  }
-}
-
-/// Small semi-transparent circle button.
-class _CircleBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _CircleBtn({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.black.withAlpha(120),
-        ),
-        child: Icon(icon, color: Colors.white, size: 20),
       ),
     );
   }

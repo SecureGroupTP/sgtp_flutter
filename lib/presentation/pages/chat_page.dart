@@ -733,17 +733,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         MaterialPageRoute(
           builder: (_) => VideoNoteRecorderPage(
             preferredCameraName: preferred?.name,
-            preferredMicrophone: _selectedMicrophoneDevice(),
           ),
           fullscreenDialog: true,
         ),
       );
       if (capture != null && context.mounted) {
-        context
-            .read<ChatBloc>()
-            .add(ChatSendVideoNoteFile(
+        context.read<ChatBloc>().add(ChatSendVideoNoteFile(
               xFile: capture.xFile,
               mime: capture.mime,
+              metadata: capture.metadata,
+              isFrontCameraSource: true,
             ));
         _scrollToBottom();
       }

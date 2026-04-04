@@ -3,6 +3,7 @@ import 'package:cross_file/cross_file.dart';
 import 'package:equatable/equatable.dart';
 import '../../../data/sgtp_client.dart';
 import '../../../domain/entities/message.dart';
+import '../../../domain/entities/video_note_metadata.dart';
 
 abstract class ChatEvent extends Equatable {
   const ChatEvent();
@@ -79,9 +80,17 @@ class ChatSendVideoNote extends ChatEvent {
 class ChatSendVideoNoteFile extends ChatEvent {
   final XFile xFile;
   final String mime;
-  const ChatSendVideoNoteFile({required this.xFile, required this.mime});
+  final VideoNoteMetadata? metadata;
+  final bool isFrontCameraSource;
+
+  const ChatSendVideoNoteFile({
+    required this.xFile,
+    required this.mime,
+    this.metadata,
+    this.isFrontCameraSource = false,
+  });
   @override
-  List<Object?> get props => [mime];
+  List<Object?> get props => [mime, metadata, isFrontCameraSource];
 }
 
 /// Send a read receipt for a given message id.

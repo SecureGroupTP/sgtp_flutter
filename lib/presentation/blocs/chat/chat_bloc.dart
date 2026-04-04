@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/app_logger.dart';
+import '../../../core/video_note_pipeline.dart';
 
 import '../../../data/repositories/chat_metadata_repository.dart';
 import '../../../data/sgtp_client.dart';
@@ -305,7 +306,22 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onSendVideoNoteFile(
       ChatSendVideoNoteFile event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendVideoNoteFromXFile(event.xFile, event.mime);
+    final prepared = event.metadata != null
+        ? PreparedVideoNote(
+            xFile: event.xFile,
+            mime: event.mime,
+            metadata: event.metadata!,
+          )
+        : await VideoNotePipeline.prepare(
+            sourceFile: event.xFile,
+            isFrontCamera: event.isFrontCameraSource,
+            hasAudio: true,
+          );
+    await _client!.sendVideoNoteFromXFile(
+      prepared.xFile,
+      prepared.mime,
+      metadata: prepared.metadata,
+    );
     await _touchChatActivity();
   }
 

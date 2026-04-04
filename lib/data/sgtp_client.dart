@@ -31,6 +31,7 @@ import 'transport/tcp_sgtp_transport.dart';
 import 'transport/websocket_sgtp_transport.dart';
 import '../domain/entities/message.dart';
 import '../domain/entities/peer.dart';
+import '../domain/entities/video_note_metadata.dart';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -59,6 +60,7 @@ class _PendingFile {
   final int totalChunks;
   final String senderUUID;
   final String mediaType;
+  final VideoNoteMetadata? videoNoteMetadata;
 
   // Disk-based storage: chunks are written to tempPath as they arrive.
   // Only one copy of the data ever exists — on disk, never fully in RAM.
@@ -79,6 +81,7 @@ class _PendingFile {
     required this.totalChunks,
     required this.senderUUID,
     required this.mediaType,
+    this.videoNoteMetadata,
     RandomAccessFile? raf,
     this.tempPath,
     List<Uint8List?>? memChunks,
@@ -95,6 +98,7 @@ class _PendingFile {
     required int totalChunks,
     required String senderUUID,
     required String mediaType,
+    VideoNoteMetadata? videoNoteMetadata,
     required bool useDisk,
     required String tempPath,
   }) async {
@@ -102,16 +106,27 @@ class _PendingFile {
       final f = File(tempPath);
       final raf = await f.open(mode: FileMode.write);
       return _PendingFile._(
-        fileId: fileId, name: name, mime: mime,
-        totalSize: totalSize, totalChunks: totalChunks,
-        senderUUID: senderUUID, mediaType: mediaType,
-        raf: raf, tempPath: tempPath,
+        fileId: fileId,
+        name: name,
+        mime: mime,
+        totalSize: totalSize,
+        totalChunks: totalChunks,
+        senderUUID: senderUUID,
+        mediaType: mediaType,
+        videoNoteMetadata: videoNoteMetadata,
+        raf: raf,
+        tempPath: tempPath,
       );
     }
     return _PendingFile._(
-      fileId: fileId, name: name, mime: mime,
-      totalSize: totalSize, totalChunks: totalChunks,
-      senderUUID: senderUUID, mediaType: mediaType,
+      fileId: fileId,
+      name: name,
+      mime: mime,
+      totalSize: totalSize,
+      totalChunks: totalChunks,
+      senderUUID: senderUUID,
+      mediaType: mediaType,
+      videoNoteMetadata: videoNoteMetadata,
       memChunks: List.filled(totalChunks, null),
     );
   }
@@ -785,11 +800,11 @@ class SgtpClient {
   /// [readChunk] is called with (start, end) and must return exactly
   /// (end – start) bytes read from whatever backing store the caller has.
   /// Only that slice is held in RAM during each iteration.
-  Future<void> _sendMediaChunked(
-      String name, String mime, String mediaType, int totalSize,
-      Future<Uint8List> Function(int start, int end) readChunk,
+  Future<void> _sendMediaChunked(String name, String mime, String mediaType,
+      int totalSize, Future<Uint8List> Function(int start, int end) readChunk,
       {ChatMessage? echoMessage,
       void Function(double progress)? onProgress,
+      Map<String, dynamic>? extraPayload,
       bool persistChunks = true}) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
     // Web signing/encryption overhead per frame is noticeably higher.
@@ -828,6 +843,9 @@ class SgtpClient {
         };
         if (i == 0) {
           _attachChatAvatar(payload);
+          if (extraPayload != null && extraPayload.isNotEmpty) {
+            payload.addAll(extraPayload);
+          }
         }
         if (totalChunks > 1) {
           payload['chunk'] = i;
@@ -888,13 +906,18 @@ class SgtpClient {
 
   /// Send media from an in-memory buffer (images, voice, short video notes).
   Future<void> _sendMedia(
-      Uint8List bytes, String name, String mime, String mediaType,
-      {ChatMessage? echoMessage,
-      void Function(double progress)? onProgress}) =>
+          Uint8List bytes, String name, String mime, String mediaType,
+          {ChatMessage? echoMessage,
+          Map<String, dynamic>? extraPayload,
+          void Function(double progress)? onProgress}) =>
       _sendMediaChunked(
-        name, mime, mediaType, bytes.length,
+        name,
+        mime,
+        mediaType,
+        bytes.length,
         (start, end) async => Uint8List.sublistView(bytes, start, end),
         echoMessage: echoMessage,
+        extraPayload: extraPayload,
         onProgress: onProgress,
       );
 
@@ -908,6 +931,7 @@ class SgtpClient {
   Future<void> _sendMediaFromXFile(
       XFile xFile, String name, String mime, String mediaType,
       {ChatMessage? echoMessage,
+      Map<String, dynamic>? extraPayload,
       void Function(double progress)? onProgress}) async {
     final fileSize = await xFile.length();
 
@@ -933,6 +957,7 @@ class SgtpClient {
         return Uint8List.sublistView(block!, lo, hi);
       },
       echoMessage: echoMessage,
+      extraPayload: extraPayload,
       onProgress: onProgress,
       // Media chunks are already cached to disk — persisting 2000+ JSON records
       // per file wastes disk I/O without any replay benefit.
@@ -1005,7 +1030,11 @@ class SgtpClient {
   }
 
   /// Send a circular video note (кружок) from an in-memory buffer (recorder).
-  Future<void> sendVideoNote(Uint8List bytes, String mime) {
+  Future<void> sendVideoNote(
+    Uint8List bytes,
+    String mime, {
+    VideoNoteMetadata? metadata,
+  }) {
     final name =
         'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     return () async {
@@ -1016,6 +1045,7 @@ class SgtpClient {
         name,
         mime,
         'video_note',
+        extraPayload: metadata?.toPayloadJson(),
         echoMessage: ChatMessage(
           id: echoId,
           senderUUID: uuidBytesToHex(_myUUID),
@@ -1024,6 +1054,7 @@ class SgtpClient {
           mediaMime: mime,
           mediaName: name,
           localMediaPath: localPath,
+          videoNoteMetadata: metadata,
           type: MessageType.videoNote,
           receivedAt: DateTime.now(),
           isFromHistory: false,
@@ -1035,7 +1066,11 @@ class SgtpClient {
 
   /// Send a circular video note from a file (picked from gallery) —
   /// streams from disk, never loads the full file into RAM.
-  Future<void> sendVideoNoteFromXFile(XFile xFile, String mime) async {
+  Future<void> sendVideoNoteFromXFile(
+    XFile xFile,
+    String mime, {
+    VideoNoteMetadata? metadata,
+  }) async {
     final name =
         'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     final echoId = uuidBytesToHex(generateUUIDv7());
@@ -1045,6 +1080,7 @@ class SgtpClient {
       name,
       mime,
       'video_note',
+      extraPayload: metadata?.toPayloadJson(),
       echoMessage: ChatMessage(
         id: echoId,
         senderUUID: uuidBytesToHex(_myUUID),
@@ -1052,6 +1088,7 @@ class SgtpClient {
         mediaMime: mime,
         mediaName: name,
         localMediaPath: localPath ?? xFile.path,
+        videoNoteMetadata: metadata,
         type: MessageType.videoNote,
         receivedAt: DateTime.now(),
         isFromHistory: false,
@@ -1723,6 +1760,8 @@ class SgtpClient {
     final name = p['name'] as String? ?? 'file';
     final mime = p['mime'] as String? ?? 'application/octet-stream';
     final totalSize = (p['size'] as num?)?.toInt() ?? 0;
+    final videoNoteMetadata =
+        type == 'video_note' ? VideoNoteMetadata.fromPayloadJson(p) : null;
     final chunk = base64.decode(p['data'] as String? ?? '');
     final shouldCacheToDisk =
         type == 'video' || type == 'video_note' || type == 'voice';
@@ -1736,6 +1775,7 @@ class SgtpClient {
               fileId, sender, name, mime, type, chunk, history, recvAt,
               senderPub: senderPub,
               isFromMe: isFromMe,
+              videoNoteMetadata: videoNoteMetadata,
               localMediaPath: localPath)));
       return;
     }
@@ -1763,6 +1803,7 @@ class SgtpClient {
           totalChunks: ct,
           senderUUID: sender,
           mediaType: type,
+          videoNoteMetadata: videoNoteMetadata,
           useDisk: shouldCacheToDisk,
           tempPath: tempPath,
         );
@@ -1787,6 +1828,7 @@ class SgtpClient {
               fileId, sender, name, mime, type, bytes, history, recvAt,
               senderPub: senderPub,
               isFromMe: isFromMe,
+              videoNoteMetadata: pf.videoNoteMetadata,
               localMediaPath: localPath)));
     }
   }
@@ -1795,6 +1837,7 @@ class SgtpClient {
           String type, Uint8List bytes, bool history, DateTime recvAt,
           {String? senderPub,
           required bool isFromMe,
+          VideoNoteMetadata? videoNoteMetadata,
           String? localMediaPath}) =>
       switch (type) {
         'gif' => ChatMessage(
@@ -1832,6 +1875,7 @@ class SgtpClient {
             mediaMime: mime,
             mediaName: name,
             localMediaPath: localMediaPath,
+            videoNoteMetadata: videoNoteMetadata,
             type: MessageType.videoNote,
             receivedAt: recvAt,
             isFromHistory: history,
