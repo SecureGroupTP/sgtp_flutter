@@ -1089,6 +1089,20 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     return width > 0 && height > 0;
   }
 
+  double _displayAspectRatio(Player? player) {
+    final params = player?.state.videoParams;
+    final width = (params?.dw ?? player?.state.width ?? 0).toDouble();
+    final height = (params?.dh ?? player?.state.height ?? 0).toDouble();
+    if (width > 0 && height > 0) {
+      return width / height;
+    }
+    final meta = widget.metadata;
+    if (meta != null && meta.width > 0 && meta.height > 0) {
+      return meta.width / meta.height;
+    }
+    return 1.0;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1310,15 +1324,23 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   Widget _coverFillVideo({
     required VideoController controller,
   }) {
-    // Use BoxFit.cover so the Video widget's internal FittedBox scales the
-    // texture (whose rect already has the correct post-rotation dimensions from
-    // mpv) to cover the 1:1 circle area while maintaining the correct aspect
-    // ratio.  The parent ClipOval clips the overflow to a circle.
-    return Video(
-      controller: controller,
-      controls: NoVideoControls,
-      fit: BoxFit.cover,
-      fill: const Color(0x00000000),
+    final aspectRatio = _displayAspectRatio(_player);
+    final fitted = _fitSizeForAspectRatio(
+      aspectRatio: aspectRatio,
+      maxWidth: 200,
+      maxHeight: 200,
+    );
+    return Center(
+      child: SizedBox(
+        width: fitted.width,
+        height: fitted.height,
+        child: Video(
+          controller: controller,
+          controls: NoVideoControls,
+          fit: BoxFit.cover,
+          fill: const Color(0x00000000),
+        ),
+      ),
     );
   }
 

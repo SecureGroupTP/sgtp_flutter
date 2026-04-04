@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new_min/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image/image.dart' as img;
@@ -32,9 +30,6 @@ class VideoNotePipeline {
 
   static Future<PreparedVideoNote> prepare({
     required XFile sourceFile,
-    required bool isFrontCamera,
-    bool mirrorFrontCamera = true,
-    bool hasAudio = true,
   }) async {
     if (kIsWeb) {
       throw UnsupportedError('Video note processing is not supported on web.');
@@ -46,9 +41,9 @@ class VideoNotePipeline {
 
     final filters = <String>[
       'crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2',
-      if (isFrontCamera && mirrorFrontCamera) 'hflip',
       'scale=$targetSize:$targetSize:flags=bicubic',
       'setsar=1',
+      'setdar=1',
       'format=yuv420p',
     ];
 
@@ -101,8 +96,7 @@ class VideoNotePipeline {
     final videoFile = File(normalizedPath);
     final fileSize = await videoFile.length();
     final mediaInfo = await _probeMediaInfo(normalizedPath);
-    final durationMs =
-        _readDurationMs(mediaInfo).clamp(0, maxDurationSeconds * 1000);
+    final durationMs = mediaInfo.durationMs.clamp(0, maxDurationSeconds * 1000);
 
     final thumbnail = await _buildThumbnail(normalizedPath, tmpDir.path);
 
@@ -113,7 +107,7 @@ class VideoNotePipeline {
         durationMs: durationMs,
         width: targetSize,
         height: targetSize,
-        hasAudio: hasAudio,
+        hasAudio: mediaInfo.hasAudio,
         fileSizeBytes: fileSize,
         thumbnailBytes: thumbnail.bytes,
         thumbnailWidth: thumbnail.width,
@@ -141,45 +135,49 @@ class VideoNotePipeline {
     }
   }
 
-  static Future<Map<String, dynamic>> _probeMediaInfo(String path) async {
-    const entries = 'format=duration:stream=codec_type';
-    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
-      final session = await FFprobeKit.execute(
-        _quoteArgs([
-          '-v',
-          'error',
-          '-show_entries',
-          entries,
-          '-of',
-          'json',
-          path,
-        ]),
-      );
-      final output = await session.getOutput();
-      if (output == null || output.trim().isEmpty) return const {};
-      return (jsonDecode(output) as Map).cast<String, dynamic>();
-    }
-
-    final result = await Process.run('ffprobe', [
-      '-v',
-      'error',
-      '-show_entries',
-      entries,
-      '-of',
-      'json',
+  static Future<_MediaProbeResult> _probeMediaInfo(String path) async {
+    final arguments = [
+      '-i',
       path,
-    ]);
-    if (result.exitCode != 0 || (result.stdout as String).trim().isEmpty) {
-      return const {};
-    }
-    return (jsonDecode(result.stdout as String) as Map).cast<String, dynamic>();
-  }
+      '-f',
+      'null',
+      '-',
+    ];
 
-  static int _readDurationMs(Map<String, dynamic> info) {
-    final format = info['format'];
-    if (format is! Map) return 0;
-    final duration = double.tryParse('${format['duration'] ?? 0}') ?? 0;
-    return (duration * 1000).round();
+    String logs = '';
+    if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      final session = await FFmpegKit.execute(_quoteArgs(arguments));
+      logs = await session.getAllLogsAsString() ?? '';
+      final returnCode = await session.getReturnCode();
+      if (!ReturnCode.isSuccess(returnCode) &&
+          !(logs.contains('Duration:') || logs.contains('Stream #'))) {
+        throw StateError('ffmpeg probe failed: $logs');
+      }
+    } else {
+      final result = await Process.run('ffmpeg', arguments);
+      logs = '${result.stdout}\n${result.stderr}';
+      if (result.exitCode != 0 &&
+          !(logs.contains('Duration:') || logs.contains('Stream #'))) {
+        throw StateError('ffmpeg probe failed: ${result.stderr}');
+      }
+    }
+
+    final durationMatch = RegExp(
+      r'Duration:\s*(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?',
+    ).firstMatch(logs);
+    final hours = int.tryParse(durationMatch?.group(1) ?? '') ?? 0;
+    final minutes = int.tryParse(durationMatch?.group(2) ?? '') ?? 0;
+    final seconds = int.tryParse(durationMatch?.group(3) ?? '') ?? 0;
+    final fractionRaw = durationMatch?.group(4) ?? '0';
+    final fractionMs = int.tryParse(
+          fractionRaw.padRight(3, '0').substring(0, 3),
+        ) ??
+        0;
+    final durationMs =
+        (((hours * 60 + minutes) * 60) + seconds) * 1000 + fractionMs;
+    final hasAudio =
+        RegExp(r'Stream #.*Audio:', caseSensitive: false).hasMatch(logs);
+    return _MediaProbeResult(durationMs: durationMs, hasAudio: hasAudio);
   }
 
   static Future<_ThumbnailResult> _buildThumbnail(
@@ -222,20 +220,24 @@ class VideoNotePipeline {
     required int timestampMs,
   }) async {
     final outputPath = '$tempDirPath/videonote_thumb_$timestampMs.jpg';
-    await _runFfmpeg([
-      '-y',
-      '-ss',
-      (timestampMs / 1000).toStringAsFixed(3),
-      '-i',
-      videoPath,
-      '-frames:v',
-      '1',
-      '-vf',
-      'scale=120:120:force_original_aspect_ratio=decrease,pad=120:120:(ow-iw)/2:(oh-ih)/2:color=black',
-      '-q:v',
-      '5',
-      outputPath,
-    ]);
+    try {
+      await _runFfmpeg([
+        '-y',
+        '-ss',
+        (timestampMs / 1000).toStringAsFixed(3),
+        '-i',
+        videoPath,
+        '-frames:v',
+        '1',
+        '-vf',
+        'scale=120:120:force_original_aspect_ratio=decrease,pad=120:120:(ow-iw)/2:(oh-ih)/2:color=black',
+        '-q:v',
+        '5',
+        outputPath,
+      ]);
+    } catch (_) {
+      return null;
+    }
     final file = File(outputPath);
     if (!await file.exists()) return null;
     final bytes = await file.readAsBytes();
@@ -277,6 +279,16 @@ class VideoNotePipeline {
       return '"$escaped"';
     }).join(' ');
   }
+}
+
+class _MediaProbeResult {
+  final int durationMs;
+  final bool hasAudio;
+
+  const _MediaProbeResult({
+    required this.durationMs,
+    required this.hasAudio,
+  });
 }
 
 class _ThumbnailResult {

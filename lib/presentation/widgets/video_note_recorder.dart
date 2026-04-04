@@ -51,12 +51,6 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   String? _error;
   Duration _elapsed = Duration.zero;
 
-  CameraDescription? get _currentCamera =>
-      _cameras.isEmpty ? null : _cameras[_cameraIndex];
-
-  bool get _isFrontCamera =>
-      _currentCamera?.lensDirection == CameraLensDirection.front;
-
   @override
   void initState() {
     super.initState();
@@ -212,8 +206,6 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
 
       final prepared = await VideoNotePipeline.prepare(
         sourceFile: recorded,
-        isFrontCamera: _isFrontCamera,
-        hasAudio: true,
       );
       await _deleteFile(recorded.path);
 
@@ -331,29 +323,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                         child: Container(
                           color: const Color(0xFF151821),
                           child: previewReady
-                              ? Transform(
-                                  alignment: Alignment.center,
-                                  transform:
-                                      (_isFrontCamera && Platform.isWindows)
-                                          ? Matrix4.diagonal3Values(
-                                              -1.0,
-                                              1.0,
-                                              1.0,
-                                            )
-                                          : Matrix4.identity(),
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    child: SizedBox(
-                                      width: controller
-                                              .value.previewSize?.height ??
-                                          1,
-                                      height:
-                                          controller.value.previewSize?.width ??
-                                              1,
-                                      child: CameraPreview(controller),
-                                    ),
-                                  ),
-                                )
+                              ? _CameraPreviewFrame(controller: controller)
                               : Center(
                                   child: _initializing
                                       ? const CircularProgressIndicator()
@@ -424,6 +394,36 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CameraPreviewFrame extends StatelessWidget {
+  final CameraController controller;
+
+  const _CameraPreviewFrame({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final previewSize = controller.value.previewSize;
+    final width = previewSize?.width ?? 1;
+    final height = previewSize?.height ?? 1;
+    final aspectRatio = (width > 0 && height > 0) ? width / height : 1.0;
+    final fitted = applyBoxFit(
+      BoxFit.cover,
+      Size(aspectRatio, 1),
+      const Size(1, 1),
+    ).destination;
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: fitted.width * 1000,
+        height: fitted.height * 1000,
+        child: AspectRatio(
+          aspectRatio: aspectRatio,
+          child: CameraPreview(controller),
         ),
       ),
     );
