@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 bool get isCameraSupported => true;
 
 /// Returns true if the camera supports continuous image streaming (for ReaderWidget).
-bool get cameraSupportsStreaming => true;
+bool get cameraSupportsStreaming => !kIsWeb;
 
 /// Human-readable reason why camera is not supported, or null if it is.
 String? get cameraUnsupportedReason => null;

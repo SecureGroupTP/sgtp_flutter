@@ -44,7 +44,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   final _scrollCtrl = ScrollController();
   final _recorder = AudioRecorder();
   final _focusNode = FocusNode();
-  final _keyboardFocusNode = FocusNode();
   bool _infoShown = false;
   bool _isRecording = false;
   String? _recordingPath;
@@ -143,7 +142,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     _focusNode.dispose();
-    _keyboardFocusNode.dispose();
     _recorder.dispose();
     super.dispose();
   }
@@ -630,11 +628,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickAndSendVideoNote(BuildContext context) async {
-    final result = await FilePicker.platform
-        .pickFiles(type: FileType.video, withData: false);
-    if (result == null || result.xFiles.isEmpty) return;
-    final xFile = result.xFiles.first;
-    final ext = xFile.name.split('.').last.toLowerCase();
+    final picked = await _pickVideoFile();
+    if (picked == null) return;
+    final xFile = picked.$1;
+    final ext = picked.$2;
     if (!_videoExtensions.contains(ext)) {
       if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
       return;
@@ -648,11 +645,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
   Future<void> _pickAndSendVideo(BuildContext context) async {
     final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
-    final result = await FilePicker.platform
-        .pickFiles(type: FileType.video, withData: false);
-    if (result == null || result.xFiles.isEmpty) return;
-    final xFile = result.xFiles.first;
-    final ext = xFile.name.split('.').last.toLowerCase();
+    final picked = await _pickVideoFile();
+    if (picked == null) return;
+    final xFile = picked.$1;
+    final ext = picked.$2;
     if (!_videoExtensions.contains(ext)) {
       if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
       return;
@@ -759,9 +755,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       return;
     }
     try {
-      final tmpDir = await getTemporaryDirectory();
-      _recordingPath =
-          '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      if (kIsWeb) {
+        // record_web ignores filesystem path and returns a blob URL on stop.
+        _recordingPath = 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      } else {
+        final tmpDir = await getTemporaryDirectory();
+        _recordingPath =
+            '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      }
       await _recorder.start(
           RecordConfig(
               encoder: AudioEncoder.aacLc,
@@ -783,9 +784,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _isHoldRecording = false;
       });
       if (path == null) return;
-      final file = File(path);
-      if (!file.existsSync() || file.lengthSync() == 0) return;
-      final bytes = await file.readAsBytes();
+      final bytes = await _readRecordingBytes(path);
+      if (bytes == null || bytes.isEmpty) return;
       if (context.mounted) {
         if (_isVideoNoteMode) {
           // Video note (circle): audio-only fallback recorded as m4a,
@@ -800,7 +800,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         }
         _scrollToBottom();
       }
-      await file.delete().catchError((_) {});
+      if (!kIsWeb) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
     } catch (e) {
       setState(() {
         _isRecording = false;
@@ -808,6 +812,20 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       });
       if (context.mounted) _showSnack(context, 'Error: $e');
     }
+  }
+
+  Future<Uint8List?> _readRecordingBytes(String path) async {
+    if (kIsWeb) {
+      try {
+        final bytes = await XFile(path).readAsBytes();
+        return bytes.isEmpty ? null : bytes;
+      } catch (_) {
+        return null;
+      }
+    }
+    final file = File(path);
+    if (!file.existsSync() || file.lengthSync() == 0) return null;
+    return file.readAsBytes();
   }
 
   String _videoMimeForExt(String ext) => switch (ext.toLowerCase()) {
@@ -821,10 +839,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _ => 'video/mp4',
       };
 
-  Future<void> _pasteImageFromClipboard(BuildContext context) async {
+  Future<void> _pasteImageFromClipboard(
+    BuildContext context, {
+    Uint8List? preloadedBytes,
+  }) async {
     try {
       final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
-      final imageBytes = await Pasteboard.image;
+      final imageBytes = preloadedBytes ?? await Pasteboard.image;
       if (imageBytes == null) {
         _showSnack(context, 'No image in clipboard');
         return;
@@ -919,6 +940,52 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       behavior: SnackBarBehavior.floating,
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
     ));
+  }
+
+  Future<(XFile, String)?> _pickVideoFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      withData: kIsWeb,
+    );
+    if (result == null) return null;
+
+    XFile? xFile = result.xFiles.isNotEmpty ? result.xFiles.first : null;
+
+    if (kIsWeb && xFile == null && result.files.isNotEmpty) {
+      final file = result.files.first;
+      final bytes = file.bytes;
+      if (bytes != null && bytes.isNotEmpty) {
+        xFile = XFile.fromData(
+          bytes,
+          name: file.name,
+          mimeType: file.extension != null
+              ? _videoMimeForExt(file.extension!.toLowerCase())
+              : 'video/mp4',
+        );
+      }
+    }
+
+    if (xFile == null) return null;
+
+    final ext = _videoExtFromName(xFile.name);
+    return (xFile, ext);
+  }
+
+  String _videoExtFromName(String name) {
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || dot >= name.length - 1) return '';
+    return name.substring(dot + 1).toLowerCase();
+  }
+
+  Future<void> _handlePasteShortcut(BuildContext context) async {
+    if (!mounted) return;
+    try {
+      final imageBytes = await Pasteboard.image;
+      if (!mounted || imageBytes == null) return;
+      await _pasteImageFromClipboard(context, preloadedBytes: imageBytes);
+    } catch (_) {
+      // Let native text paste continue silently when image clipboard is blocked.
+    }
   }
 
   /// Show dialog to edit chat name and avatar.
@@ -1083,22 +1150,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               Navigator.of(context).pop();
             }
           },
-          child: RawKeyboardListener(
-            focusNode: _keyboardFocusNode,
-            onKey: (event) {
-              if (event.isKeyPressed(LogicalKeyboardKey.keyV) &&
-                  (event.isControlPressed || event.isMetaPressed)) {
-                // Check what's in the clipboard first.
-                // If it's an image → show paste preview (regardless of focus).
-                // If it's text → let the focused TextField handle it natively.
-                Pasteboard.image.then((imageBytes) {
-                  if (imageBytes != null && context.mounted) {
-                    _pasteImageFromClipboard(context);
-                  }
-                  // If no image, do nothing — TextField already handled the
-                  // text paste via its own keyboard shortcut processing.
-                });
-              }
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: (_, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final isPaste = event.logicalKey == LogicalKeyboardKey.keyV &&
+                  (HardwareKeyboard.instance.isControlPressed ||
+                      HardwareKeyboard.instance.isMetaPressed);
+              if (!isPaste) return KeyEventResult.ignored;
+              unawaited(_handlePasteShortcut(context));
+              // Keep default text paste behavior in focused TextField.
+              return KeyEventResult.ignored;
             },
             child: Scaffold(
               backgroundColor: const Color(0xFF0A0A0C),

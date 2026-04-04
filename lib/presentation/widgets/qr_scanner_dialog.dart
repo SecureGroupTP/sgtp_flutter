@@ -80,10 +80,10 @@ class _QrScannerDialogState extends State<QrScannerDialog>
     final file = await ImagePicker().pickImage(source: ImageSource.gallery);
     if (file == null || !mounted) return;
 
-    final code = await zx.readBarcodeImagePath(
-      file,
+    final bytes = await file.readAsBytes();
+    final code = zx.readBarcode(
+      bytes,
       DecodeParams(
-        imageFormat: 0x03000102, // ImageFormat.rgb
         tryHarder: true,
         tryRotate: true,
       ),
@@ -357,9 +357,10 @@ class _WindowsScannerState extends State<_WindowsScanner> {
     try {
       final file = await _ctrl!.takePicture();
       if (_disposed) return;
-      final code = await zx.readBarcodeImagePath(
-        file,
-        DecodeParams(imageFormat: 0x03000102, tryHarder: true, tryRotate: true),
+      final bytes = await file.readAsBytes();
+      final code = zx.readBarcode(
+        bytes,
+        DecodeParams(tryHarder: true, tryRotate: true),
       );
       if (!_disposed && code.isValid && code.text != null) {
         widget.onScan(code);

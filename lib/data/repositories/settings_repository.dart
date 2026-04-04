@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -723,17 +724,23 @@ class SettingsRepository {
     final map = raw != null
         ? (json.decode(raw) as Map<String, dynamic>)
         : <String, dynamic>{};
-    map[profile.pubkeyHex] = {
+    final entry = <String, dynamic>{
       'username': profile.username,
       'fullname': profile.fullname,
       'sha256': profile.avatarSha256Hex,
       'updatedAt': profile.updatedAt,
     };
+    if (kIsWeb && profile.avatarBytes != null && profile.avatarBytes!.isNotEmpty) {
+      entry['avatarB64'] = base64Encode(profile.avatarBytes!);
+    }
+    map[profile.pubkeyHex] = entry;
     await p.setString(key, json.encode(map));
-    if (profile.avatarBytes != null && profile.avatarBytes!.isNotEmpty) {
-      final dir = await _contactAvatarDir(nodeId);
-      final file = File('${dir.path}/${profile.pubkeyHex}.bin');
-      await file.writeAsBytes(profile.avatarBytes!);
+    if (!kIsWeb && profile.avatarBytes != null && profile.avatarBytes!.isNotEmpty) {
+      try {
+        final dir = await _contactAvatarDir(nodeId);
+        final file = File('${dir.path}/${profile.pubkeyHex}.bin');
+        await file.writeAsBytes(profile.avatarBytes!);
+      } catch (_) {}
     }
   }
 
@@ -748,9 +755,20 @@ class SettingsRepository {
     if (entry == null) return null;
 
     Uint8List? avatar;
-    final dir = await _contactAvatarDir(nodeId);
-    final file = File('${dir.path}/$pubkeyHex.bin');
-    if (await file.exists()) avatar = await file.readAsBytes();
+    if (kIsWeb) {
+      final b64 = entry['avatarB64'] as String?;
+      if (b64 != null && b64.isNotEmpty) {
+        try {
+          avatar = base64Decode(b64);
+        } catch (_) {}
+      }
+    } else {
+      try {
+        final dir = await _contactAvatarDir(nodeId);
+        final file = File('${dir.path}/$pubkeyHex.bin');
+        if (await file.exists()) avatar = await file.readAsBytes();
+      } catch (_) {}
+    }
 
     return ContactProfile(
       pubkeyHex: pubkeyHex,
@@ -770,13 +788,31 @@ class SettingsRepository {
     if (raw == null) return {};
     final map = json.decode(raw) as Map<String, dynamic>;
     final result = <String, ContactProfile>{};
-    final dir = await _contactAvatarDir(nodeId);
+    Directory? dir;
+    if (!kIsWeb) {
+      try {
+        dir = await _contactAvatarDir(nodeId);
+      } catch (_) {}
+    }
     for (final kv in map.entries) {
       final pubkeyHex = kv.key;
       final data = kv.value as Map<String, dynamic>;
       Uint8List? avatar;
-      final file = File('${dir.path}/$pubkeyHex.bin');
-      if (await file.exists()) avatar = await file.readAsBytes();
+      if (kIsWeb) {
+        final b64 = data['avatarB64'] as String?;
+        if (b64 != null && b64.isNotEmpty) {
+          try {
+            avatar = base64Decode(b64);
+          } catch (_) {}
+        }
+      } else {
+        try {
+          final base = dir;
+          if (base == null) throw Exception('No avatar directory');
+          final file = File('${base.path}/$pubkeyHex.bin');
+          if (await file.exists()) avatar = await file.readAsBytes();
+        } catch (_) {}
+      }
       result[pubkeyHex] = ContactProfile(
         pubkeyHex: pubkeyHex,
         username: data['username'] as String?,
