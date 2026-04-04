@@ -720,16 +720,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// In video-note mode: open camera recorder. In voice mode: start hold-recording.
   Future<void> _startHoldRecordingOrCamera(BuildContext context) async {
     final useCamera = _isVideoNoteMode && _hasCamera;
-    if (kIsWeb && useCamera) {
-      // Web fallback: keep "video note" UX, but use mic-only circular notes
-      // to avoid unstable camera recorder paths in browsers.
-      if (_hasMicrophone) {
-        await _startHoldRecording(context);
-      } else {
-        await _pickAndSendVideoNote(context);
-      }
-      return;
-    }
     if (useCamera) {
       // Open full-screen camera recorder; get recorded file + detected MIME.
       CameraDescription? preferred;
@@ -813,17 +803,18 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       if (path == null) return;
       final bytes = await _readRecordingBytes(path);
       if (bytes == null || bytes.isEmpty) return;
+      final recordedMime = kIsWeb ? 'audio/mp4' : 'audio/m4a';
       if (context.mounted) {
         if (_isVideoNoteMode) {
           // Video note (circle): audio-only fallback recorded as m4a,
           // sent as video_note type so the receiver renders it as a circle bubble.
           context
               .read<ChatBloc>()
-              .add(ChatSendVideoNote(bytes: bytes, mime: 'audio/m4a'));
+              .add(ChatSendVideoNote(bytes: bytes, mime: recordedMime));
         } else {
           context
               .read<ChatBloc>()
-              .add(ChatSendVoice(bytes: bytes, mime: 'audio/m4a'));
+              .add(ChatSendVoice(bytes: bytes, mime: recordedMime));
         }
         _scrollToBottom();
       }

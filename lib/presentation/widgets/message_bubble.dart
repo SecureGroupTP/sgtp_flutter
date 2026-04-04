@@ -1191,7 +1191,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
 
       // Some containers expose duration before video dimensions.
       // Probe a short decode step to materialize the first frame metadata.
-      if (!hasVideoTrack && !isDeclaredAudioOnly) {
+      if (!kIsWeb && !hasVideoTrack && !isDeclaredAudioOnly) {
         try {
           await _ensureAudible(player);
           await player.play();
@@ -1213,8 +1213,10 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         controller = null;
       }
 
-      await _ensureAudible(player);
-      await player.play();
+      if (autoplay) {
+        await _ensureAudible(player);
+        await player.play();
+      }
 
       if (hasVideoTrack && controller != null) {
         // Wait until the native renderer has produced at least one frame.
@@ -1226,14 +1228,16 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         } catch (_) {
           // Timeout is tolerated: the Video widget will update once frames arrive.
         }
-      } else if (!autoplay) {
+      } else if (!autoplay && !kIsWeb) {
         // Audio-only: give the player a moment to buffer.
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
 
       if (!autoplay) {
-        await player.pause();
-        await player.seek(Duration.zero);
+        if (!kIsWeb) {
+          await player.pause();
+          await player.seek(Duration.zero);
+        }
       }
 
       if (!mounted) {
@@ -1289,7 +1293,11 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       return;
     }
     await _ensureAudible(_player);
-    await _player?.playOrPause();
+    if (_playing) {
+      await _player?.pause();
+    } else {
+      await _player?.play();
+    }
   }
 
   Widget _coverFillVideo({
@@ -2451,6 +2459,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     _player.onPlayerComplete.listen((_) {
       if (mounted) setState(() => _position = Duration.zero);
     });
+    _player.setVolume(1.0);
     _prefetchDuration();
   }
 
@@ -2546,6 +2555,7 @@ class _VoicePlayerState extends State<_VoicePlayer> {
     setState(() => _loading = true);
     try {
       await _prepareTmp();
+      await _player.setVolume(1.0);
       if (kIsWeb) {
         await _player.play(UrlSource(_tmpPath!));
       } else {
