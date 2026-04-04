@@ -1060,14 +1060,12 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   Player? _player;
   VideoController? _controller;
   StreamSubscription<bool>? _playingSub;
-  StreamSubscription<VideoParams>? _paramsSub;
   bool _loading = false;
   bool _initialized = false;
   bool _failed = false;
   bool _playing = false;
   bool _hasVideoTrack = true;
   Duration _duration = Duration.zero;
-  double? _aspectRatio;
   String? _tmpPath;
   bool _ownsTempFile = false;
 
@@ -1094,7 +1092,6 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
   @override
   void dispose() {
     _playingSub?.cancel();
-    _paramsSub?.cancel();
     _player?.dispose();
     if (_ownsTempFile && _tmpPath != null) {
       try {
@@ -1102,28 +1099,6 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       } catch (_) {}
     }
     super.dispose();
-  }
-
-  double _resolveVideoNoteAspectRatio(Player player) {
-    final params = player.state.videoParams;
-    var aspect = params.aspect ??
-        ((params.dw != null && params.dh != null && params.dh! > 0)
-            ? params.dw! / params.dh!
-            : null) ??
-        ((player.state.width != null &&
-                player.state.height != null &&
-                player.state.height! > 0)
-            ? player.state.width! / player.state.height!
-            : 1.0);
-
-    if (!aspect.isFinite || aspect <= 0) aspect = 1.0;
-
-    // Account for rotation metadata (fixes "flattened" / squished look).
-    final rotate = (params.rotate ?? 0) % 360;
-    if (rotate == 90 || rotate == 270) {
-      aspect = 1 / aspect;
-    }
-    return aspect;
   }
 
   String _tempExtForMime(String? mime) => switch (mime) {
@@ -1199,7 +1174,6 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
       // Surface any player error (e.g. unsupported codec, file unreadable).
       if (playerError != null) throw Exception(playerError);
 
-      final aspectRatio = _resolveVideoNoteAspectRatio(player);
       final isDeclaredAudioOnly =
           (widget.mediaMime ?? '').toLowerCase().startsWith('audio/');
       var hasVideoTrack = _hasRenderableVideoTrack(player);
@@ -1277,21 +1251,7 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
         _initialized = true;
         _loading = false;
         _duration = readyPlayer.state.duration;
-        _aspectRatio =
-            aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
         _hasVideoTrack = hasVideoTrack;
-      });
-
-      // params.rotate often arrives after dw/dh on Android/Windows.
-      // Subscribe so the aspect ratio corrects itself as soon as rotation
-      // metadata is populated, preventing squishing and apparent 90° tilt.
-      _paramsSub?.cancel();
-      _paramsSub = readyPlayer.stream.videoParams.listen((p) {
-        if (!mounted) return;
-        final updated = _resolveVideoNoteAspectRatio(readyPlayer);
-        if (updated.isFinite && updated > 0 && updated != _aspectRatio) {
-          setState(() => _aspectRatio = updated);
-        }
       });
     } catch (e) {
       try {
@@ -1323,63 +1283,22 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
 
   Widget _coverFillVideo({
     required VideoController controller,
-    required double aspectRatio,
   }) {
-    // `Positioned.fill` gives the Video widget tight 1:1 constraints (the circle
-    // is square), so passing `aspectRatio` to Video is ignored by the layout and
-    // the video is always stretched to fill — causing squishing and apparent
-    // rotation on videos with rotate=90/270 metadata.
-    //
-    // Fix: size the Video widget manually to the correct cover-fill dimensions
-    // via OverflowBox so the texture is never stretched. BoxFit.fill is safe
-    // here because the SizedBox already has the correct post-rotation aspect.
-    // The circular ClipOval higher up clips the overflow.
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = constraints.biggest;
-        final containerAspect =
-            size.height > 0 ? size.width / size.height : 1.0;
-        final safeAspect =
-            (aspectRatio.isFinite && aspectRatio > 0) ? aspectRatio : containerAspect;
-
-        final double vW, vH;
-        if (safeAspect >= containerAspect) {
-          // Wider than container → fill height, overflow width
-          vH = size.height;
-          vW = size.height * safeAspect;
-        } else {
-          // Taller than container → fill width, overflow height
-          vW = size.width;
-          vH = size.width / safeAspect;
-        }
-
-        return OverflowBox(
-          maxWidth: vW,
-          maxHeight: vH,
-          child: SizedBox(
-            width: vW,
-            height: vH,
-            // Counteract libmpv mis-applying front-camera horizontal-flip
-            // metadata on Android and Windows.
-            child: Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.diagonal3Values(-1, 1, 1),
-              child: Video(
-                controller: controller,
-                controls: NoVideoControls,
-                fit: BoxFit.fill,
-              ),
-            ),
-          ),
-        );
-      },
+    // Use BoxFit.cover so the Video widget's internal FittedBox scales the
+    // texture (whose rect already has the correct post-rotation dimensions from
+    // mpv) to cover the 1:1 circle area while maintaining the correct aspect
+    // ratio.  The parent ClipOval clips the overflow to a circle.
+    return Video(
+      controller: controller,
+      controls: NoVideoControls,
+      fit: BoxFit.cover,
+      fill: const Color(0x00000000),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final player = _player;
-    final sourceAspectRatio = _aspectRatio ?? 1.0;
     return SizedBox.expand(
       child: Stack(
         fit: StackFit.expand,
@@ -1400,7 +1319,6 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
             Positioned.fill(
               child: _coverFillVideo(
                 controller: _controller!,
-                aspectRatio: sourceAspectRatio,
               ),
             ),
 
