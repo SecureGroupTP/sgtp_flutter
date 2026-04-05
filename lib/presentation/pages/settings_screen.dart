@@ -147,6 +147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _serversExpanded = false;
   String? _preferredNodeId;
   String? _preferredAccountId;
+  int _accountLoadSeq = 0;
 
   bool get _isDesktop =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
@@ -205,7 +206,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // Load account-scoped identity/profile/contacts for the active account.
     if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
-      await _loadAccountData(preferredAccountId, applyConfig: false);
+      final loadSeq = ++_accountLoadSeq;
+      await _loadAccountData(
+        preferredAccountId,
+        applyConfig: false,
+        expectedLoadSeq: loadSeq,
+      );
     } else {
       await _setMicrophoneCheckEnabled(false);
       await _setCameraCheckEnabled(false);
@@ -276,11 +282,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadAccountData(String accountId,
-      {bool applyConfig = true}) async {
+      {bool applyConfig = true, int? expectedLoadSeq}) async {
+    bool isStale() =>
+        expectedLoadSeq != null && expectedLoadSeq != _accountLoadSeq;
     // Profile (nickname + username + avatar)
     final nickname = await _settings.loadUserNicknameForNode(accountId);
     final username = await _settings.loadUserUsernameForNode(accountId);
     final avatar = await _settings.loadUserAvatarForNode(accountId);
+    if (isStale()) return;
 
     // Identity key
     Uint8List? privBytes;
@@ -298,6 +307,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // Contacts (whitelist)
     final entries = await _settings.loadWhitelistEntriesForNode(accountId);
+    if (isStale()) return;
 
     if (!mounted) return;
     setState(() {
@@ -316,7 +326,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _wlEntries = entries;
       _nicknames = _buildNicknames(entries);
     });
+    if (isStale()) return;
     await _loadCaptureDevicesForAccount(accountId);
+    if (isStale()) return;
 
     widget.onUserAvatarChanged?.call(avatar);
     if (applyConfig) _tryApplyConfig();
@@ -1520,12 +1532,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _selectAccountId(String accountId) async {
     final id = accountId.trim();
     if (id.isEmpty) return;
+    final loadSeq = ++_accountLoadSeq;
     setState(() {
       _preferredAccountId = id;
       _accountsExpanded = false;
     });
     await _settings.setLastAccountId(id);
-    await _loadAccountData(id, applyConfig: true);
+    await _loadAccountData(id, applyConfig: true, expectedLoadSeq: loadSeq);
   }
 
   Future<void> _deleteAccount(String accountId) async {
@@ -1570,7 +1583,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _reloadNodes();
     final nextAccount = _activeAccountId();
     if (nextAccount != null) {
-      await _loadAccountData(nextAccount, applyConfig: true);
+      final loadSeq = ++_accountLoadSeq;
+      await _loadAccountData(
+        nextAccount,
+        applyConfig: true,
+        expectedLoadSeq: loadSeq,
+      );
     }
   }
 
@@ -1913,7 +1931,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _SettingsNavTile(
                 iconBgColor: const Color(0xFF004a99),
-                iconLabel: 'K',
+                icon: Icons.vpn_key_outlined,
                 title: 'Key Settings',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.key),
@@ -1921,7 +1939,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
                 iconBgColor: const Color(0xFF1a7431),
-                iconLabel: 'C',
+                icon: Icons.chat_bubble_outline_rounded,
                 title: 'Chats & Media',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.chats),
@@ -1929,7 +1947,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
                 iconBgColor: const Color(0xFF995a00),
-                iconLabel: 'D',
+                icon: Icons.storage_rounded,
                 title: 'Data',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.data),
@@ -1937,7 +1955,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
                 iconBgColor: const Color(0xFF6a308a),
-                iconLabel: 'L',
+                icon: Icons.bug_report_outlined,
                 title: 'Logs & Debug',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.system),
@@ -1945,7 +1963,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
                 iconBgColor: const Color(0xFF4a4a4f),
-                iconLabel: 'I',
+                icon: Icons.info_outline_rounded,
                 title: 'App Information',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.help),
@@ -2537,7 +2555,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildAccountSwitcher() {
     final accountIds = _accountIds();
     final activeAccountId = _activeAccountId();
-    final hasAccounts = accountIds.isNotEmpty;
     final activeName =
         activeAccountId != null ? _accountName(activeAccountId) : 'No accounts';
     final activeAvatar =
@@ -2597,16 +2614,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
-          if (!_nodesLoading && hasAccounts)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-              child: Text(
-                'Account: ${activeName}',
-                style: const TextStyle(
-                    fontSize: 13, color: AppColors.textSecondary),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
           // ── Dropdown ───────────────────────────────────────────────────
           if (_accountsExpanded) ...[
             const Divider(height: 1, thickness: 1, color: AppColors.border),
@@ -4032,13 +4039,13 @@ class _StatusBox extends StatelessWidget {
 
 class _SettingsNavTile extends StatelessWidget {
   final Color iconBgColor;
-  final String iconLabel;
+  final IconData icon;
   final String title;
   final VoidCallback onTap;
 
   const _SettingsNavTile({
     required this.iconBgColor,
-    required this.iconLabel,
+    required this.icon,
     required this.title,
     required this.onTap,
   });
@@ -4061,13 +4068,10 @@ class _SettingsNavTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Center(
-                child: Text(
-                  iconLabel,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  ),
+                child: Icon(
+                  icon,
+                  size: 20,
+                  color: Colors.white.withValues(alpha: 0.9),
                 ),
               ),
             ),

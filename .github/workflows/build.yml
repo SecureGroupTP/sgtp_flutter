@@ -54,6 +54,27 @@ jobs:
             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             libasound2-dev libmpv-dev mpv
 
+      - name: Install Windows dependencies
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          choco install -y gstreamer gstreamer-devel
+
+          $gstRoot = [Environment]::GetEnvironmentVariable('GSTREAMER_1_0_ROOT_MSVC_X86_64', 'Machine')
+          if ([string]::IsNullOrWhiteSpace($gstRoot)) {
+            $gstRoot = 'C:\gstreamer\1.0\msvc_x86_64'
+          }
+          $gstBin = Join-Path $gstRoot 'bin'
+          $gstHeader = Join-Path $gstRoot 'include\gstreamer-1.0\gst\gst.h'
+
+          if (-not (Test-Path $gstHeader)) {
+            Write-Error "GStreamer headers not found at: $gstHeader"
+            exit 1
+          }
+
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $gstBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Enable desktop
         if: matrix.platform != 'android'
         run: flutter config --enable-${{ matrix.platform }}-desktop
