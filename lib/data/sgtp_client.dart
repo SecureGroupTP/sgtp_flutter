@@ -61,6 +61,7 @@ class _PendingFile {
   final String senderUUID;
   final String mediaType;
   final VideoNoteMetadata? videoNoteMetadata;
+  String? senderPublicKeyHex;
 
   // Disk-based storage: chunks are written to tempPath as they arrive.
   // Only one copy of the data ever exists — on disk, never fully in RAM.
@@ -82,6 +83,7 @@ class _PendingFile {
     required this.senderUUID,
     required this.mediaType,
     this.videoNoteMetadata,
+    this.senderPublicKeyHex,
     RandomAccessFile? raf,
     this.tempPath,
     List<Uint8List?>? memChunks,
@@ -99,6 +101,7 @@ class _PendingFile {
     required String senderUUID,
     required String mediaType,
     VideoNoteMetadata? videoNoteMetadata,
+    String? senderPublicKeyHex,
     required bool useDisk,
     required String tempPath,
   }) async {
@@ -114,6 +117,7 @@ class _PendingFile {
         senderUUID: senderUUID,
         mediaType: mediaType,
         videoNoteMetadata: videoNoteMetadata,
+        senderPublicKeyHex: senderPublicKeyHex,
         raf: raf,
         tempPath: tempPath,
       );
@@ -127,6 +131,7 @@ class _PendingFile {
       senderUUID: senderUUID,
       mediaType: mediaType,
       videoNoteMetadata: videoNoteMetadata,
+      senderPublicKeyHex: senderPublicKeyHex,
       memChunks: List.filled(totalChunks, null),
     );
   }
@@ -499,14 +504,56 @@ class SgtpClient {
       return const PersistedHistoryBatchResult(loaded: 0, total: 0);
     }
     final total = await repo.count();
+    // Media messages are persisted chunk-by-chunk. A single video can span
+    // hundreds of history records, so loading only the default 100 records may
+    // return an incomplete tail of chunks and the video won't reconstruct.
+    // For the initial open, pull a larger window to reliably include full media.
+    final effectiveLimit =
+        offsetFromEnd == 0 ? max(limit, 1200) : limit;
     final records = await repo.readBatchFromEnd(
       offsetFromEnd: offsetFromEnd,
-      limit: limit,
+      limit: effectiveLimit,
     );
+    var loaded = records.length;
     for (final record in records) {
       await _emitRecordFromHistory(record);
     }
-    return PersistedHistoryBatchResult(loaded: records.length, total: total);
+
+    // If initial history starts from the middle of a chunked media payload
+    // (typical for large videos), keep backfilling older records until pending
+    // media assembly completes or we hit a sane safety cap.
+    if (offsetFromEnd == 0 && _pendingFiles.isNotEmpty) {
+      const backfillStep = 400;
+      const maxBackfillRecords = 8000;
+      var backfilled = 0;
+
+      while (_pendingFiles.isNotEmpty &&
+          (offsetFromEnd + loaded) < total &&
+          backfilled < maxBackfillRecords) {
+        final take = min(backfillStep, maxBackfillRecords - backfilled);
+        final older = await repo.readBatchFromEnd(
+          offsetFromEnd: offsetFromEnd + loaded,
+          limit: take,
+        );
+        if (older.isEmpty) break;
+        for (final record in older) {
+          await _emitRecordFromHistory(record);
+        }
+        loaded += older.length;
+        backfilled += older.length;
+      }
+
+      // Avoid leaking temp pending-file handles if history ended mid-file.
+      if (_pendingFiles.isNotEmpty) {
+        final dangling = _pendingFiles.keys.toList();
+        for (final fileId in dangling) {
+          final fut = _pendingFiles.remove(fileId);
+          fut?.then((pf) => pf.close()).catchError((_) {});
+        }
+      }
+    }
+
+    return PersistedHistoryBatchResult(loaded: loaded, total: total);
   }
 
   /// User avatar is local UI-only and is not exchanged in SGTP MESSAGE payloads.
@@ -814,6 +861,7 @@ class SgtpClient {
         : _config.mediaChunkSizeBytes;
     final fileId = echoMessage?.id ?? uuidBytesToHex(generateUUIDv7());
     final totalChunks = (totalSize / chunkSize).ceil().clamp(1, 9999);
+    final myPubHex = _hex(_config.myPublicKey);
 
     // Emit echo immediately so the sender sees the bubble right away.
     // The echo id IS the fileId so read-receipts from receivers will match.
@@ -835,6 +883,7 @@ class SgtpClient {
         final Map<String, dynamic> payload = {
           'v': 1,
           'type': mediaType,
+          'pub': myPubHex,
           'file_id': fileId,
           'name': name,
           'mime': mime,
@@ -959,9 +1008,10 @@ class SgtpClient {
       echoMessage: echoMessage,
       extraPayload: extraPayload,
       onProgress: onProgress,
-      // Media chunks are already cached to disk — persisting 2000+ JSON records
-      // per file wastes disk I/O without any replay benefit.
-      persistChunks: false,
+      // Persist XFile-based media chunks too.
+      // Otherwise messages are visible only in current RAM session and can
+      // disappear from history after process/device restart.
+      persistChunks: true,
     );
   }
 
@@ -1679,7 +1729,7 @@ class SgtpClient {
     _maybeApplyChatAvatarFromPayload(p, senderUUIDHex, history);
     final senderPub = p['pub'] as String?;
     final mine = _isOwnMessage(senderUUIDHex, senderPub);
-    if (senderPub != null && !history)
+    if (senderPub != null)
       _peerPublicKeys[senderUUIDHex] = senderPub;
 
     switch (p['type'] as String?) {
@@ -1812,12 +1862,16 @@ class SgtpClient {
           senderUUID: sender,
           mediaType: type,
           videoNoteMetadata: videoNoteMetadata,
+          senderPublicKeyHex: senderPub,
           useDisk: shouldCacheToDisk,
           tempPath: tempPath,
         );
       }();
     }
     final pf = await _pendingFiles[fileId]!;
+    if (senderPub != null && senderPub.isNotEmpty) {
+      pf.senderPublicKeyHex = senderPub;
+    }
     await pf.writeChunk(ci, chunk);
 
     if (pf.isComplete) {
@@ -1831,11 +1885,13 @@ class SgtpClient {
           ? Uint8List(0)
           : (pf.assembleMemory() ?? Uint8List(0));
 
+      final effectiveSenderPub = pf.senderPublicKeyHex ?? senderPub;
+      final effectiveIsFromMe = _isOwnMessage(sender, effectiveSenderPub);
       _eventController.add(SgtpMessageReceived(
           message: _media(
               fileId, sender, name, mime, type, bytes, history, recvAt,
-              senderPub: senderPub,
-              isFromMe: isFromMe,
+              senderPub: effectiveSenderPub,
+              isFromMe: effectiveIsFromMe,
               videoNoteMetadata: pf.videoNoteMetadata,
               localMediaPath: localPath)));
     }

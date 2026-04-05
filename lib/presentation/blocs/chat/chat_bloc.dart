@@ -36,6 +36,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       : _metaRepo = ChatMetadataRepository(accountId: accountId),
         super(const ChatState()) {
     on<ChatConnect>(_onConnect);
+    on<ChatOpenOffline>(_onOpenOffline);
     on<ChatReconnect>(_onReconnect);
     on<ChatProbeConnection>(_onProbeConnection);
     on<ChatSendMessage>(_onSendMessage);
@@ -63,6 +64,91 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onConnect(ChatConnect event, Emitter<ChatState> emit) async {
     _lastConnectEvent = event;
     await _doConnect(event, emit);
+  }
+
+  Future<void> _onOpenOffline(
+      ChatOpenOffline event, Emitter<ChatState> emit) async {
+    final oldSub = _eventSub;
+    final oldClient = _client;
+    _eventSub = null;
+    _client = null;
+    await oldSub?.cancel();
+    await oldClient?.close();
+
+    // Keep the connect payload so "Connect" can bring this room online later.
+    final connectEvent = ChatConnect(event.config, nicknames: event.nicknames);
+    _lastConnectEvent = connectEvent;
+
+    _activeServerAddress = event.config.serverAddr.trim();
+    _persistedHistoryLoaded = 0;
+
+    final roomUUIDHex = event.config.roomUUID
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    final pubHex = event.config.myPublicKey
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+
+    // Prefer persisted metadata for title/avatar in offline preview.
+    String chatName = event.config.chatName;
+    Uint8List? chatAvatar = event.config.chatAvatarBytes;
+    try {
+      final saved = await _metaRepo.loadChat(
+        roomUUIDHex,
+        serverAddress: _activeServerAddress,
+      );
+      if (saved != null) {
+        chatName = saved.name;
+        chatAvatar = saved.avatarBytes;
+      }
+    } catch (_) {}
+
+    final sessionId = ++_sessionId;
+    final client = SgtpClient(event.config.copyWithMeta(
+      name: chatName,
+      avatar: chatAvatar,
+    ));
+    if (state.userAvatarBytes != null) {
+      client.setUserAvatar(state.userAvatarBytes);
+    }
+    _client = client;
+
+    _eventSub = client.events.listen(
+      (sgtpEvent) =>
+          add(ChatInternalSgtpEvent(sgtpEvent, sessionId: sessionId)),
+      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()),
+          sessionId: sessionId)),
+    );
+
+    emit(state.copyWith(
+      status: ChatStatus.disconnected,
+      messages: [],
+      peerUUIDs: [],
+      peerNicknames: {},
+      peerPublicKeys: {},
+      peerAvatars: {},
+      readReceipts: {},
+      hasMoreHistory: true,
+      isLoadingHistory: false,
+      isMaster: false,
+      roomUUID: roomUUIDHex,
+      myPublicKeyHex: pubHex,
+      nicknames: event.nicknames,
+      chatName: chatName,
+      chatAvatarBytes: chatAvatar,
+      clearError: true,
+    ));
+
+    final initial = await client.replayPersistedHistoryBatch(
+      offsetFromEnd: _persistedHistoryLoaded,
+      limit: _historyBatchSize,
+    );
+    _persistedHistoryLoaded += initial.loaded;
+    if (!isClosed) {
+      emit(state.copyWith(
+        hasMoreHistory: _persistedHistoryLoaded < initial.total,
+      ));
+    }
   }
 
   Future<void> _onReconnect(

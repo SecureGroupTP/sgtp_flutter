@@ -184,15 +184,52 @@ class RoomsPageState extends State<RoomsPage> {
           ...storedNotActive.map((chat) => SavedChatTile(
                 uuid: chat.uuid,
                 metadata: chat,
-                onConnect: () => context.read<RoomsBloc>().add(RoomsJoinRoom(
-                      chat.uuid,
-                      serverAddress: chat.serverAddress,
-                    )),
+                onOpen: () => _openStoredChatPreview(context, chat),
                 onRemove: () => _deleteStoredChat(chat),
               )),
         ],
       ],
     );
+  }
+
+  void _openStoredChatPreview(BuildContext context, ChatMetadata metadata) {
+    final roomsBloc = context.read<RoomsBloc>();
+    final existing = _findRoomEntry(roomsBloc.state, metadata);
+    if (existing != null) {
+      _openRoom(context, existing);
+      return;
+    }
+
+    StreamSubscription<RoomsState>? sub;
+    sub = roomsBloc.stream.listen((state) {
+      final created = _findRoomEntry(state, metadata);
+      if (created != null) {
+        sub?.cancel();
+        if (!mounted) return;
+        _openRoom(context, created);
+      }
+    });
+    Future<void>.delayed(const Duration(seconds: 5), () {
+      sub?.cancel();
+    });
+
+    roomsBloc.add(RoomsJoinRoom(
+      metadata.uuid,
+      serverAddress: metadata.serverAddress,
+      openOffline: true,
+    ));
+  }
+
+  RoomEntry? _findRoomEntry(RoomsState state, ChatMetadata metadata) {
+    final targetUuid = metadata.uuid.trim().toLowerCase();
+    final targetServer = _serverKey(metadata.serverAddress);
+    for (final room in state.rooms) {
+      if (room.roomUUID.trim().toLowerCase() == targetUuid &&
+          _serverKey(room.serverAddress) == targetServer) {
+        return room;
+      }
+    }
+    return null;
   }
 
   void _openRoom(BuildContext context, RoomEntry entry) {
@@ -485,14 +522,14 @@ enum _RoomAction { open, copyUUID, shareQR, remove }
 class SavedChatTile extends StatelessWidget {
   final String uuid;
   final ChatMetadata? metadata;
-  final VoidCallback onConnect;
+  final VoidCallback onOpen;
   final VoidCallback onRemove;
 
   const SavedChatTile({
     super.key,
     required this.uuid,
     this.metadata,
-    required this.onConnect,
+    required this.onOpen,
     required this.onRemove,
   });
 
@@ -502,9 +539,9 @@ class SavedChatTile extends StatelessWidget {
     final title = hasMetadataName ? metadata!.name : '${uuid.substring(0, 8)}…';
     final subtitle = metadata?.updatedAt != null
         ? 'Stored · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
-        : 'Stored · tap to connect';
+        : 'Stored · tap to open';
     return _ChatTile(
-      onTap: onConnect,
+      onTap: onOpen,
       leading: metadata?.avatarBytes != null
           ? RoomAvatar(
               avatarBytes: metadata!.avatarBytes,

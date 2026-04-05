@@ -163,17 +163,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           _wentToBackground = null;
 
           final status = bloc.state.status;
-          final isDown =
-              status == ChatStatus.disconnected || status == ChatStatus.error;
-
-          if (isDown) {
-            AppLogger.w('[Chat] reconnecting after background '
-                '(${bgDuration.inSeconds}s, status=$status)');
-            bloc.add(const ChatReconnect());
-          } else {
+          if (status == ChatStatus.ready) {
             AppLogger.i('[Chat] probing live connection after background '
                 '(${bgDuration.inSeconds}s, status=$status)');
             bloc.add(const ChatProbeConnection());
+          } else if (status == ChatStatus.error) {
+            // Error state may represent a broken transport session.
+            // Attempt recovery automatically, but keep "disconnected" manual.
+            AppLogger.w('[Chat] reconnecting after background '
+                '(${bgDuration.inSeconds}s, status=$status)');
+            bloc.add(const ChatReconnect());
           }
         }
         _flushPendingReadReceipts();
@@ -1496,7 +1495,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             Text(
               state.status == ChatStatus.ready
                   ? 'No messages yet. Say hello!'
-                  : 'Waiting for connection…',
+                  : 'No local history yet. Press Connect to join chat.',
               style: const TextStyle(fontSize: 16, color: Color(0xFF8E8E93)),
             ),
           ]),
@@ -1581,6 +1580,38 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
     final reply = state.replyToMessage;
+
+    if (!canSend) {
+      final isBusy = state.status == ChatStatus.connecting ||
+          state.status == ChatStatus.handshaking;
+      final buttonText = isBusy ? 'Connecting…' : 'Connect';
+      return SafeArea(
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Color(0xF2141417),
+            border: Border(top: BorderSide(color: Color(0xFF2C2C30))),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: isBusy
+                  ? null
+                  : () => context.read<ChatBloc>().add(const ChatReconnect()),
+              icon: const Icon(Icons.wifi_rounded, size: 18),
+              label: Text(buttonText),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF0A84FF),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFF1F1F24),
+                disabledForegroundColor: const Color(0xFF8E8E93),
+                minimumSize: const Size.fromHeight(44),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return SafeArea(
       child: Container(

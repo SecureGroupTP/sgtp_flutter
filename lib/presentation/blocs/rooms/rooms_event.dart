@@ -28,10 +28,15 @@ class RoomsJoinRoom extends RoomsEvent {
   final String? serverAddress;
   final SgtpTransportFamily? transport;
   final bool? useTls;
+  final bool openOffline;
   const RoomsJoinRoom(this.uuidHex,
-      {this.serverAddress, this.transport, this.useTls});
+      {this.serverAddress,
+      this.transport,
+      this.useTls,
+      this.openOffline = false});
   @override
-  List<Object?> get props => [uuidHex, serverAddress, transport, useTls];
+  List<Object?> get props =>
+      [uuidHex, serverAddress, transport, useTls, openOffline];
 }
 
 /// Disconnects and removes a room from the list.

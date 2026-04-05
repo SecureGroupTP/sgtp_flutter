@@ -82,7 +82,12 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         transport: event.transport,
         useTls: event.useTls,
       );
-      _addRoom(bytes, emit, configOverride: configOverride);
+      _addRoom(
+        bytes,
+        emit,
+        configOverride: configOverride,
+        openOffline: event.openOffline,
+      );
     } catch (_) {
       emit(state.copyWith(error: 'Invalid UUID format'));
     }
@@ -171,7 +176,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
-      {SgtpConfig? configOverride}) {
+      {SgtpConfig? configOverride, bool openOffline = false}) {
     final hexUUID = uuidBytesToHex(roomUUID);
     if (state.rooms.any((r) => r.roomUUID == hexUUID)) {
       emit(state.copyWith(error: 'Already joined this room'));
@@ -182,7 +187,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         .copyWith(accountId: _accountId)
         .copyWithRoomUUID(roomUUID);
     final chatBloc = ChatBloc(accountId: _accountId)
-      ..add(ChatConnect(config, nicknames: _nicknames));
+      ..add(openOffline
+          ? ChatOpenOffline(config, nicknames: _nicknames)
+          : ChatConnect(config, nicknames: _nicknames));
 
     // Push user avatar into the new bloc
     if (_userAvatar != null) {

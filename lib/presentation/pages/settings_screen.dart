@@ -1762,19 +1762,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           _buildAccountSwitcher(),
           _buildProfileSection(),
-          _SettingsGroup(
-              title: 'Private Key (Ed25519)', child: _buildPrivateKeyCard()),
-          _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
-          _SettingsGroup(title: 'Media', child: _buildMediaCard()),
-          _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
-          _buildGettingStarted(),
-          _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
-          _SettingsGroup(title: 'Data', child: _buildDataCard()),
-          _SettingsGroup(title: 'About', child: _buildAboutCard()),
+          _SettingsGroup(title: 'Settings', child: _buildSettingsHub()),
           const SizedBox(height: 16),
         ],
       ),
     );
+  }
+
+  Widget _buildSettingsHub() {
+    return Column(
+      children: [
+        _SettingsNavTile(
+          icon: Icons.lock_outline,
+          title: 'Privacy & Connection',
+          subtitle: 'Key and network',
+          onTap: () => _openSettingsSection(
+            title: 'Privacy & Connection',
+            childrenBuilder: () => [
+              _SettingsGroup(
+                title: 'Private Key (Ed25519)',
+                child: _buildPrivateKeyCard(),
+              ),
+              _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: AppColors.border),
+        _SettingsNavTile(
+          icon: Icons.chat_bubble_outline,
+          title: 'Chats Settings',
+          subtitle: 'Interaction and media',
+          onTap: () => _openSettingsSection(
+            title: 'Chats Settings',
+            childrenBuilder: () => [
+              _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
+              _SettingsGroup(title: 'Media', child: _buildMediaCard()),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: AppColors.border),
+        _SettingsNavTile(
+          icon: Icons.developer_mode_outlined,
+          title: 'System',
+          subtitle: 'Logs',
+          onTap: () => _openSettingsSection(
+            title: 'System',
+            childrenBuilder: () => [
+              _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: AppColors.border),
+        _SettingsNavTile(
+          icon: Icons.storage_outlined,
+          title: 'Data',
+          subtitle: 'Local app data',
+          onTap: () => _openSettingsSection(
+            title: 'Data',
+            childrenBuilder: () => [
+              _SettingsGroup(title: 'Data', child: _buildDataCard()),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: AppColors.border),
+        _SettingsNavTile(
+          icon: Icons.info_outline,
+          title: 'Help & About',
+          subtitle: 'App info and onboarding',
+          onTap: () => _openSettingsSection(
+            title: 'Help & About',
+            childrenBuilder: () => [
+              _SettingsGroup(title: 'About', child: _buildAboutCard()),
+              _buildGettingStarted(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openSettingsSection({
+    required String title,
+    required List<Widget> Function() childrenBuilder,
+  }) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        backgroundColor: AppColors.bgMain,
+        appBar: _SubSettingsAppBar(title: title),
+        body: ListView(
+          padding: const EdgeInsets.only(top: 20, bottom: 100),
+          children: [
+            ...childrenBuilder(),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    ));
   }
 
   // ── Profile section ───────────────────────────────────────────────────────
@@ -3570,6 +3653,53 @@ class _SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
+class _SubSettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
+  final String title;
+  const _SubSettingsAppBar({required this.title});
+
+  @override
+  Size get preferredSize => const Size.fromHeight(64);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bgMain,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: preferredSize.height,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+                ),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.2,
+                      color: AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Section header label + full-bleed settings card (bgSurface, top/bottom borders).
 class _SettingsGroup extends StatelessWidget {
   final String title;
@@ -3606,6 +3736,74 @@ class _SettingsGroup extends StatelessWidget {
           child: child,
         ),
       ],
+    );
+  }
+}
+
+class _SettingsNavTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _SettingsNavTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      splashColor: AppColors.bgSurfaceActive,
+      highlightColor: AppColors.bgSurfaceActive.withAlpha(120),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: AppColors.bgMain,
+                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 17, color: AppColors.textSecondary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textSecondary,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

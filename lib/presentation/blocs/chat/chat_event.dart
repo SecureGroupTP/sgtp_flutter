@@ -19,6 +19,16 @@ class ChatConnect extends ChatEvent {
   List<Object?> get props => [config, nicknames];
 }
 
+/// Open chat in offline mode: load local persisted history without network
+/// connection. User can later press Connect to establish a live session.
+class ChatOpenOffline extends ChatEvent {
+  final SgtpConfig config;
+  final Map<String, String> nicknames;
+  const ChatOpenOffline(this.config, {this.nicknames = const {}});
+  @override
+  List<Object?> get props => [config, nicknames];
+}
+
 /// Reconnect using the last known config (e.g. after disconnect).
 class ChatReconnect extends ChatEvent {
   const ChatReconnect();
