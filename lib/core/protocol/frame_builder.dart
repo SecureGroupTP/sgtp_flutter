@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import '../constants.dart';
-import '../uint64_utils.dart';
-import 'packet_types.dart';
+import 'package:sgtp_flutter/core/constants.dart';
+import 'package:sgtp_flutter/core/uint64_utils.dart';
+import 'package:sgtp_flutter/core/protocol/packet_types.dart';
 
 void _writeHeader(
   ByteData bd,

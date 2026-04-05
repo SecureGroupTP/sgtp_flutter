@@ -9,8 +9,8 @@ import 'package:image/image.dart' as img;
 import 'package:media_kit/media_kit.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../core/app_logger.dart';
-import '../domain/entities/video_note_metadata.dart';
+import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metadata.dart';
 
 class PreparedVideoNote {
   final XFile xFile;

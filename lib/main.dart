@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'app.dart';
-import 'core/interaction_prefs.dart';
-import 'core/window_size_service.dart';
+import 'package:sgtp_flutter/core/app/app.dart';
+import 'package:sgtp_flutter/core/interaction_prefs.dart';
+import 'package:sgtp_flutter/core/window_size_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

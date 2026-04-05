@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import '../constants.dart';
-import '../uint64_utils.dart';
+import 'package:sgtp_flutter/core/constants.dart';
+import 'package:sgtp_flutter/core/uint64_utils.dart';
 
 /// A parsed SGTP frame with all header fields extracted.
 class ParsedFrame {

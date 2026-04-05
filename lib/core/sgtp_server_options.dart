@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'sgtp_transport.dart';
+import 'package:sgtp_flutter/core/sgtp_transport.dart';
 
 class SgtpServerOptions {
   final bool tcp;

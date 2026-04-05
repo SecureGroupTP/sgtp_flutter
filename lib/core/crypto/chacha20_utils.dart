@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
-import '../uint64_utils.dart';
+import 'package:sgtp_flutter/core/uint64_utils.dart';
 
 /// Convert a uint64 nonce to a 12-byte nonce for ChaCha20-Poly1305.
 /// Format: [0, 0, 0, 0, b7, b6, b5, b4, b3, b2, b1, b0] (big-endian 8 bytes, prefixed with 4 zeros)
