@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
@@ -14,7 +15,7 @@ import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_stat
 import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_state.dart';
-import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_share_dialog.dart';
+import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_scanner_dialog.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_avatar.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_status_dot.dart';
@@ -246,12 +247,7 @@ class RoomsPageState extends State<RoomsPage> {
   }
 
   void showAddSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.bgSurface,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    showAppBottomSheet<void>(context,
       builder: (_) => _AddRoomSheet(
         roomsBloc: context.read<RoomsBloc>(),
         onSaveChat: _upsertChat,
@@ -502,13 +498,18 @@ class _ActiveRoomMoreButton extends StatelessWidget {
           roomUUID: entry.roomUUID,
           timestamp: DateTime.now().millisecondsSinceEpoch,
         );
-        showDialog<void>(
-          context: context,
-          builder: (_) => QrShareDialog(
-            data: qrData,
-            title: 'Share Room',
-            description:
-                chatState.chatName != 'Chat' ? chatState.chatName : entry.label,
+        showAppBottomSheet<void>(
+          context,
+          builder: (_) => SafeArea(
+            child: PrettyQrSharePanel(
+              data: qrData,
+              title: 'Share Room',
+              description:
+                  chatState.chatName != 'Chat' ? chatState.chatName : entry.label,
+              copyMessage: 'Room hex copied',
+              exportName:
+                  'room_${entry.roomUUID.substring(0, 8).toLowerCase()}.png',
+            ),
           ),
         );
       case _RoomAction.remove:
@@ -982,11 +983,10 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
             const SizedBox(height: 16),
 
             // Create new
-            _SheetButton(
+            AppSheetButton(
               label: 'Create new room',
               icon: Icons.add_circle_outline,
-              filled: true,
-              onPressed: () {
+              onTap: () {
                 widget.roomsBloc.add(
                   RoomsCreateRoom(
                     serverAddress: _selectedChatServer,
@@ -998,15 +998,16 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
               },
             ),
             const SizedBox(height: 16),
-            const _OrDivider(),
+            const AppSheetOrDivider(),
             const SizedBox(height: 16),
 
             // Scan QR — mobile only
             if (!_isDesktop) ...[
-              _SheetButton(
+              AppSheetButton(
                 label: 'Scan QR code',
                 icon: Icons.qr_code_scanner,
-                onPressed: () async {
+                secondary: true,
+                onTap: () async {
                   final data = await Navigator.push<QrShareData>(
                     context,
                     MaterialPageRoute(
@@ -1018,7 +1019,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
                 },
               ),
               const SizedBox(height: 12),
-              const _OrDivider(),
+              const AppSheetOrDivider(),
               const SizedBox(height: 12),
             ],
 
@@ -1070,10 +1071,10 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
             ],
 
             const SizedBox(height: 8),
-            _SheetButton(
+            AppSheetButton(
               label: 'Join room',
               icon: Icons.login,
-              onPressed: _joining ? _joinFromInput : null,
+              onTap: _joining ? _joinFromInput : null,
             ),
           ],
         ),
@@ -1082,43 +1083,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   }
 }
 
-/// Tonal / filled button for the bottom sheet.
-class _SheetButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool filled;
-  final VoidCallback? onPressed;
-
-  const _SheetButton({
-    required this.label,
-    required this.icon,
-    this.filled = false,
-    this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final style = ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll(Size.fromHeight(48)),
-      shape: WidgetStatePropertyAll(
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      backgroundColor: WidgetStatePropertyAll(
-        filled ? AppColors.accent : Colors.white.withAlpha(20),
-      ),
-      foregroundColor: WidgetStatePropertyAll(
-        filled ? Colors.black : AppColors.textPrimary,
-      ),
-      overlayColor: WidgetStatePropertyAll(Colors.white.withAlpha(20)),
-    );
-    return ElevatedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-      style: style,
-    );
-  }
-}
 
 class _NodePicker extends StatelessWidget {
   final bool isLoading;
@@ -1276,19 +1240,3 @@ class _DarkTextField extends StatelessWidget {
   }
 }
 
-class _OrDivider extends StatelessWidget {
-  const _OrDivider();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Row(children: [
-      Expanded(child: Divider(color: AppColors.border)),
-      Padding(
-        padding: EdgeInsets.symmetric(horizontal: 12),
-        child: Text('or',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-      ),
-      Expanded(child: Divider(color: AppColors.border)),
-    ]);
-  }
-}

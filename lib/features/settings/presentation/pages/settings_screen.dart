@@ -16,6 +16,7 @@ import 'package:record/record.dart';
 import 'package:sgtp_camera/sgtp_camera.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
@@ -652,13 +653,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (bytes == null || bytes.isEmpty) return;
     final keyText = String.fromCharCodes(bytes).trim();
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
@@ -752,26 +747,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final accountId = _activeAccountId();
     if (accountId == null) return;
 
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Are you sure?'),
-        content: const Text(
-            'Importing a key from clipboard will REPLACE the private key for this account.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('No'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
-            child: const Text('Yes'),
-          ),
-        ],
-      ),
+    final confirm = await showAppConfirmSheet(
+      context,
+      title: 'Are you sure?',
+      body: 'Importing a key from clipboard will REPLACE the private key for this account.',
+      confirmLabel: 'Yes',
+      cancelLabel: 'No',
     );
-    if (confirm != true) return;
+    if (!confirm) return;
 
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
@@ -831,26 +814,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _generatePrivateKey() async {
     final accountId = _activeAccountId();
     if (accountId == null) return;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Generate New Key?'),
-        content: const Text(
-            'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
-            'Your old key will be replaced. Peers that trusted your old key will need to add the new one to their whitelist.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
-            child: const Text('Generate'),
-          ),
-        ],
-      ),
+    final confirm = await showAppConfirmSheet(
+      context,
+      title: 'Generate New Key?',
+      body: 'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
+          'Your old key will be replaced. Peers that trusted your old key will need to add the new one to their whitelist.',
+      confirmLabel: 'Generate',
     );
-    if (confirm != true) return;
+    if (!confirm) return;
 
     setState(() => _isGenerating = true);
     try {
@@ -909,13 +880,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final pasteCtrl = TextEditingController();
     if (!mounted) return false;
 
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    await showAppBottomSheet<void>(context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => SafeArea(
           child: Padding(
@@ -954,7 +919,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 20),
 
                   // Browse
-                  _SheetBtn(
+                  AppSheetButton(
                     label: 'Browse file',
                     icon: Icons.folder_open_outlined,
                     onTap: () async {
@@ -969,11 +934,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  _OrDivider(),
+                  AppSheetOrDivider(),
                   const SizedBox(height: 16),
 
                   // Generate
-                  _SheetBtn(
+                  AppSheetButton(
                     label: 'Generate key',
                     icon: Icons.key_outlined,
                     secondary: true,
@@ -989,7 +954,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  _OrDivider(),
+                  AppSheetOrDivider(),
                   const SizedBox(height: 16),
 
                   // Paste field
@@ -1034,7 +999,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                   const SizedBox(height: 12),
-                  _SheetBtn(
+                  AppSheetButton(
                     label: 'Import key',
                     icon: Icons.content_paste_outlined,
                     secondary: true,
@@ -1054,7 +1019,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  _SheetBtn(
+                  AppSheetButton(
                     label: 'Later',
                     secondary: true,
                     onTap: () => Navigator.pop(ctx),
@@ -1217,29 +1182,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final linkedServers =
         _nodes.where((n) => n.accountId.trim() == id).toList();
     final label = _accountName(id);
-    final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Delete Account?'),
-            content: Text('Delete "$label"? '
-                'Linked servers (${linkedServers.length}) will be kept and detached from this account. '
-                'Profile/key data for this account will no longer be used.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.statusRed,
-                ),
-                child: const Text('Delete'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
+    final confirmed = await showAppConfirmSheet(
+      context,
+      title: 'Delete Account?',
+      body: 'Delete "$label"? '
+          'Linked servers (${linkedServers.length}) will be kept and detached from this account. '
+          'Profile/key data for this account will no longer be used.',
+      confirmLabel: 'Delete',
+      danger: true,
+    );
     if (!confirmed) return;
     await _settings.deleteAccount(id);
     await _reloadNodes();
@@ -1308,13 +1259,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       {NodeConfig? existing, String? accountIdForNew}) async {
     final baseId = existing?.id ?? uuidBytesToHex(generateUUIDv7());
     NodeConfig? result;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.bgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+    await showAppBottomSheet<void>(context,
       builder: (ctx) => _NodeEditorSheet(
         existing: existing,
         baseId: baseId,
@@ -1365,12 +1310,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _deleteNode(NodeConfig node) async {
     bool confirmed = false;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    await showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
@@ -1408,7 +1348,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: _SheetBtn(
+                    child: AppSheetButton(
                       label: 'Cancel',
                       secondary: true,
                       onTap: () => Navigator.pop(ctx),
@@ -1416,7 +1356,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _SheetBtn(
+                    child: AppSheetButton(
                       label: 'Delete',
                       danger: true,
                       onTap: () {
@@ -1667,13 +1607,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
@@ -1708,13 +1642,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
         .replaceAll(RegExp(r'^-+|-+$'), '');
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
@@ -2048,13 +1976,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showAddAccountSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (_) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
@@ -3007,57 +2929,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ctrl = TextEditingController();
     String? err;
     var confirmed = false;
-    await showDialog<void>(
-      context: context,
+    await showAppBottomSheet<void>(
+      context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('Delete All Data?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'This will permanently remove all local data from this device.',
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'Type this code to confirm: $code',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: ctrl,
-                keyboardType: TextInputType.number,
-                autofocus: true,
-                decoration: InputDecoration(
-                  hintText: 'Enter code',
-                  errorText: err,
+        builder: (ctx, setS) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Delete All Data?',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
-                onChanged: (_) {
-                  if (err != null) setS(() => err = null);
-                },
-              ),
-            ],
+                const SizedBox(height: 12),
+                const Text(
+                  'This will permanently remove all local data from this device.',
+                  style: TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textSecondary,
+                      height: 1.5),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Type this code to confirm: $code',
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  keyboardType: TextInputType.number,
+                  autofocus: true,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: InputDecoration(
+                    hintText: 'Enter code',
+                    hintStyle:
+                        const TextStyle(color: AppColors.textSecondary),
+                    errorText: err,
+                    filled: true,
+                    fillColor: AppColors.bgSurfaceActive,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                          color: AppColors.accent.withAlpha(180), width: 1.5),
+                    ),
+                  ),
+                  onChanged: (_) {
+                    if (err != null) setS(() => err = null);
+                  },
+                ),
+                const SizedBox(height: 20),
+                Row(children: [
+                  Expanded(
+                    child: AppSheetButton(
+                      label: 'Cancel',
+                      secondary: true,
+                      onTap: () => Navigator.pop(ctx),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: AppSheetButton(
+                      label: 'Delete',
+                      danger: true,
+                      onTap: () {
+                        if (ctrl.text.trim() != code) {
+                          setS(() => err = 'Code does not match');
+                          return;
+                        }
+                        confirmed = true;
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                ]),
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style:
-                  FilledButton.styleFrom(backgroundColor: AppColors.statusRed),
-              onPressed: () {
-                if (ctrl.text.trim() != code) {
-                  setS(() => err = 'Code does not match');
-                  return;
-                }
-                confirmed = true;
-                Navigator.pop(ctx);
-              },
-              child: const Text('Delete'),
-            ),
-          ],
         ),
       ),
     );
@@ -3414,24 +3379,6 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-// ── OR divider ───────────────────────────────────────────────────────────────
-
-class _OrDivider extends StatelessWidget {
-  const _OrDivider();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Row(children: [
-      Expanded(child: Divider(color: AppColors.border)),
-      Padding(
-        padding: EdgeInsets.symmetric(horizontal: 12),
-        child: Text('or',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-      ),
-      Expanded(child: Divider(color: AppColors.border)),
-    ]);
-  }
-}
 
 // ── Node editor bottom sheet ──────────────────────────────────────────────────
 
@@ -3696,7 +3643,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               ],
 
               const SizedBox(height: 24),
-              _SheetBtn(label: 'Save Server', onTap: _save),
+              AppSheetButton(label: 'Save Server', onTap: _save),
             ],
           ),
         ),
@@ -3705,68 +3652,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
   }
 }
 
-// ── Sheet confirm button ──────────────────────────────────────────────────────
-
-class _SheetBtn extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool secondary;
-  final bool danger;
-  final IconData? icon;
-
-  const _SheetBtn({
-    required this.label,
-    required this.onTap,
-    this.secondary = false,
-    this.danger = false,
-    this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final Color bg;
-    final Color fg;
-    if (danger) {
-      bg = AppColors.statusRed;
-      fg = Colors.white;
-    } else if (secondary) {
-      bg = AppColors.bgSurfaceActive;
-      fg = AppColors.textPrimary;
-    } else {
-      bg = AppColors.accent;
-      fg = Colors.black;
-    }
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 48,
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        alignment: Alignment.center,
-        child: icon != null
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 18, color: fg),
-                  const SizedBox(width: 8),
-                  Text(label,
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: fg)),
-                ],
-              )
-            : Text(
-                label,
-                style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: fg),
-              ),
-      ),
-    );
-  }
-}
 
 // ── Styled input matching contacts_screen style ───────────────────────────────
 

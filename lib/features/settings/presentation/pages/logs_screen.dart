@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 
 /// Full-screen log viewer accessible from Settings → Logs.
 ///
@@ -185,31 +186,15 @@ class _LogsScreenState extends State<LogsScreen> {
                   onPressed: total == 0
                       ? null
                       : () async {
-                          final ok = await showDialog<bool>(
-                            context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Clear logs?'),
-                              content: const Text(
-                                  'All in-memory log entries will be deleted. '
-                                  'This cannot be undone.'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, false),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, true),
-                                  style: TextButton.styleFrom(
-                                      foregroundColor:
-                                          const Color(0xFFFF3B30)),
-                                  child: const Text('Clear'),
-                                ),
-                              ],
-                            ),
+                          final ok = await showAppConfirmSheet(
+                            context,
+                            title: 'Clear logs?',
+                            body: 'All in-memory log entries will be deleted. '
+                                'This cannot be undone.',
+                            confirmLabel: 'Clear',
+                            danger: true,
                           );
-                          if (ok == true) AppLogger.clear();
+                          if (ok) AppLogger.clear();
                         },
                 ),
               ]),

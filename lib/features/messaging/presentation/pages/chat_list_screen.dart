@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat_list/chat_list_bloc.dart';
-import 'package:sgtp_flutter/features/messaging/presentation/widgets/chat_metadata_edit_dialog.dart';
+import 'package:sgtp_flutter/features/messaging/presentation/widgets/chat_metadata_edit_dialog.dart' show ChatMetadataEditPanel;
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 
 class ChatListScreen extends StatefulWidget {
@@ -109,119 +111,146 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   void _showCreateChatDialog() {
     final chatNameCtrl = TextEditingController(text: 'My Chat');
-    showDialog(
-      context: context,
-      builder: (context) {
+    showAppBottomSheet<void>(
+      context,
+      builder: (ctx) {
         String chatName = chatNameCtrl.text;
         Uint8List? avatarBytes;
 
         return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text('Create New Chat'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Avatar preview
-                    Center(
-                      child: GestureDetector(
-                        onTap: () => _pickAvatar(setState, (bytes) {
-                          avatarBytes = bytes;
-                        }),
-                        child: CircleAvatar(
-                          radius: 40,
-                          backgroundImage: avatarBytes != null
-                              ? MemoryImage(avatarBytes!)
-                              : null,
-                          child: avatarBytes == null
-                              ? const Icon(Icons.camera_alt)
-                              : null,
-                        ),
+          builder: (ctx, setS) => SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                  20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Create New Chat',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  GestureDetector(
+                    onTap: () => _pickAvatar(setS, (bytes) {
+                      avatarBytes = bytes;
+                    }),
+                    child: CircleAvatar(
+                      radius: 40,
+                      backgroundImage: avatarBytes != null
+                          ? MemoryImage(avatarBytes!)
+                          : null,
+                      child: avatarBytes == null
+                          ? const Icon(Icons.camera_alt)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: chatNameCtrl,
+                    style: const TextStyle(color: AppColors.textPrimary),
+                    decoration: InputDecoration(
+                      labelText: 'Chat Name',
+                      hintText: 'Enter chat name',
+                      labelStyle:
+                          const TextStyle(color: AppColors.textSecondary),
+                      hintStyle:
+                          const TextStyle(color: AppColors.textSecondary),
+                      filled: true,
+                      fillColor: AppColors.bgSurfaceActive,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            const BorderSide(color: AppColors.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            const BorderSide(color: AppColors.border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                            color: AppColors.accent.withAlpha(180),
+                            width: 1.5),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    // Name field
-                    TextField(
-                      controller: chatNameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Chat Name',
-                        hintText: 'Enter chat name',
+                    onChanged: (value) {
+                      chatName = value.isEmpty ? 'My Chat' : value;
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  Row(children: [
+                    Expanded(
+                      child: AppSheetButton(
+                        label: 'Cancel',
+                        secondary: true,
+                        onTap: () => Navigator.pop(ctx),
                       ),
-                      onChanged: (value) {
-                        chatName = value.isEmpty ? 'My Chat' : value;
-                      },
                     ),
-                  ],
-                ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: AppSheetButton(
+                        label: 'Create',
+                        onTap: () {
+                          context.read<ChatListBloc>().add(
+                                ChatListCreateChat(
+                                  name: chatName,
+                                  avatarBytes: avatarBytes,
+                                ),
+                              );
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    ),
+                  ]),
+                ],
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    context.read<ChatListBloc>().add(
-                          ChatListCreateChat(
-                            name: chatName,
-                            avatarBytes: avatarBytes,
-                          ),
-                        );
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Create'),
-                ),
-              ],
-            );
-          },
+            ),
+          ),
         );
       },
     ).whenComplete(chatNameCtrl.dispose);
   }
 
   void _showEditDialog(ChatMetadata chat) {
-    showDialog(
-      context: context,
-      builder: (context) => ChatMetadataEditDialog(
-        chat: chat,
-        onSave: (name, avatar) {
-          context.read<ChatListBloc>().add(
-                ChatListUpdateChat(
-                  uuid: chat.uuid,
-                  newName: name,
-                  newAvatarBytes: avatar,
-                ),
-              );
-          Navigator.pop(context);
-        },
+    showAppBottomSheet<void>(
+      context,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: ChatMetadataEditPanel(
+            chat: chat,
+            onSave: (name, avatar) {
+              context.read<ChatListBloc>().add(
+                    ChatListUpdateChat(
+                      uuid: chat.uuid,
+                      newName: name,
+                      newAvatarBytes: avatar,
+                    ),
+                  );
+              Navigator.pop(ctx);
+            },
+            onCancel: () => Navigator.pop(ctx),
+          ),
+        ),
       ),
     );
   }
 
-  void _showDeleteConfirm(ChatMetadata chat) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Chat'),
-        content: Text('Delete "${chat.name}" from your local storage?\n\nThis only removes it from your device.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              context.read<ChatListBloc>().add(ChatListDeleteChat(uuid: chat.uuid));
-              Navigator.pop(context);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+  Future<void> _showDeleteConfirm(ChatMetadata chat) async {
+    final confirmed = await showAppConfirmSheet(
+      context,
+      title: 'Delete Chat',
+      body: 'Delete "${chat.name}" from your local storage?\n\nThis only removes it from your device.',
+      confirmLabel: 'Delete',
+      danger: true,
     );
+    if (confirmed && mounted) {
+      context.read<ChatListBloc>().add(ChatListDeleteChat(uuid: chat.uuid));
+    }
   }
 
   Future<void> _pickAvatar(

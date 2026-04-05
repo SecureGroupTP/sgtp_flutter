@@ -154,6 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
       chatStorage: context.read<ChatStorageGateway>(),
       serverAddress: newServer,
       userAvatar: _userAvatar,
+      sessionFactory: context.read<SgtpSessionFactory>(),
     );
     _pushContactAvatarsToRooms();
     unawaited(_loadNicknameAndInitUserDir());

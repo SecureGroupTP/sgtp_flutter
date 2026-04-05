@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
@@ -216,12 +217,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // ── Import (QR or hex paste) ──────────────────────────────────────────────
 
   void _openImport() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
@@ -256,7 +252,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 ),
               ),
               const SizedBox(height: 20),
-              _SheetButton(
+              AppSheetButton(
                 icon: Icons.qr_code_scanner_outlined,
                 label: 'Scan QR Code',
                 onTap: () {
@@ -265,7 +261,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 },
               ),
               const SizedBox(height: 12),
-              _SheetButton(
+              AppSheetButton(
                 icon: Icons.paste_outlined,
                 label: 'Paste Hex',
                 secondary: true,
@@ -294,13 +290,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final inputCtrl = TextEditingController();
     String? errorMsg;
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => Padding(
           padding: EdgeInsets.fromLTRB(
@@ -340,7 +330,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 onChanged: (_) => setS(() => errorMsg = null),
               ),
               const SizedBox(height: 16),
-              _SheetButton(
+              AppSheetButton(
                 icon: Icons.download_outlined,
                 label: 'Import',
                 onTap: () {
@@ -397,13 +387,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final keyCtrl = TextEditingController(text: prefilledKey);
     String? keyError;
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => Padding(
           padding: EdgeInsets.fromLTRB(
@@ -444,7 +428,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 onChanged: (_) => setS(() => keyError = null),
               ),
               const SizedBox(height: 20),
-              _SheetButton(
+              AppSheetButton(
                 icon: Icons.person_add_outlined,
                 label: 'Add to Whitelist',
                 onTap: () {
@@ -499,13 +483,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     final hasUsername = username.isNotEmpty;
     String? keyError;
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => Padding(
           padding: EdgeInsets.fromLTRB(
@@ -587,7 +565,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 ),
               ),
               const SizedBox(height: 20),
-              _SheetButton(
+              AppSheetButton(
                 icon: Icons.check,
                 label: 'Save Changes',
                 onTap: () {
@@ -651,12 +629,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // ── Delete Contact ────────────────────────────────────────────────────────
 
   void _deleteContact(WhitelistEntry entry) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
@@ -693,7 +666,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: _SheetButton(
+                    child: AppSheetButton(
                       label: 'Cancel',
                       secondary: true,
                       onTap: () => Navigator.pop(ctx),
@@ -701,7 +674,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _SheetButton(
+                    child: AppSheetButton(
                       label: 'Remove',
                       danger: true,
                       onTap: () {
@@ -731,13 +704,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    showAppBottomSheet<void>(context,
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
@@ -879,7 +846,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: _SheetButton(
+                        child: AppSheetButton(
                           icon: Icons.qr_code_scanner_outlined,
                           label: 'Scan QR',
                           secondary: true,
@@ -888,7 +855,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: _SheetButton(
+                        child: AppSheetButton(
                           icon: Icons.paste_outlined,
                           label: 'Paste Hex',
                           secondary: true,
@@ -1526,62 +1493,6 @@ class _PrimaryButton extends StatelessWidget {
   }
 }
 
-class _SheetButton extends StatelessWidget {
-  final IconData? icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool secondary;
-  final bool danger;
-
-  const _SheetButton({
-    required this.label,
-    required this.onTap,
-    this.icon,
-    this.secondary = false,
-    this.danger = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    Color bg;
-    Color fg;
-    if (danger) {
-      bg = AppColors.statusRed;
-      fg = Colors.white;
-    } else if (secondary) {
-      bg = AppColors.bgSurfaceActive;
-      fg = AppColors.textPrimary;
-    } else {
-      bg = AppColors.accent;
-      fg = Colors.black;
-    }
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        height: 48,
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(12),
-          border: secondary ? Border.all(color: AppColors.border) : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 18, color: fg),
-              const SizedBox(width: 8),
-            ],
-            Text(label,
-                style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: fg)),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _StyledInput extends StatelessWidget {
   final TextEditingController controller;

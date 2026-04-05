@@ -23,6 +23,8 @@ import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/message_bubble.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
+import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 
@@ -386,11 +388,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickAndSendMedia(BuildContext context) async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: const Color(0xFF141417),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    final choice = await showAppBottomSheet<String>(context,
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -405,30 +403,30 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(height: 8),
-            _SheetTile(
+            AppSheetTile(
                 icon: Icons.image_outlined,
                 label: 'Photo / GIF',
                 subtitle: 'Select one or more images',
                 value: 'image',
-                ctx: context),
-            _SheetTile(
+                sheetContext: context),
+            AppSheetTile(
                 icon: Icons.videocam_outlined,
                 label: 'Video',
                 subtitle: null,
                 value: 'video',
-                ctx: context),
-            _SheetTile(
+                sheetContext: context),
+            AppSheetTile(
                 icon: Icons.radio_button_checked_outlined,
                 label: 'Video note',
                 subtitle: 'Circular video message',
                 value: 'videonote',
-                ctx: context),
-            _SheetTile(
+                sheetContext: context),
+            AppSheetTile(
                 icon: Icons.content_paste_outlined,
                 label: 'Paste from clipboard',
                 subtitle: null,
                 value: 'paste',
-                ctx: context),
+                sheetContext: context),
             const SizedBox(height: 8),
           ],
         ),
@@ -534,12 +532,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     String initialCaption = '',
   }) async {
     final ctrl = TextEditingController(text: initialCaption);
-    final result = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF141417),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    final result = await showAppBottomSheet<String>(context,
       builder: (ctx) => Padding(
         padding: EdgeInsets.fromLTRB(
             16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
@@ -878,10 +871,54 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       }
       if (!context.mounted) return;
 
-      // Show preview dialog — let user confirm or cancel before sending.
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => _PastePreviewDialog(imageBytes: imageBytes),
+      // Show preview sheet — let user confirm or cancel before sending.
+      final confirmed = await showAppBottomSheet<bool>(
+        context,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Send image?',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 280),
+                    child: Image.memory(imageBytes, fit: BoxFit.contain),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(
+                    child: AppSheetButton(
+                      label: 'Cancel',
+                      secondary: true,
+                      onTap: () => Navigator.pop(ctx, false),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: AppSheetButton(
+                      label: 'Send',
+                      onTap: () => Navigator.pop(ctx, true),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        ),
       );
       if (confirmed != true || !context.mounted) return;
 
@@ -1014,74 +1051,114 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
   }
 
-  /// Show dialog to edit chat name and avatar.
+  /// Show bottom sheet to edit chat name and avatar.
   void _showEditMetadataDialog(BuildContext context, ChatState state) {
     final nameCtrl = TextEditingController(text: state.chatName);
     Uint8List? newAvatar = state.chatAvatarBytes;
 
-    showDialog<void>(
-      context: context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('Edit Chat'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GestureDetector(
-                onTap: () async {
-                  final picker = ImagePicker();
-                  final file = await picker.pickImage(
-                      source: ImageSource.gallery,
-                      maxWidth: 256,
-                      maxHeight: 256,
-                      imageQuality: 80);
-                  if (file == null) return;
-                  final bytes = await file.readAsBytes();
-                  setS(() => newAvatar = bytes);
-                },
-                child: CircleAvatar(
-                  radius: 44,
-                  backgroundImage:
-                      newAvatar != null ? MemoryImage(newAvatar!) : null,
-                  child: newAvatar == null
-                      ? const Icon(Icons.camera_alt, size: 32)
-                      : null,
+        builder: (ctx, setS) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Edit Chat',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
-              ),
-              if (newAvatar != null) ...[
-                const SizedBox(height: 4),
-                TextButton.icon(
-                  onPressed: () => setS(() => newAvatar = null),
-                  icon: const Icon(Icons.delete_outline, size: 16),
-                  label: const Text('Remove avatar'),
+                const SizedBox(height: 20),
+                GestureDetector(
+                  onTap: () async {
+                    final picker = ImagePicker();
+                    final file = await picker.pickImage(
+                        source: ImageSource.gallery,
+                        maxWidth: 256,
+                        maxHeight: 256,
+                        imageQuality: 80);
+                    if (file == null) return;
+                    final bytes = await file.readAsBytes();
+                    setS(() => newAvatar = bytes);
+                  },
+                  child: CircleAvatar(
+                    radius: 44,
+                    backgroundImage:
+                        newAvatar != null ? MemoryImage(newAvatar!) : null,
+                    child: newAvatar == null
+                        ? const Icon(Icons.camera_alt, size: 32)
+                        : null,
+                  ),
                 ),
+                if (newAvatar != null) ...[
+                  const SizedBox(height: 4),
+                  TextButton.icon(
+                    onPressed: () => setS(() => newAvatar = null),
+                    icon: const Icon(Icons.delete_outline, size: 16),
+                    label: const Text('Remove avatar'),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameCtrl,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: InputDecoration(
+                    labelText: 'Chat Name',
+                    labelStyle:
+                        const TextStyle(color: AppColors.textSecondary),
+                    filled: true,
+                    fillColor: AppColors.bgSurfaceActive,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide:
+                          const BorderSide(color: AppColors.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide:
+                          const BorderSide(color: AppColors.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                          color: AppColors.accent.withAlpha(180),
+                          width: 1.5),
+                    ),
+                  ),
+                  maxLength: 100,
+                ),
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(
+                    child: AppSheetButton(
+                      label: 'Cancel',
+                      secondary: true,
+                      onTap: () => Navigator.pop(ctx),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: AppSheetButton(
+                      label: 'Save',
+                      onTap: () {
+                        final name = nameCtrl.text.trim();
+                        if (name.isEmpty) return;
+                        context.read<ChatBloc>().add(
+                            ChatUpdateMetadata(name: name, avatarBytes: newAvatar));
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ),
+                ]),
               ],
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Chat Name',
-                  border: OutlineInputBorder(),
-                ),
-                maxLength: 100,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () {
-                final name = nameCtrl.text.trim();
-                if (name.isEmpty) return;
-                context.read<ChatBloc>().add(
-                    ChatUpdateMetadata(name: name, avatarBytes: newAvatar));
-                Navigator.pop(ctx);
-              },
-              child: const Text('Save'),
             ),
-          ],
+          ),
         ),
       ),
     ).whenComplete(nameCtrl.dispose);
@@ -2031,37 +2108,47 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   void _showRoomInfo(BuildContext context, ChatState state) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Room info'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _infoRow(context, 'Room UUID', state.roomUUID),
-            const SizedBox(height: 12),
-            _infoRow(context, 'My UUID', state.myUUID),
-            const SizedBox(height: 12),
-            _infoRow(context, 'My public key', state.myPublicKeyHex),
-            if (state.isMaster) ...[
+    showAppBottomSheet<void>(
+      context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Room info',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 20),
+              _infoRow(context, 'Room UUID', state.roomUUID),
               const SizedBox(height: 12),
-              Row(children: [
-                Icon(Icons.star,
-                    size: 16, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 4),
-                Text('You are the master',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary)),
-              ]),
+              _infoRow(context, 'My UUID', state.myUUID),
+              const SizedBox(height: 12),
+              _infoRow(context, 'My public key', state.myPublicKeyHex),
+              if (state.isMaster) ...[
+                const SizedBox(height: 12),
+                Row(children: [
+                  const Icon(Icons.star, size: 16, color: AppColors.accent),
+                  const SizedBox(width: 4),
+                  const Text('You are the master',
+                      style: TextStyle(color: AppColors.accent)),
+                ]),
+              ],
+              const SizedBox(height: 20),
+              AppSheetButton(
+                label: 'Close',
+                secondary: true,
+                onTap: () => Navigator.pop(ctx),
+              ),
             ],
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close')),
-        ],
       ),
     );
   }
@@ -2098,54 +2185,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
 enum _ChatMenuAction { disconnect }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Media picker sheet tile
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _SheetTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String? subtitle;
-  final String value;
-  final BuildContext ctx;
-
-  const _SheetTile({
-    required this.icon,
-    required this.label,
-    this.subtitle,
-    required this.value,
-    required this.ctx,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => Navigator.pop(ctx, value),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Row(children: [
-          Icon(icon, color: const Color(0xFF8E8E93), size: 22),
-          const SizedBox(width: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label,
-                  style: const TextStyle(
-                      color: Color(0xFFF5F5F5),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w400)),
-              if (subtitle != null)
-                Text(subtitle!,
-                    style: const TextStyle(
-                        color: Color(0xFF8E8E93), fontSize: 12)),
-            ],
-          ),
-        ]),
-      ),
-    );
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mobile mode button (mic ↔ video-note) — single button, tap = swap, hold = record
@@ -2222,78 +2261,3 @@ class _MobileModeButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Paste preview dialog (Fix 4)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _PastePreviewDialog extends StatelessWidget {
-  final Uint8List imageBytes;
-  const _PastePreviewDialog({required this.imageBytes});
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFF1F1F24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Send image?',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFFF5F5F5),
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 280),
-                child: Image.memory(
-                  imageBytes,
-                  fit: BoxFit.contain,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF8E8E93),
-                      side: const BorderSide(color: Color(0xFF2C2C30)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    child: const Text('Cancel'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0A84FF),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    child: const Text('Send'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

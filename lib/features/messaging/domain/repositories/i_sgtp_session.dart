@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 
-import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metadata.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_events.dart';
 
 export 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_events.dart';

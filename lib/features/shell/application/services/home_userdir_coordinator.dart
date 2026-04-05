@@ -99,7 +99,7 @@ class HomeUserDirCoordinator {
       IUserDirClient client,
     ) {
       return client.registerWithResult(
-        username: _support.buildUsername(session.username),
+        username: _support.buildUsername(session.username) ?? '',
         fullname: session.nickname,
         pubkey: session.config.myPublicKey,
         avatarBytes: session.userAvatar ?? Uint8List(0),
