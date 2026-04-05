@@ -1,0 +1,43 @@
+group 'dev.sgtp.sgtp_camera'
+version '0.1.0'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.3.0'
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    compileSdkVersion 33
+    ndkVersion "25.1.8937393"
+
+    defaultConfig {
+        minSdkVersion 21
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+                arguments "-DANDROID_STL=c++_shared"
+                abiFilters "arm64-v8a", "armeabi-v7a", "x86_64"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "../src/CMakeLists.txt"
+        }
+    }
+}

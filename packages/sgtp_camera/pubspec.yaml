@@ -1,0 +1,31 @@
+name: sgtp_camera
+description: GStreamer-based camera plugin for SGTP — preview + video note recording.
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.0
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  ffigen: ^14.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
