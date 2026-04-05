@@ -43,6 +43,14 @@ typedef ConfigChangedCallback = void Function(
     String serverAddress,
     List<WhitelistEntry> whitelistEntries);
 
+enum _SettingsSection {
+  key,
+  chats,
+  system,
+  data,
+  help,
+}
+
 typedef UserAvatarChangedCallback = void Function(Uint8List? avatar);
 
 class SettingsScreen extends StatefulWidget {
@@ -127,6 +135,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _accountIdsList = const [];
   bool _nodesLoading = true;
   bool _accountsExpanded = false;
+  _SettingsSection? _activeSection;
   bool _serversExpanded = false;
   String? _preferredNodeId;
   String? _preferredAccountId;
@@ -1754,86 +1763,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final activeSection = _activeSection;
     return Scaffold(
       backgroundColor: AppColors.bgMain,
-      appBar: const _SettingsAppBar(),
+      appBar: activeSection == null
+          ? const _SettingsAppBar()
+          : _InlineSubSettingsAppBar(
+              title: _sectionTitle(activeSection),
+              onBack: () => setState(() => _activeSection = null),
+            ),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: 100),
-        children: [
-          _buildAccountSwitcher(),
-          _buildProfileSection(),
-          _SettingsGroup(title: 'Settings', child: _buildSettingsHub()),
-          const SizedBox(height: 16),
-        ],
+        padding: EdgeInsets.only(top: activeSection == null ? 0 : 20, bottom: 100),
+        children: activeSection == null
+            ? [
+                _buildAccountSwitcher(),
+                _buildProfileSection(),
+                _SettingsGroup(title: 'Server Connection', child: _buildNetworkCard()),
+                _buildSettingsHub(),
+                const SizedBox(height: 16),
+              ]
+            : [
+                ..._sectionChildren(activeSection),
+                const SizedBox(height: 16),
+              ],
       ),
     );
   }
 
   Widget _buildSettingsHub() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SettingsNavTile(
-          icon: Icons.lock_outline,
-          title: 'Privacy & Connection',
-          subtitle: 'Key and network',
-          onTap: () => _openSettingsSection(
-            title: 'Privacy & Connection',
-            childrenBuilder: () => [
-              _SettingsGroup(
-                title: 'Private Key (Ed25519)',
-                child: _buildPrivateKeyCard(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text(
+            'PREFERENCES',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+        Container(
+          decoration: const BoxDecoration(
+            color: AppColors.bgSurface,
+            border: Border(
+              top: BorderSide(color: AppColors.border),
+              bottom: BorderSide(color: AppColors.border),
+            ),
+          ),
+          child: Column(
+            children: [
+              _SettingsNavTile(
+                icon: Icons.vpn_key_outlined,
+                iconBgColor: const Color(0xFF004a99),
+                title: 'Key Settings',
+                onTap: () =>
+                    setState(() => _activeSection = _SettingsSection.key),
               ),
-              _SettingsGroup(title: 'Network', child: _buildNetworkCard()),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: AppColors.border),
-        _SettingsNavTile(
-          icon: Icons.chat_bubble_outline,
-          title: 'Chats Settings',
-          subtitle: 'Interaction and media',
-          onTap: () => _openSettingsSection(
-            title: 'Chats Settings',
-            childrenBuilder: () => [
-              _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
-              _SettingsGroup(title: 'Media', child: _buildMediaCard()),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: AppColors.border),
-        _SettingsNavTile(
-          icon: Icons.developer_mode_outlined,
-          title: 'System',
-          subtitle: 'Logs',
-          onTap: () => _openSettingsSection(
-            title: 'System',
-            childrenBuilder: () => [
-              _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: AppColors.border),
-        _SettingsNavTile(
-          icon: Icons.storage_outlined,
-          title: 'Data',
-          subtitle: 'Local app data',
-          onTap: () => _openSettingsSection(
-            title: 'Data',
-            childrenBuilder: () => [
-              _SettingsGroup(title: 'Data', child: _buildDataCard()),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: AppColors.border),
-        _SettingsNavTile(
-          icon: Icons.info_outline,
-          title: 'Help & About',
-          subtitle: 'App info and onboarding',
-          onTap: () => _openSettingsSection(
-            title: 'Help & About',
-            childrenBuilder: () => [
-              _SettingsGroup(title: 'About', child: _buildAboutCard()),
-              _buildGettingStarted(),
+              const Divider(height: 1, indent: 70, color: AppColors.border),
+              _SettingsNavTile(
+                icon: Icons.chat_bubble_outline,
+                iconBgColor: const Color(0xFF1a7431),
+                title: 'Chats & Media',
+                onTap: () =>
+                    setState(() => _activeSection = _SettingsSection.chats),
+              ),
+              const Divider(height: 1, indent: 70, color: AppColors.border),
+              _SettingsNavTile(
+                icon: Icons.storage_outlined,
+                iconBgColor: const Color(0xFF995a00),
+                title: 'Media Caching',
+                onTap: () =>
+                    setState(() => _activeSection = _SettingsSection.data),
+              ),
+              const Divider(height: 1, indent: 70, color: AppColors.border),
+              _SettingsNavTile(
+                icon: Icons.terminal_outlined,
+                iconBgColor: const Color(0xFF6a308a),
+                title: 'Logs & Debug',
+                onTap: () =>
+                    setState(() => _activeSection = _SettingsSection.system),
+              ),
+              const Divider(height: 1, indent: 70, color: AppColors.border),
+              _SettingsNavTile(
+                icon: Icons.info_outline,
+                iconBgColor: const Color(0xFF4a4a4f),
+                title: 'App Information',
+                onTap: () =>
+                    setState(() => _activeSection = _SettingsSection.help),
+              ),
             ],
           ),
         ),
@@ -1841,24 +1862,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _openSettingsSection({
-    required String title,
-    required List<Widget> Function() childrenBuilder,
-  }) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => Scaffold(
-        backgroundColor: AppColors.bgMain,
-        appBar: _SubSettingsAppBar(title: title),
-        body: ListView(
-          padding: const EdgeInsets.only(top: 20, bottom: 100),
-          children: [
-            ...childrenBuilder(),
-            const SizedBox(height: 16),
+  String _sectionTitle(_SettingsSection section) => switch (section) {
+        _SettingsSection.key => 'Key Settings',
+        _SettingsSection.chats => 'Chats & Media',
+        _SettingsSection.system => 'Logs & Debug',
+        _SettingsSection.data => 'Media Caching',
+        _SettingsSection.help => 'App Information',
+      };
+
+  List<Widget> _sectionChildren(_SettingsSection section) => switch (section) {
+        _SettingsSection.key => [
+            _SettingsGroup(
+              title: 'Private Key (Ed25519)',
+              child: _buildPrivateKeyCard(),
+            ),
           ],
-        ),
-      ),
-    ));
-  }
+        _SettingsSection.chats => [
+            _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
+            _SettingsGroup(title: 'Media', child: _buildMediaCard()),
+          ],
+        _SettingsSection.system => [
+            _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
+          ],
+        _SettingsSection.data => [
+            _SettingsGroup(title: 'Data', child: _buildDataCard()),
+          ],
+        _SettingsSection.help => [
+            _SettingsGroup(title: 'About', child: _buildAboutCard()),
+            _buildGettingStarted(),
+          ],
+      };
 
   // ── Profile section ───────────────────────────────────────────────────────
 
@@ -2911,57 +2944,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const TextStyle(fontSize: 12, color: AppColors.textSecondary),
           ),
         ],
-        const SizedBox(height: 16),
-        const Text(
-          'Ping interval',
-          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 4,
-                  thumbShape:
-                      const RoundSliderThumbShape(enabledThumbRadius: 10),
-                  overlayShape:
-                      const RoundSliderOverlayShape(overlayRadius: 18),
-                  activeTrackColor: AppColors.border,
-                  inactiveTrackColor: AppColors.border,
-                  thumbColor: Colors.white,
-                  overlayColor: Colors.white.withAlpha(30),
-                ),
-                child: Slider(
-                  value: _pingIntervalSeconds.toDouble(),
-                  min: 5,
-                  max: 120,
-                  onChanged: (v) {
-                    setState(() => _pingIntervalSeconds = v.round());
-                    SharedPreferences.getInstance().then(
-                      (p) =>
-                          p.setInt('sgtp_ping_interval', _pingIntervalSeconds),
-                    );
-                    _tryApplyConfig();
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 40,
-              child: Text(
-                '${_pingIntervalSeconds} s',
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                ),
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -3316,6 +3298,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
+        const SizedBox(height: 16),
+        // ── Ping interval ───────────────────────────────────────────────
+        const Text(
+          'Ping interval',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 4,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 10),
+                  overlayShape:
+                      const RoundSliderOverlayShape(overlayRadius: 18),
+                  activeTrackColor: AppColors.border,
+                  inactiveTrackColor: AppColors.border,
+                  thumbColor: Colors.white,
+                  overlayColor: Colors.white.withAlpha(30),
+                ),
+                child: Slider(
+                  value: _pingIntervalSeconds.toDouble(),
+                  min: 5,
+                  max: 120,
+                  onChanged: (v) {
+                    setState(() => _pingIntervalSeconds = v.round());
+                    SharedPreferences.getInstance().then(
+                      (p) =>
+                          p.setInt('sgtp_ping_interval', _pingIntervalSeconds),
+                    );
+                    _tryApplyConfig();
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 40,
+              child: Text(
+                '${_pingIntervalSeconds} s',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -3653,9 +3687,14 @@ class _SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-class _SubSettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
+class _InlineSubSettingsAppBar extends StatelessWidget
+    implements PreferredSizeWidget {
   final String title;
-  const _SubSettingsAppBar({required this.title});
+  final VoidCallback onBack;
+  const _InlineSubSettingsAppBar({
+    required this.title,
+    required this.onBack,
+  });
 
   @override
   Size get preferredSize => const Size.fromHeight(64);
@@ -3676,7 +3715,7 @@ class _SubSettingsAppBar extends StatelessWidget implements PreferredSizeWidget 
             child: Row(
               children: [
                 IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: onBack,
                   icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
                 ),
                 Expanded(
@@ -3742,14 +3781,14 @@ class _SettingsGroup extends StatelessWidget {
 
 class _SettingsNavTile extends StatelessWidget {
   final IconData icon;
+  final Color iconBgColor;
   final String title;
-  final String subtitle;
   final VoidCallback onTap;
 
   const _SettingsNavTile({
     required this.icon,
+    required this.iconBgColor,
     required this.title,
-    required this.subtitle,
     required this.onTap,
   });
 
@@ -3760,41 +3799,27 @@ class _SettingsNavTile extends StatelessWidget {
       splashColor: AppColors.bgSurfaceActive,
       highlightColor: AppColors.bgSurfaceActive.withAlpha(120),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         child: Row(
           children: [
             Container(
-              width: 30,
-              height: 30,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
-                color: AppColors.bgMain,
-                border: Border.all(color: AppColors.border),
+                color: iconBgColor,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(icon, size: 17, color: AppColors.textSecondary),
+              child: Icon(icon, size: 20, color: Colors.white.withValues(alpha: 0.9)),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  color: AppColors.textPrimary,
+                ),
               ),
             ),
             const Icon(
