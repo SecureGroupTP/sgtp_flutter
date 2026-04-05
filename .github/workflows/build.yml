@@ -14,19 +14,19 @@ jobs:
           - os: windows-latest
             platform: windows
             arch: amd64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux
             arch: amd64
           - os: macos-latest
             platform: macos
             arch: universal
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: android
             arch: arm64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: android
             arch: arm32
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: android
             arch: x86_64
 
