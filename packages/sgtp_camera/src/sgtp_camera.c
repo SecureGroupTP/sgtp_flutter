@@ -23,18 +23,27 @@
 #  define SGTP_VIDEO_SRC  "ksvideosrc"
 #  define SGTP_AUDIO_SRC  "wasapisrc"
 #  define SGTP_DEV_PROP   "device-index"   // integer index
+#  define SGTP_AUDIO_ENC  "avenc_aac"      // from gst-libav
 #elif defined(__ANDROID__)
 #  define SGTP_VIDEO_SRC  "ahcsrc"
 #  define SGTP_AUDIO_SRC  "openslessrc"
 #  define SGTP_DEV_PROP   "camera"         // 0=back, 1=front
+#  define SGTP_AUDIO_ENC  "voaacenc"       // Android HW encoder
+#elif defined(IOS)
+#  define SGTP_VIDEO_SRC  "avfvideosrc"
+#  define SGTP_AUDIO_SRC  "osxaudiosrc"
+#  define SGTP_DEV_PROP   "device-index"
+#  define SGTP_AUDIO_ENC  "voaacenc"       // iOS HW encoder
 #elif defined(__APPLE__)
 #  define SGTP_VIDEO_SRC  "avfvideosrc"
 #  define SGTP_AUDIO_SRC  "osxaudiosrc"
 #  define SGTP_DEV_PROP   "device-index"
+#  define SGTP_AUDIO_ENC  "avenc_aac"      // from gst-libav
 #else  // Linux
 #  define SGTP_VIDEO_SRC  "v4l2src"
 #  define SGTP_AUDIO_SRC  "pulsesrc"
 #  define SGTP_DEV_PROP   "device"         // string path /dev/videoN
+#  define SGTP_AUDIO_ENC  "avenc_aac"      // from gst-libav
 #endif
 
 // ---------------------------------------------------------------------------
@@ -175,59 +184,65 @@ static gchar* build_pipeline_desc(
         return g_strdup_printf(
             SGTP_VIDEO_SRC "%s name=vsrc "
             "! videoconvert "
+            "! aspectratiocrop aspect-ratio=1/1 "
             "! videoscale "
-            "! video/x-raw,format=RGBA,width=%d,height=%d,pixel-aspect-ratio=1/1 "
+            "! video/x-raw,format=RGBA,width=%d,height=%d "
             "! appsink name=preview_sink emit-signals=true sync=false "
             "  max-buffers=2 drop=true",
             dev_frag,
             preview_w, preview_h
         );
     } else {
+        // Normalize path separators for GStreamer (forward slashes required)
+        char norm_path[1024];
+        strncpy(norm_path, output_path, sizeof(norm_path) - 1);
+        norm_path[sizeof(norm_path) - 1] = '\0';
+#ifdef _WIN32
+        for (char *p = norm_path; *p; p++) { if (*p == '\\') *p = '/'; }
+#endif
+
         // ---- Preview + Recording ----
         // Video: capture → tee
-        //   branch A → preview appsink
+        //   branch A → aspectratiocrop → preview appsink
         //   branch B → aspectratiocrop → scale → encode → mux
-        // Audio: capture → encode → mux
-        // Mux → filesink
+        // Audio: capture → encode → mux → filesink
         return g_strdup_printf(
             SGTP_VIDEO_SRC "%s name=vsrc "
             "! videoconvert "
             "! tee name=t "
 
-            // Preview branch
+            // Preview branch (square crop)
             "t. ! queue leaky=downstream max-size-buffers=2 "
+            "! aspectratiocrop aspect-ratio=1/1 "
             "! videoscale "
-            "! video/x-raw,format=RGBA,width=%d,height=%d,pixel-aspect-ratio=1/1 "
+            "! video/x-raw,format=RGBA,width=%d,height=%d "
             "! appsink name=preview_sink emit-signals=true sync=false "
             "  max-buffers=2 drop=true "
 
-            // Recording branch: crop square → scale → H.264
+            // Recording branch: crop square → scale → H.264 → mp4mux → filesink
             "t. ! queue leaky=downstream max-size-buffers=4 "
             "! aspectratiocrop aspect-ratio=1/1 "
             "! videoscale "
-            "! video/x-raw,width=%d,height=%d,framerate=30/1,pixel-aspect-ratio=1/1 "
+            "! video/x-raw,width=%d,height=%d "
             "! videoconvert "
             "! x264enc bitrate=%d tune=zerolatency key-int-max=30 "
             "! h264parse "
-            "! mp4mux name=mux "
+            "! mp4mux name=mux ! filesink location=\"%s\" "
 
             // Audio branch
             SGTP_AUDIO_SRC " "
             "! audioconvert "
             "! audioresample "
             "! audio/x-raw,rate=44100,channels=1 "
-            "! voaacenc bitrate=%d "
-            "! mux. "
-
-            // Output
-            "mux. ! filesink location=%s",
+            "! " SGTP_AUDIO_ENC " bitrate=%d "
+            "! mux.",
 
             dev_frag,
             preview_w, preview_h,
             target_size, target_size,
             video_kbps,
-            audio_kbps * 1000,
-            output_path
+            norm_path,
+            audio_kbps * 1000
         );
     }
 }
@@ -350,21 +365,31 @@ SGTP_CAM_EXPORT int32_t sgtp_camera_enumerate(
         GstDevice *dev = GST_DEVICE(l->data);
 
         gchar *display = gst_device_get_display_name(dev);
-        GstStructure *props = gst_device_get_properties(dev);
 
-        // Use display name as id (works cross-platform).
-        // On Windows ksvideosrc accepts device-name= property.
-        const gchar *id = display;
+        char id_buf[256] = "";
+#if defined(__linux__) && !defined(__ANDROID__)
+        // Linux/v4l2src: use device path (e.g. /dev/video0)
+        GstStructure *props = gst_device_get_properties(dev);
+        const gchar *dev_path = props ? gst_structure_get_string(props, "device.path") : NULL;
+        if (dev_path && dev_path[0]) {
+            strncpy(id_buf, dev_path, 255);
+        } else {
+            snprintf(id_buf, sizeof(id_buf), "%d", count);
+        }
+        if (props) gst_structure_free(props);
+#else
+        // Windows (ksvideosrc device-index=N) / macOS / Android / iOS:
+        // use the enumeration order as the integer device index.
+        snprintf(id_buf, sizeof(id_buf), "%d", count);
+#endif
 
         if (devices) {
             strncpy(devices[count].display_name,
                     display ? display : "", 255);
-            strncpy(devices[count].id,
-                    id ? id : "", 255);
+            strncpy(devices[count].id, id_buf, 255);
         }
 
         g_free(display);
-        if (props) gst_structure_free(props);
         gst_object_unref(dev);
         count++;
     }

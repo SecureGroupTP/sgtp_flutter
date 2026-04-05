@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
+import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:sgtp_camera/sgtp_camera.dart';
 
 import '../../core/app_logger.dart';
 import '../../core/video_note_pipeline.dart';
@@ -22,6 +26,11 @@ class VideoNoteCaptureResult {
     required this.metadata,
   });
 }
+
+bool get _isDesktop =>
+    !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
+// ---------------------------------------------------------------------------
 
 class VideoNoteRecorderPage extends StatefulWidget {
   final String? preferredCameraName;
@@ -43,22 +52,34 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   final Stopwatch _stopwatch = Stopwatch();
   Timer? _ticker;
 
-  List<CameraDescription> _cameras = const [];
-  CameraController? _controller;
-  int _cameraIndex = 0;
+  // --- Desktop (SgtpCamera) ---
+  List<CameraDeviceInfo> _sgtpCameras = const [];
+  int _sgtpIndex = 0;
+
+  // --- Mobile (camera package) ---
+  List<CameraDescription> _mobileCameras = const [];
+  CameraController? _mobileController;
+  int _mobileIndex = 0;
 
   bool _initializing = true;
   bool _isRecording = false;
   bool _isProcessing = false;
-  bool _audioEnabledController = false;
   String? _error;
   Duration _elapsed = Duration.zero;
+
+  // path used for the current desktop recording
+  String? _recordingPath;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    unawaited(_initCamera(selectDefault: true));
+    if (_isDesktop) {
+      SgtpCamera.init();
+      unawaited(_initDesktop(selectDefault: true));
+    } else {
+      unawaited(_initMobile(selectDefault: true));
+    }
   }
 
   @override
@@ -66,260 +87,334 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
     _stopwatch.stop();
-    unawaited(_controller?.dispose());
+    if (_isDesktop) {
+      SgtpCamera.close();
+    } else {
+      unawaited(_mobileController?.dispose());
+    }
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
+    if (_isDesktop) return; // GStreamer handles this internally
+    final ctrl = _mobileController;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
     if (state == AppLifecycleState.inactive) {
-      unawaited(controller.dispose());
-      _controller = null;
+      unawaited(ctrl.dispose());
+      _mobileController = null;
     } else if (state == AppLifecycleState.resumed && !_isProcessing) {
-      unawaited(_initCamera(index: _cameraIndex));
+      unawaited(_initMobile(index: _mobileIndex));
     }
   }
 
-  Future<void> _initCamera({
+  // -------------------------------------------------------------------------
+  // Desktop init
+  // -------------------------------------------------------------------------
+
+  Future<void> _initDesktop({int index = 0, bool selectDefault = false}) async {
+    setState(() { _initializing = true; _error = null; });
+    try {
+      SgtpCamera.close();
+      final cameras = SgtpCamera.enumerate();
+      AppLogger.i('Desktop cameras: ${cameras.length}', tag: 'VIDEO');
+      if (cameras.isEmpty) {
+        setState(() { _initializing = false; _error = 'No cameras found'; });
+        return;
+      }
+      _sgtpCameras = cameras;
+
+      var target = index.clamp(0, cameras.length - 1);
+      if (selectDefault) {
+        final preferred = widget.preferredCameraName;
+        if (preferred != null && preferred.isNotEmpty) {
+          final i = cameras.indexWhere((c) => c.id == preferred || c.displayName == preferred);
+          if (i >= 0) target = i;
+        }
+      }
+      _sgtpIndex = target;
+
+      final rc = SgtpCamera.open(
+        deviceId: cameras[target].id,
+        previewWidth: 480,
+        previewHeight: 480,
+      );
+      if (rc != 0) throw Exception('sgtp_camera_open failed: $rc');
+
+      if (!mounted) { SgtpCamera.close(); return; }
+      setState(() { _initializing = false; });
+    } catch (e) {
+      AppLogger.e('Desktop camera init failed: $e', tag: 'VIDEO');
+      if (!mounted) return;
+      setState(() { _initializing = false; _error = 'Failed to open camera: $e'; });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Mobile init
+  // -------------------------------------------------------------------------
+
+  Future<void> _initMobile({
     int index = 0,
     bool selectDefault = false,
     bool enableAudio = false,
   }) async {
-    setState(() {
-      _initializing = true;
-      _error = null;
-    });
+    setState(() { _initializing = true; _error = null; });
     try {
       final cameras = await availableCameras();
-      AppLogger.i('Recorder available cameras: ${cameras.length}',
-          tag: 'VIDEO');
       if (cameras.isEmpty) {
-        setState(() {
-          _initializing = false;
-          _error = 'No cameras found';
-        });
+        setState(() { _initializing = false; _error = 'No cameras found'; });
         return;
       }
-      _cameras = cameras;
+      _mobileCameras = cameras;
 
       var target = index.clamp(0, cameras.length - 1);
       if (selectDefault) {
-        final preferredName = widget.preferredCameraName;
-        if (preferredName != null && preferredName.isNotEmpty) {
-          final preferredIndex =
-              cameras.indexWhere((camera) => camera.name == preferredName);
-          if (preferredIndex >= 0) {
-            target = preferredIndex;
-          }
+        final preferred = widget.preferredCameraName;
+        if (preferred != null && preferred.isNotEmpty) {
+          final i = cameras.indexWhere((c) => c.name == preferred);
+          if (i >= 0) target = i;
         } else {
-          final frontIndex = cameras.indexWhere(
-            (camera) => camera.lensDirection == CameraLensDirection.front,
-          );
-          target = frontIndex >= 0 ? frontIndex : 0;
+          final front = cameras.indexWhere(
+              (c) => c.lensDirection == CameraLensDirection.front);
+          if (front >= 0) target = front;
         }
       }
 
-      await _controller?.dispose();
-      final controller = CameraController(
-        cameras[target],
-        ResolutionPreset.medium,
-        enableAudio: enableAudio,
-      );
-      await controller.initialize();
-      await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
-      if (enableAudio && Platform.isIOS) {
-        await controller.prepareForVideoRecording();
-      }
-      AppLogger.i(
-        'Recorder camera initialized: index=$target, audio=$enableAudio, '
-        'aspect=${controller.value.aspectRatio}, '
-        'preview=${controller.value.previewSize?.width}x${controller.value.previewSize?.height}',
-        tag: 'VIDEO',
-      );
+      await _mobileController?.dispose();
+      final ctrl = CameraController(cameras[target], ResolutionPreset.medium,
+          enableAudio: enableAudio);
+      await ctrl.initialize();
+      await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      if (enableAudio && Platform.isIOS) await ctrl.prepareForVideoRecording();
 
-      if (!mounted) {
-        await controller.dispose();
-        return;
-      }
-
+      if (!mounted) { await ctrl.dispose(); return; }
       setState(() {
-        _controller = controller;
-        _cameraIndex = target;
-        _audioEnabledController = enableAudio;
+        _mobileController = ctrl;
+        _mobileIndex = target;
         _initializing = false;
       });
     } catch (e) {
-      AppLogger.e('Recorder init failed: $e', tag: 'VIDEO');
+      AppLogger.e('Mobile camera init failed: $e', tag: 'VIDEO');
       if (!mounted) return;
-      setState(() {
-        _initializing = false;
-        _error = 'Failed to initialize camera: $e';
-      });
+      setState(() { _initializing = false; _error = 'Failed to open camera: $e'; });
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Swap camera
+  // -------------------------------------------------------------------------
 
   Future<void> _swapCamera() async {
-    if (_isProcessing || _cameras.length < 2) return;
-    final next = (_cameraIndex + 1) % _cameras.length;
-    if (_isRecording) {
-      final controller = _controller;
-      if (controller == null || !controller.value.isInitialized) return;
-      try {
-        AppLogger.i(
-          'Recorder switch camera while recording: $_cameraIndex -> $next',
-          tag: 'VIDEO',
-        );
-        await controller.setDescription(_cameras[next]);
-        await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
-        if (!mounted) return;
-        setState(() => _cameraIndex = next);
-      } catch (e) {
-        AppLogger.e(
-          'Recorder switch camera while recording failed: $e',
-          tag: 'VIDEO',
-        );
-        _showSnack('Failed to switch camera: $e');
+    if (_isProcessing) return;
+    if (_isDesktop) {
+      if (_sgtpCameras.length < 2) return;
+      final next = (_sgtpIndex + 1) % _sgtpCameras.length;
+      await _initDesktop(index: next);
+    } else {
+      if (_mobileCameras.length < 2) return;
+      final next = (_mobileIndex + 1) % _mobileCameras.length;
+      if (_isRecording) {
+        try {
+          await _mobileController?.setDescription(_mobileCameras[next]);
+          setState(() => _mobileIndex = next);
+        } catch (e) { _showSnack('Failed to switch camera: $e'); }
+      } else {
+        await _initMobile(index: next);
       }
-      return;
     }
-    await _initCamera(index: next, enableAudio: _audioEnabledController);
   }
 
+  // -------------------------------------------------------------------------
+  // Start recording
+  // -------------------------------------------------------------------------
+
   Future<void> _startRecording() async {
-    if (_isRecording || _isProcessing) {
-      return;
-    }
+    if (_isRecording || _isProcessing) return;
     try {
-      AppLogger.i('Recorder start requested', tag: 'VIDEO');
-      if (!_audioEnabledController) {
-        await _initCamera(index: _cameraIndex, enableAudio: true);
+      if (_isDesktop) {
+        final tmp = await getTemporaryDirectory();
+        _recordingPath =
+            '${tmp.path}/videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        final rc = SgtpCamera.startRecording(outputPath: _recordingPath!);
+        if (rc != 0) throw Exception('start_recording failed: $rc');
+      } else {
+        // Ensure audio is enabled on mobile
+        final ctrl = _mobileController;
+        if (ctrl == null) return;
+        if (!ctrl.value.isInitialized) return;
+        // Re-init with audio if not enabled
+        final hasAudio = ctrl.value.description.lensDirection != CameraLensDirection.front;
+        if (!hasAudio) {
+          await _initMobile(index: _mobileIndex, enableAudio: true);
+          if (_mobileController == null) return;
+        }
+        await _mobileController!.startVideoRecording();
       }
-      final controller = _controller;
-      if (controller == null || !controller.value.isInitialized) {
-        return;
-      }
-      await controller.startVideoRecording();
-      AppLogger.i('Recorder video recording started', tag: 'VIDEO');
+
       HapticFeedback.mediumImpact();
-      _stopwatch
-        ..reset()
-        ..start();
+      _stopwatch..reset()..start();
       _ticker?.cancel();
       _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
         if (!mounted) return;
-        final elapsed = _stopwatch.elapsed;
-        if (elapsed >= _maxDuration) {
+        if (_stopwatch.elapsed >= _maxDuration) {
           unawaited(_stopAndPrepare());
           return;
         }
-        setState(() => _elapsed = elapsed);
+        setState(() => _elapsed = _stopwatch.elapsed);
       });
-      setState(() {
-        _isRecording = true;
-        _elapsed = Duration.zero;
-      });
+      setState(() { _isRecording = true; _elapsed = Duration.zero; });
     } catch (e) {
-      AppLogger.e('Recorder start failed: $e', tag: 'VIDEO');
+      AppLogger.e('Start recording failed: $e', tag: 'VIDEO');
       _showSnack('Failed to start recording: $e');
     }
   }
 
-  Future<void> _stopAndPrepare() async {
-    final controller = _controller;
-    if (controller == null || !_isRecording || _isProcessing) return;
+  // -------------------------------------------------------------------------
+  // Stop and prepare
+  // -------------------------------------------------------------------------
 
+  Future<void> _stopAndPrepare() async {
+    if (!_isRecording || _isProcessing) return;
     _ticker?.cancel();
     _stopwatch.stop();
     final elapsed = _stopwatch.elapsed;
 
+    setState(() { _isProcessing = true; _isRecording = false; _elapsed = elapsed; });
+
     try {
-      AppLogger.i(
-          'Recorder stop requested, elapsed=${elapsed.inMilliseconds}ms',
-          tag: 'VIDEO');
-      setState(() {
-        _isProcessing = true;
-        _isRecording = false;
-        _elapsed = elapsed;
-      });
-      final recorded = await controller.stopVideoRecording();
-      AppLogger.i('Recorder raw file: ${recorded.path}', tag: 'VIDEO');
-      if (elapsed < _minDuration) {
-        await _deleteFile(recorded.path);
-        if (!mounted) return;
-        setState(() => _isProcessing = false);
-        _showSnack('Hold a bit longer to record');
-        return;
+      if (_isDesktop) {
+        await _stopDesktop(elapsed);
+      } else {
+        await _stopMobile(elapsed);
       }
-
-      final prepared = await VideoNotePipeline.prepare(
-        sourceFile: recorded,
-      );
-      AppLogger.i(
-        'Recorder prepared file: ${prepared.xFile.path}, mime=${prepared.mime}, ${prepared.metadata.width}x${prepared.metadata.height}, duration=${prepared.metadata.durationMs}ms',
-        tag: 'VIDEO',
-      );
-      if (prepared.xFile.path != recorded.path) {
-        await _deleteFile(recorded.path);
-      }
-
-      if (!mounted) return;
-      setState(() => _isProcessing = false);
-      Navigator.of(context).pop(
-        VideoNoteCaptureResult(
-          xFile: prepared.xFile,
-          mime: prepared.mime,
-          metadata: prepared.metadata,
-        ),
-      );
     } catch (e) {
       AppLogger.e('Recorder finalize failed: $e', tag: 'VIDEO');
       if (!mounted) return;
-      setState(() {
-        _isProcessing = false;
-        _isRecording = false;
-      });
+      setState(() { _isProcessing = false; _isRecording = false; });
       _showSnack('Failed to finalize video note: $e');
     }
   }
 
+  Future<void> _stopDesktop(Duration elapsed) async {
+    if (elapsed < _minDuration) {
+      SgtpCamera.stopRecording();
+      if (_recordingPath != null) await _deleteFile(_recordingPath!);
+      _recordingPath = null;
+      if (!mounted) return;
+      setState(() => _isProcessing = false);
+      _showSnack('Hold a bit longer to record');
+      return;
+    }
+
+    final durationMs = SgtpCamera.stopRecording();
+    final path = _recordingPath!;
+    _recordingPath = null;
+
+    final file = File(path);
+    final fileSize = await file.length();
+    final actualDurationMs = durationMs > 0 ? durationMs : elapsed.inMilliseconds;
+
+    AppLogger.i('Desktop recording done: $path, ${actualDurationMs}ms, ${fileSize}B',
+        tag: 'VIDEO');
+
+    if (!mounted) return;
+    setState(() => _isProcessing = false);
+    Navigator.of(context).pop(VideoNoteCaptureResult(
+      xFile: XFile(path),
+      mime: 'video/mp4',
+      metadata: VideoNoteMetadata(
+        durationMs: actualDurationMs.clamp(0, 60000),
+        width: 480,
+        height: 480,
+        hasAudio: true,
+        fileSizeBytes: fileSize,
+      ),
+    ));
+  }
+
+  Future<void> _stopMobile(Duration elapsed) async {
+    final ctrl = _mobileController;
+    if (ctrl == null) return;
+
+    final recorded = await ctrl.stopVideoRecording();
+    AppLogger.i('Mobile recording done: ${recorded.path}', tag: 'VIDEO');
+
+    if (elapsed < _minDuration) {
+      await _deleteFile(recorded.path);
+      if (!mounted) return;
+      setState(() => _isProcessing = false);
+      _showSnack('Hold a bit longer to record');
+      return;
+    }
+
+    final prepared = await VideoNotePipeline.prepare(sourceFile: recorded);
+    if (prepared.xFile.path != recorded.path) await _deleteFile(recorded.path);
+
+    if (!mounted) return;
+    setState(() => _isProcessing = false);
+    Navigator.of(context).pop(VideoNoteCaptureResult(
+      xFile: prepared.xFile,
+      mime: prepared.mime,
+      metadata: prepared.metadata,
+    ));
+  }
+
+  // -------------------------------------------------------------------------
+  // Cancel
+  // -------------------------------------------------------------------------
+
   Future<void> _cancel() async {
     if (_isRecording) {
-      try {
-        final file = await _controller?.stopVideoRecording();
-        if (file != null) {
-          await _deleteFile(file.path);
-        }
-      } catch (_) {}
+      if (_isDesktop) {
+        SgtpCamera.stopRecording();
+        if (_recordingPath != null) await _deleteFile(_recordingPath!);
+        _recordingPath = null;
+      } else {
+        try {
+          final f = await _mobileController?.stopVideoRecording();
+          if (f != null) await _deleteFile(f.path);
+        } catch (_) {}
+      }
     }
     if (mounted) Navigator.of(context).pop(null);
   }
 
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
   Future<void> _deleteFile(String path) async {
     if (kIsWeb || path.isEmpty) return;
-    try {
-      await File(path).delete();
-    } catch (_) {}
+    try { await File(path).delete(); } catch (_) {}
   }
 
-  void _showSnack(String message) {
+  void _showSnack(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  String _format(Duration value) {
-    final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = value.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
+  String _format(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
+
+  bool get _canSwap => _isDesktop
+      ? _sgtpCameras.length >= 2
+      : _mobileCameras.length >= 2;
+
+  bool get _previewReady => _isDesktop
+      ? !_initializing && _error == null
+      : _mobileController?.value.isInitialized == true;
+
+  // -------------------------------------------------------------------------
+  // Build
+  // -------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    final controller = _controller;
-    final previewReady = controller != null && controller.value.isInitialized;
     final progress =
         (_elapsed.inMilliseconds / _maxDuration.inMilliseconds).clamp(0.0, 1.0);
 
@@ -340,16 +435,13 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                   Text(
                     _isProcessing ? 'Preparing…' : _format(_elapsed),
                     style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700),
                   ),
                   const Spacer(),
                   IconButton(
-                    onPressed: (_isProcessing || _cameras.length < 2)
-                        ? null
-                        : _swapCamera,
+                    onPressed: (_isProcessing || !_canSwap) ? null : _swapCamera,
                     icon: const Icon(Icons.cameraswitch_rounded,
                         color: Colors.white),
                   ),
@@ -377,8 +469,11 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                       ClipOval(
                         child: Container(
                           color: const Color(0xFF151821),
-                          child: previewReady
-                              ? _CameraPreviewFrame(controller: controller)
+                          child: _previewReady
+                              ? (_isDesktop
+                                  ? const _SgtpPreviewWidget()
+                                  : _MobilePreviewWidget(
+                                      controller: _mobileController!))
                               : Center(
                                   child: _initializing
                                       ? const CircularProgressIndicator()
@@ -386,8 +481,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                                           _error ?? 'Camera unavailable',
                                           textAlign: TextAlign.center,
                                           style: const TextStyle(
-                                            color: Colors.white70,
-                                          ),
+                                              color: Colors.white70),
                                         ),
                                 ),
                         ),
@@ -395,9 +489,8 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
                       if (_isProcessing)
                         Container(
                           decoration: const BoxDecoration(
-                            color: Color(0x9906070A),
-                            shape: BoxShape.circle,
-                          ),
+                              color: Color(0x9906070A),
+                              shape: BoxShape.circle),
                           child: const Padding(
                             padding: EdgeInsets.all(28),
                             child: CircularProgressIndicator(),
@@ -455,77 +548,104 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
   }
 }
 
-class _CameraPreviewFrame extends StatelessWidget {
+// ---------------------------------------------------------------------------
+// Desktop preview — RGBA stream from GStreamer via SgtpCamera
+// ---------------------------------------------------------------------------
+
+class _SgtpPreviewWidget extends StatefulWidget {
+  const _SgtpPreviewWidget();
+
+  @override
+  State<_SgtpPreviewWidget> createState() => _SgtpPreviewWidgetState();
+}
+
+class _SgtpPreviewWidgetState extends State<_SgtpPreviewWidget> {
+  ui.Image? _image;
+  StreamSubscription<CameraFrame>? _sub;
+  bool _decoding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = SgtpCamera.previewStream.listen(_onFrame);
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _image?.dispose();
+    super.dispose();
+  }
+
+  void _onFrame(CameraFrame frame) {
+    if (_decoding) return; // skip if still decoding previous frame
+    _decoding = true;
+    ui.decodeImageFromPixels(
+      frame.rgba,
+      frame.width,
+      frame.height,
+      ui.PixelFormat.rgba8888,
+      (img) {
+        _decoding = false;
+        if (!mounted) { img.dispose(); return; }
+        setState(() {
+          _image?.dispose();
+          _image = img;
+        });
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final img = _image;
+    if (img == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return RawImage(image: img, fit: BoxFit.cover,
+        width: double.infinity, height: double.infinity);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mobile preview — existing CameraPreview widget
+// ---------------------------------------------------------------------------
+
+class _MobilePreviewWidget extends StatelessWidget {
   final CameraController controller;
 
-  const _CameraPreviewFrame({required this.controller});
+  const _MobilePreviewWidget({required this.controller});
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<CameraValue>(
       valueListenable: controller,
       builder: (context, value, _) {
-        if (!value.isInitialized) {
-          return const SizedBox.shrink();
-        }
-
-        final previewSize = _orientedPreviewSize(value);
-
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final viewportSize = constraints.biggest;
-            if (!viewportSize.width.isFinite ||
-                !viewportSize.height.isFinite ||
-                viewportSize.isEmpty) {
-              return const SizedBox.shrink();
-            }
-
-            final fittedSize = _coverSize(
-              viewportSize: viewportSize,
-              previewSize: previewSize,
-            );
-
-            return Center(
-              child: SizedBox(
-                width: fittedSize.width,
-                height: fittedSize.height,
-                child: CameraPreview(controller),
-              ),
-            );
-          },
-        );
+        if (!value.isInitialized) return const SizedBox.shrink();
+        final baseSize = value.previewSize ?? const Size(1, 1);
+        final isLandscape =
+            value.deviceOrientation == DeviceOrientation.landscapeLeft ||
+            value.deviceOrientation == DeviceOrientation.landscapeRight;
+        final previewSize =
+            isLandscape ? baseSize : Size(baseSize.height, baseSize.width);
+        return LayoutBuilder(builder: (context, constraints) {
+          final viewport = constraints.biggest;
+          if (!viewport.width.isFinite || viewport.isEmpty) {
+            return const SizedBox.shrink();
+          }
+          final scale = math.max(
+            viewport.width / previewSize.width,
+            viewport.height / previewSize.height,
+          );
+          return Center(
+            child: SizedBox(
+              width: previewSize.width * scale,
+              height: previewSize.height * scale,
+              child: CameraPreview(controller),
+            ),
+          );
+        });
       },
-    );
-  }
-
-  Size _orientedPreviewSize(CameraValue value) {
-    final baseSize = value.previewSize ?? const Size(1, 1);
-    final orientation = _applicableOrientation(value);
-    final isLandscape = orientation == DeviceOrientation.landscapeLeft ||
-        orientation == DeviceOrientation.landscapeRight;
-    return isLandscape ? baseSize : Size(baseSize.height, baseSize.width);
-  }
-
-  DeviceOrientation _applicableOrientation(CameraValue value) {
-    if (value.isRecordingVideo && value.recordingOrientation != null) {
-      return value.recordingOrientation!;
-    }
-    return value.previewPauseOrientation ??
-        value.lockedCaptureOrientation ??
-        value.deviceOrientation;
-  }
-
-  Size _coverSize({
-    required Size viewportSize,
-    required Size previewSize,
-  }) {
-    final scale = math.max(
-      viewportSize.width / previewSize.width,
-      viewportSize.height / previewSize.height,
-    );
-    return Size(
-      previewSize.width * scale,
-      previewSize.height * scale,
     );
   }
 }

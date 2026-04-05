@@ -3,9 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 
-import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:sgtp_camera/sgtp_camera.dart';
 import 'package:image/image.dart' as img;
 import '../../core/app_logger.dart';
 import '../../core/interaction_prefs.dart';
@@ -49,7 +49,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   String? _recordingPath;
   List<InputDevice> _microphones = const [];
   String? _selectedMicrophoneId;
-  List<CameraDescription> _cameras = const [];
+  List<CameraDeviceInfo> _desktopCameras = const [];
   String? _selectedCameraName;
   bool _hasMicrophone = false;
   bool _hasCamera = false;
@@ -225,7 +225,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       setState(() {
         _microphones = const [];
         _selectedMicrophoneId = null;
-        _cameras = const [];
+        _desktopCameras = const [];
         _selectedCameraName = null;
         _hasMicrophone = true;
         // Virtual camera capability for UI mode switching.
@@ -236,12 +236,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
 
     List<InputDevice> microphones = const [];
-    List<CameraDescription> cameras = const [];
+    List<CameraDeviceInfo> cameras = const [];
     try {
       microphones = await _recorder.listInputDevices();
     } catch (_) {}
     try {
-      cameras = await availableCameras();
+      cameras = _isDesktop
+          ? SgtpCamera.enumerate()
+          : const []; // mobile camera list not needed here; VideoNoteRecorderPage handles it
     } catch (_) {}
 
     final savedMicId =
@@ -260,15 +262,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
     String? selectedCameraName;
     for (final cam in cameras) {
-      if (cam.name == savedCameraName) {
-        selectedCameraName = cam.name;
+      if (cam.id == savedCameraName) {
+        selectedCameraName = cam.id;
         break;
       }
     }
-    selectedCameraName ??= cameras.isNotEmpty ? cameras.first.name : null;
+    selectedCameraName ??= cameras.isNotEmpty ? cameras.first.id : null;
 
     final hasMic = microphones.isNotEmpty;
-    final hasCam = cameras.isNotEmpty;
+    final hasCam = _isDesktop ? cameras.isNotEmpty : true; // mobile always has camera
     var videoMode = _isVideoNoteMode;
     if (!hasCam) videoMode = false;
     if (!hasMic && hasCam) videoMode = true;
@@ -277,7 +279,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     setState(() {
       _microphones = microphones;
       _selectedMicrophoneId = selectedMicId;
-      _cameras = cameras;
+      _desktopCameras = cameras;
       _selectedCameraName = selectedCameraName;
       _hasMicrophone = hasMic;
       _hasCamera = hasCam;
@@ -730,17 +732,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final useCamera = _isVideoNoteMode && _hasCamera;
     if (useCamera) {
       // Open full-screen camera recorder; get recorded file + detected MIME.
-      CameraDescription? preferred;
-      for (final cam in _cameras) {
-        if (cam.name == _selectedCameraName) {
-          preferred = cam;
-          break;
+      CameraDeviceInfo? preferredDesktop;
+      if (_isDesktop) {
+        for (final cam in _desktopCameras) {
+          if (cam.id == _selectedCameraName) {
+            preferredDesktop = cam;
+            break;
+          }
         }
       }
       final capture = await Navigator.of(context).push<VideoNoteCaptureResult?>(
         MaterialPageRoute(
           builder: (_) => VideoNoteRecorderPage(
-            preferredCameraName: preferred?.name,
+            preferredCameraName: preferredDesktop?.id ?? _selectedCameraName,
           ),
           fullscreenDialog: true,
         ),

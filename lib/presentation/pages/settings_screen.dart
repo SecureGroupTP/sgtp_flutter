@@ -2,8 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
-import 'package:camera/camera.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:sgtp_camera/sgtp_camera.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_theme.dart';
@@ -117,14 +119,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _captureDevicesLoading = false;
   List<InputDevice> _microphones = const [];
   String? _selectedMicrophoneId;
-  List<CameraDescription> _cameras = const [];
+  List<CameraDeviceInfo> _cameras = const [];
   String? _selectedCameraName;
   final AudioRecorder _micCheckRecorder = AudioRecorder();
   final AudioPlayer _micCheckPlayer = AudioPlayer();
   Timer? _micCheckTimer;
   bool _micCheckEnabled = false;
   bool _micCheckInFlight = false;
-  CameraController? _cameraCheckController;
   bool _cameraCheckEnabled = false;
   bool _cameraCheckLoading = false;
   String? _cameraCheckError;
@@ -148,6 +149,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    SgtpCamera.init();
     _userAvatar = widget.currentUserAvatar;
     _loadFromConfig();
   }
@@ -244,11 +246,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     unawaited(_micCheckRecorder.dispose());
     unawaited(_micCheckPlayer.stop());
     unawaited(_micCheckPlayer.dispose());
-    final cameraController = _cameraCheckController;
-    _cameraCheckController = null;
-    if (cameraController != null) {
-      unawaited(cameraController.dispose());
-    }
+    if (_cameraCheckEnabled) SgtpCamera.close();
     _nicknameCtrl.dispose();
     _usernameCtrl.dispose();
     _logsCountNotifier.dispose();
@@ -335,12 +333,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _captureDevicesLoading = true);
 
     List<InputDevice> microphones = const [];
-    List<CameraDescription> cameras = const [];
+    List<CameraDeviceInfo> cameras = const [];
     try {
       microphones = await AudioRecorder().listInputDevices();
     } catch (_) {}
     try {
-      cameras = await availableCameras();
+      cameras = SgtpCamera.enumerate();
     } catch (_) {}
 
     final savedMicId =
@@ -359,12 +357,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     String? selectedCameraName;
     for (final cam in cameras) {
-      if (cam.name == savedCameraName) {
-        selectedCameraName = cam.name;
+      if (cam.id == savedCameraName) {
+        selectedCameraName = cam.id;
         break;
       }
     }
-    selectedCameraName ??= cameras.isNotEmpty ? cameras.first.name : null;
+    selectedCameraName ??= cameras.isNotEmpty ? cameras.first.id : null;
 
     if (!mounted) return;
     setState(() {
@@ -377,13 +375,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  String _cameraLabel(CameraDescription cam) {
-    return switch (cam.lensDirection) {
-      CameraLensDirection.front => 'Front camera',
-      CameraLensDirection.back => 'Back camera',
-      CameraLensDirection.external => 'External camera',
-    };
-  }
+  String _cameraLabel(CameraDeviceInfo cam) => cam.displayName;
 
   Future<void> _selectMicrophone(String id) async {
     final accountId = _activeAccountId();
@@ -523,19 +515,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _cameraCheckEnabled = false;
     _cameraCheckLoading = false;
     _cameraCheckError = null;
-    final previousController = _cameraCheckController;
-    _cameraCheckController = null;
-    if (previousController != null) {
-      await previousController.dispose();
-    }
+    SgtpCamera.close();
 
     if (!enabled) {
       if (mounted) setState(() {});
       return;
     }
 
-    final selectedName = _selectedCameraName;
-    if (selectedName == null || selectedName.isEmpty) {
+    final selectedId = _selectedCameraName;
+    if (selectedId == null || selectedId.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Select a camera first')),
@@ -543,14 +531,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       return;
     }
-    CameraDescription? selectedCamera;
-    for (final cam in _cameras) {
-      if (cam.name == selectedName) {
-        selectedCamera = cam;
-        break;
-      }
-    }
-    if (selectedCamera == null) {
+    final cameraExists = _cameras.any((c) => c.id == selectedId);
+    if (!cameraExists) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Selected camera is unavailable')),
@@ -571,18 +553,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final token = ++_cameraCheckToken;
     try {
-      final controller = CameraController(
-        selectedCamera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-      await controller.initialize();
+      final result = SgtpCamera.open(deviceId: selectedId);
       if (!mounted || token != _cameraCheckToken || !_cameraCheckEnabled) {
-        await controller.dispose();
+        SgtpCamera.close();
+        return;
+      }
+      if (result != 0) {
+        setState(() {
+          _cameraCheckEnabled = false;
+          _cameraCheckLoading = false;
+          _cameraCheckError = 'Failed to open camera (error $result)';
+        });
         return;
       }
       setState(() {
-        _cameraCheckController = controller;
         _cameraCheckLoading = false;
       });
     } catch (e) {
@@ -3028,7 +3012,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildCameraCheckPreview() {
-    final controller = _cameraCheckController;
     if (_cameraCheckLoading) {
       return const SizedBox(
         height: 128,
@@ -3055,24 +3038,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
     }
-    if (controller == null || !controller.value.isInitialized) {
-      return const SizedBox.shrink();
-    }
     return Align(
       alignment: Alignment.topLeft,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: SizedBox(
+        child: const SizedBox(
           width: 156,
           height: 156,
-          child: FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: 156,
-              height: 156 / controller.value.aspectRatio,
-              child: CameraPreview(controller),
-            ),
-          ),
+          child: _SgtpCameraPreview(),
         ),
       ),
     );
@@ -3204,8 +3177,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               items: _cameras
                   .map(
                     (cam) => DropdownMenuItem<String>(
-                      value: cam.name,
-                      child: Text('${_cameraLabel(cam)} (${cam.name})'),
+                      value: cam.id,
+                      child: Text(_cameraLabel(cam)),
                     ),
                   )
                   .toList(),
@@ -4836,5 +4809,67 @@ class _ChoiceChip extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live preview widget using SgtpCamera.previewStream
+// ---------------------------------------------------------------------------
+
+class _SgtpCameraPreview extends StatefulWidget {
+  const _SgtpCameraPreview();
+
+  @override
+  State<_SgtpCameraPreview> createState() => _SgtpCameraPreviewState();
+}
+
+class _SgtpCameraPreviewState extends State<_SgtpCameraPreview> {
+  StreamSubscription<CameraFrame>? _sub;
+  ui.Image? _image;
+  bool _decoding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = SgtpCamera.previewStream.listen(_onFrame);
+  }
+
+  void _onFrame(CameraFrame frame) {
+    if (_decoding || !mounted) return;
+    _decoding = true;
+    ui.decodeImageFromPixels(
+      Uint8List.fromList(frame.rgba),
+      frame.width,
+      frame.height,
+      ui.PixelFormat.rgba8888,
+      (img) {
+        if (!mounted) {
+          img.dispose();
+          _decoding = false;
+          return;
+        }
+        setState(() {
+          _image?.dispose();
+          _image = img;
+          _decoding = false;
+        });
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final img = _image;
+    if (img == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return RawImage(image: img, fit: BoxFit.cover);
   }
 }

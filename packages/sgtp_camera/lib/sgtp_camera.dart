@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -156,7 +157,23 @@ class SgtpCamera {
     // Error callback
     _errorCb?.close();
     _errorCb = NativeCallable<_ErrorCallbackNative>.listener(
-      (Pointer<Utf8> msg) => _errorCtrl.add(msg.toDartString()),
+      (Pointer<Utf8> msg) {
+        String text;
+        try {
+          text = msg.toDartString();
+        } on FormatException {
+          // GStreamer on Windows may return messages in the system locale
+          // encoding rather than UTF-8 — fall back to Latin-1.
+          final bytes = <int>[];
+          for (var i = 0; ; i++) {
+            final b = msg.cast<Uint8>().elementAt(i).value;
+            if (b == 0) break;
+            bytes.add(b);
+          }
+          text = latin1.decode(bytes);
+        }
+        _errorCtrl.add(text);
+      },
     );
 
     final devPtr = deviceId != null ? deviceId.toNativeUtf8() : nullptr.cast<Utf8>();
