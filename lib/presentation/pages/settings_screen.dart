@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:camera/camera.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
@@ -119,8 +120,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _captureDevicesLoading = false;
   List<InputDevice> _microphones = const [];
   String? _selectedMicrophoneId;
-  List<CameraDeviceInfo> _cameras = const [];
+  List<_CameraOption> _cameras = const [];
   String? _selectedCameraName;
+  CameraController? _cameraCheckController;
   final AudioRecorder _micCheckRecorder = AudioRecorder();
   final AudioPlayer _micCheckPlayer = AudioPlayer();
   Timer? _micCheckTimer;
@@ -146,10 +148,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _preferredNodeId;
   String? _preferredAccountId;
 
+  bool get _isDesktop =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
   @override
   void initState() {
     super.initState();
-    SgtpCamera.init();
+    if (_isDesktop) {
+      SgtpCamera.init();
+    }
     _userAvatar = widget.currentUserAvatar;
     _loadFromConfig();
   }
@@ -246,7 +253,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     unawaited(_micCheckRecorder.dispose());
     unawaited(_micCheckPlayer.stop());
     unawaited(_micCheckPlayer.dispose());
-    if (_cameraCheckEnabled) SgtpCamera.close();
+    final cameraController = _cameraCheckController;
+    _cameraCheckController = null;
+    if (cameraController != null) {
+      unawaited(cameraController.dispose());
+    }
+    if (_isDesktop && _cameraCheckEnabled) {
+      SgtpCamera.close();
+    }
     _nicknameCtrl.dispose();
     _usernameCtrl.dispose();
     _logsCountNotifier.dispose();
@@ -333,12 +347,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _captureDevicesLoading = true);
 
     List<InputDevice> microphones = const [];
-    List<CameraDeviceInfo> cameras = const [];
+    List<_CameraOption> cameras = const [];
     try {
       microphones = await AudioRecorder().listInputDevices();
     } catch (_) {}
     try {
-      cameras = SgtpCamera.enumerate();
+      if (_isDesktop) {
+        cameras = SgtpCamera.enumerate()
+            .map((cam) => _CameraOption(
+                  id: cam.id,
+                  label: cam.displayName,
+                ))
+            .toList(growable: false);
+      } else {
+        cameras = (await availableCameras())
+            .map((cam) => _CameraOption(
+                  id: cam.name,
+                  label: _cameraLabelForMobile(cam),
+                  mobileInfo: cam,
+                ))
+            .toList(growable: false);
+      }
     } catch (_) {}
 
     final savedMicId =
@@ -375,7 +404,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  String _cameraLabel(CameraDeviceInfo cam) => cam.displayName;
+  String _cameraLabelForMobile(CameraDescription cam) {
+    final lens = switch (cam.lensDirection) {
+      CameraLensDirection.front => 'Front',
+      CameraLensDirection.back => 'Back',
+      CameraLensDirection.external => 'External',
+    };
+    return '$lens (${cam.name})';
+  }
 
   Future<void> _selectMicrophone(String id) async {
     final accountId = _activeAccountId();
@@ -515,7 +551,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _cameraCheckEnabled = false;
     _cameraCheckLoading = false;
     _cameraCheckError = null;
-    SgtpCamera.close();
+    final previousController = _cameraCheckController;
+    _cameraCheckController = null;
+    if (previousController != null) {
+      await previousController.dispose();
+    }
+    if (_isDesktop) {
+      SgtpCamera.close();
+    }
 
     if (!enabled) {
       if (mounted) setState(() {});
@@ -531,7 +574,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       return;
     }
-    final cameraExists = _cameras.any((c) => c.id == selectedId);
+    _CameraOption? selectedCamera;
+    for (final cam in _cameras) {
+      if (cam.id == selectedId) {
+        selectedCamera = cam;
+        break;
+      }
+    }
+    final cameraExists = selectedCamera != null;
     if (!cameraExists) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -553,22 +603,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final token = ++_cameraCheckToken;
     try {
-      final result = SgtpCamera.open(deviceId: selectedId);
-      if (!mounted || token != _cameraCheckToken || !_cameraCheckEnabled) {
-        SgtpCamera.close();
-        return;
-      }
-      if (result != 0) {
+      if (_isDesktop) {
+        final result = SgtpCamera.open(deviceId: selectedId);
+        if (!mounted || token != _cameraCheckToken || !_cameraCheckEnabled) {
+          SgtpCamera.close();
+          return;
+        }
+        if (result != 0) {
+          setState(() {
+            _cameraCheckEnabled = false;
+            _cameraCheckLoading = false;
+            _cameraCheckError = 'Failed to open camera (error $result)';
+          });
+          return;
+        }
         setState(() {
-          _cameraCheckEnabled = false;
           _cameraCheckLoading = false;
-          _cameraCheckError = 'Failed to open camera (error $result)';
         });
-        return;
+      } else {
+        final mobile = selectedCamera?.mobileInfo;
+        if (mobile == null) {
+          setState(() {
+            _cameraCheckEnabled = false;
+            _cameraCheckLoading = false;
+            _cameraCheckError = 'Selected camera is unavailable';
+          });
+          return;
+        }
+        final controller = CameraController(
+          mobile,
+          ResolutionPreset.medium,
+          enableAudio: false,
+        );
+        await controller.initialize();
+        if (!mounted || token != _cameraCheckToken || !_cameraCheckEnabled) {
+          await controller.dispose();
+          return;
+        }
+        setState(() {
+          _cameraCheckController = controller;
+          _cameraCheckLoading = false;
+        });
       }
-      setState(() {
-        _cameraCheckLoading = false;
-      });
     } catch (e) {
       if (!mounted || token != _cameraCheckToken) return;
       setState(() {
@@ -3038,6 +3114,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
     }
+    if (!_isDesktop) {
+      final controller = _cameraCheckController;
+      if (controller == null || !controller.value.isInitialized) {
+        return const SizedBox.shrink();
+      }
+      return Align(
+        alignment: Alignment.topLeft,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 156,
+            height: 156,
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: 156,
+                height: 156 / controller.value.aspectRatio,
+                child: CameraPreview(controller),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Align(
       alignment: Alignment.topLeft,
       child: ClipRRect(
@@ -3178,7 +3278,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   .map(
                     (cam) => DropdownMenuItem<String>(
                       value: cam.id,
-                      child: Text(_cameraLabel(cam)),
+                      child: Text(cam.label),
                     ),
                   )
                   .toList(),
@@ -4810,6 +4910,18 @@ class _ChoiceChip extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CameraOption {
+  final String id;
+  final String label;
+  final CameraDescription? mobileInfo;
+
+  const _CameraOption({
+    required this.id,
+    required this.label,
+    this.mobileInfo,
+  });
 }
 
 // ---------------------------------------------------------------------------
