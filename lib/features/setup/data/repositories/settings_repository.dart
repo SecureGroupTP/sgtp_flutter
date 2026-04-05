@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 /// Repository for persisting user settings between sessions.
@@ -44,6 +45,11 @@ class SettingsRepository {
   static const _contactProfilesKey = 'sgtp_contact_profiles';
   static const _friendStatesKey = 'sgtp_friend_states_v1';
   static const _suppressedContactsKey = 'sgtp_suppressed_contacts_v1';
+  static const _chatScrollKeyPrefix = 'chat_scroll_';
+  static const _pingIntervalKey = 'sgtp_ping_interval';
+  static const _doubleTapDesktopKey = 'iprefs_doubletap_desktop';
+  static const _swipeToReplyKey = 'iprefs_swipe_to_reply';
+  static const _longPressMenuKey = 'iprefs_longpress_menu';
   static const _nodeServerOptionsKeyPrefix = 'sgtp_node_server_options_v1_';
   static const _nodeServerOptionsSavedAtKeyPrefix =
       'sgtp_node_server_options_saved_at_v1_';
@@ -668,6 +674,42 @@ class SettingsRepository {
     await p.setInt(_mediaChunkSizeKey, settings.mediaChunkSizeBytes);
   }
 
+  Future<double?> loadChatScrollPosition(String roomUUID) async {
+    final key = '$_chatScrollKeyPrefix${roomUUID.trim()}';
+    if (roomUUID.trim().isEmpty) return null;
+    final p = await SharedPreferences.getInstance();
+    return p.getDouble(key);
+  }
+
+  Future<void> saveChatScrollPosition(String roomUUID, double offset) async {
+    final trimmed = roomUUID.trim();
+    if (trimmed.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setDouble('$_chatScrollKeyPrefix$trimmed', offset);
+  }
+
+  Future<UiInteractionSettings> loadUiInteractionSettings() async {
+    final p = await SharedPreferences.getInstance();
+    return UiInteractionSettings(
+      pingIntervalSeconds: p.getInt(_pingIntervalKey) ?? 30,
+      doubleTapDesktop: p.getString(_doubleTapDesktopKey) ?? 'react',
+      swipeToReply: p.getBool(_swipeToReplyKey) ?? true,
+      longPressMenu: p.getBool(_longPressMenuKey) ?? true,
+    );
+  }
+
+  Future<void> savePingIntervalSeconds(int seconds) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_pingIntervalKey, seconds);
+  }
+
+  Future<void> saveUiInteractionSettings(UiInteractionSettings settings) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_doubleTapDesktopKey, settings.doubleTapDesktop);
+    await p.setBool(_swipeToReplyKey, settings.swipeToReply);
+    await p.setBool(_longPressMenuKey, settings.longPressMenu);
+  }
+
   // ── Capture devices ──────────────────────────────────────────────────────
 
   Future<String?> loadPreferredMicrophoneForNode(String nodeId) async {
@@ -958,6 +1000,34 @@ class MediaTransferSettings {
   }
 }
 
+class UiInteractionSettings {
+  final int pingIntervalSeconds;
+  final String doubleTapDesktop;
+  final bool swipeToReply;
+  final bool longPressMenu;
+
+  const UiInteractionSettings({
+    required this.pingIntervalSeconds,
+    required this.doubleTapDesktop,
+    required this.swipeToReply,
+    required this.longPressMenu,
+  });
+
+  UiInteractionSettings copyWith({
+    int? pingIntervalSeconds,
+    String? doubleTapDesktop,
+    bool? swipeToReply,
+    bool? longPressMenu,
+  }) {
+    return UiInteractionSettings(
+      pingIntervalSeconds: pingIntervalSeconds ?? this.pingIntervalSeconds,
+      doubleTapDesktop: doubleTapDesktop ?? this.doubleTapDesktop,
+      swipeToReply: swipeToReply ?? this.swipeToReply,
+      longPressMenu: longPressMenu ?? this.longPressMenu,
+    );
+  }
+}
+
 class QrStyleSettings {
   final int presetIndex;
   final int? primaryColorValue;
@@ -996,77 +1066,3 @@ class QrStyleSettings {
   }
 }
 
-/// A whitelist entry: a trusted peer's public key + editable display name.
-class WhitelistEntry {
-  final Uint8List bytes;
-  final String name;
-
-  WhitelistEntry({required this.bytes, required this.name});
-
-  String get hexKey =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  WhitelistEntry copyWithName(String newName) =>
-      WhitelistEntry(bytes: bytes, name: newName);
-}
-
-/// Cached profile data fetched from the userdir service.
-class ContactProfile {
-  final String pubkeyHex;
-  final String? username;
-  final String? fullname;
-  final Uint8List? avatarBytes;
-  final String avatarSha256Hex; // 64-char hex; empty string if not set
-  final int updatedAt; // unix seconds
-
-  const ContactProfile({
-    required this.pubkeyHex,
-    this.username,
-    this.fullname,
-    this.avatarBytes,
-    required this.avatarSha256Hex,
-    required this.updatedAt,
-  });
-}
-
-enum FriendStatus {
-  none,
-  pendingOutgoing,
-  pendingIncoming,
-  friend,
-  rejected,
-}
-
-class FriendStateRecord {
-  final String peerPubkeyHex;
-  final String status;
-  final String? roomUUIDHex;
-  final int updatedAt;
-
-  const FriendStateRecord({
-    required this.peerPubkeyHex,
-    required this.status,
-    required this.roomUUIDHex,
-    required this.updatedAt,
-  });
-
-  FriendStatus get statusEnum {
-    for (final s in FriendStatus.values) {
-      if (s.name == status) return s;
-    }
-    return FriendStatus.none;
-  }
-
-  FriendStateRecord copyWith({
-    String? status,
-    String? roomUUIDHex,
-    int? updatedAt,
-  }) {
-    return FriendStateRecord(
-      peerPubkeyHex: peerPubkeyHex,
-      status: status ?? this.status,
-      roomUUIDHex: roomUUIDHex ?? this.roomUUIDHex,
-      updatedAt: updatedAt ?? this.updatedAt,
-    );
-  }
-}

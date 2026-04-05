@@ -6,11 +6,11 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
+import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_scanner_dialog.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
-import 'package:sgtp_flutter/features/contacts/application/services/contacts_data_access.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 /// Contacts screen — shows the trusted-peer whitelist.
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
@@ -45,7 +45,7 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
-  late final SettingsRepository _repo;
+  late final ContactsDirectoryService _directoryService;
   late List<WhitelistEntry> _entries;
   final _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
@@ -58,7 +58,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   void initState() {
     super.initState();
-    _repo = context.read<SettingsRepository>();
+    _directoryService = context.read<ContactsDirectoryService>();
     _entries = List.from(widget.initialEntries);
   }
 
@@ -175,58 +175,26 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
-  Future<UserDirClient?> _buildUserDirClient() async {
-    final nodes = await _repo.loadNodes();
-    final selectedServerId = (widget.serverNodeId ?? '').trim();
-    final node = selectedServerId.isNotEmpty
-        ? nodes.where((n) => n.id == selectedServerId).firstOrNull
-        : await _repo.loadPreferredNode();
-    if (node == null) return null;
-    final opts = await _repo.loadNodeServerOptions(node.id);
-    if (opts == null) return null;
-    return UserDirClient.forNode(node, opts);
-  }
-
   Future<void> _searchOnServer(String normalizedUsername) async {
     final reqId = ++_searchRequestId;
     if (mounted) setState(() => _serverSearchHit = null);
 
     try {
-      final client = await _buildUserDirClient();
-      if (client == null) {
-        if (!mounted || reqId != _searchRequestId) return;
-        setState(() {
-          _serverSearchHit = null;
-        });
-        return;
-      }
-      try {
-        await client.connect();
-        final items = await client.search(normalizedUsername, limit: 20);
-        final lower = normalizedUsername.toLowerCase();
-        final exact =
-            items.where((m) => m.username.toLowerCase() == lower).firstOrNull;
-        if (!mounted || reqId != _searchRequestId) return;
-        if (exact == null) {
-          setState(() {
-            _serverSearchHit = null;
-          });
-          return;
-        }
-        final alreadyTrusted = _entries.any(
-            (e) => e.hexKey.toLowerCase() == exact.pubkeyHex.toLowerCase());
-        setState(() {
-          _serverSearchHit = alreadyTrusted
-              ? null
-              : _ServerSearchHit(
-                  username: exact.username,
-                  pubkeyHex: exact.pubkeyHex,
-                  fullname: exact.fullname,
-                );
-        });
-      } finally {
-        client.close();
-      }
+      final hit = await _directoryService.searchExactUser(
+        serverNodeId: widget.serverNodeId,
+        normalizedUsername: normalizedUsername,
+        existingEntries: _entries,
+      );
+      if (!mounted || reqId != _searchRequestId) return;
+      setState(() {
+        _serverSearchHit = hit == null
+            ? null
+            : _ServerSearchHit(
+                username: hit.username,
+                pubkeyHex: hit.pubkeyHex,
+                fullname: hit.fullname,
+              );
+      });
     } catch (_) {
       if (!mounted || reqId != _searchRequestId) return;
       setState(() {
@@ -238,7 +206,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // ── Persistence ───────────────────────────────────────────────────────────
 
   Future<void> _save() async {
-    await _repo.saveWhitelistEntriesForNode(widget.accountId, _entries);
+    await _directoryService.saveWhitelistEntries(
+      accountId: widget.accountId,
+      entries: _entries,
+    );
     widget.onEntriesChanged(_entries);
   }
 

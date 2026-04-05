@@ -1,7 +1,7 @@
-import 'package:sgtp_flutter/features/messaging/application/services/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_metadata_repository.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 
 class _ChatMetadataStoreAdapter implements ChatMetadataStore {
   final ChatMetadataRepository _repo;
@@ -23,6 +23,9 @@ class _ChatMetadataStoreAdapter implements ChatMetadataStore {
 
   @override
   Future<void> saveChat(ChatMetadata metadata) => _repo.saveChat(metadata);
+
+  @override
+  Future<void> updateChat(ChatMetadata metadata) => _repo.updateChat(metadata);
 }
 
 class _ChatHistoryStoreAdapter implements ChatHistoryStore {

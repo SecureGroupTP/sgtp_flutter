@@ -1,1 +1,0 @@
-/root/sgtp/flutter/build/sgtp_camera/intermediates/cxx/RelWithDebInfo/6p4e565v/obj/arm64-v8a

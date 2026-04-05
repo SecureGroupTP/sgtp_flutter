@@ -1,3 +1,0 @@
-/root/sgtp/flutter/packages/sgtp_camera/android/.cxx/RelWithDebInfo/6p4e565v/x86_64/CMakeFiles/sgtp_camera.dir
-/root/sgtp/flutter/packages/sgtp_camera/android/.cxx/RelWithDebInfo/6p4e565v/x86_64/CMakeFiles/edit_cache.dir
-/root/sgtp/flutter/packages/sgtp_camera/android/.cxx/RelWithDebInfo/6p4e565v/x86_64/CMakeFiles/rebuild_cache.dir

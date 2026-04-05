@@ -1,13 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,12 +14,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:sgtp_camera/sgtp_camera.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
-import 'package:sgtp_flutter/core/crypto/ed25519_utils.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
-import 'package:sgtp_flutter/core/openssh_parser.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
@@ -31,13 +25,13 @@ import 'package:sgtp_flutter/core/file_save.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
-import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_scanner_dialog.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/styled_dropdown.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
 import 'package:sgtp_flutter/features/settings/presentation/pages/logs_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:sgtp_flutter/features/settings/application/services/settings_data_access.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 
 typedef ConfigChangedCallback = void Function(
     String accountId,
@@ -83,8 +77,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final SettingsRepository _settings;
-  late final AppBackupRepository _backups;
+  late final SettingsManagementService _settings;
   final _logsCountNotifier = _LogsCountNotifier();
   final _nicknameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
@@ -95,7 +88,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Uint8List? _myPublicKey;
 
   List<WhitelistEntry> _wlEntries = [];
-  Map<String, String> _nicknames = {};
 
   Uint8List? _userAvatar;
   String _nickname = '';
@@ -106,7 +98,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isGenerating = false;
   bool _isCreatingBackup = false;
   bool _isRestoringBackup = false;
-  String? _error;
   String? _usernameError;
 
   /// Ping interval in seconds. Saved via SettingsRepository.
@@ -154,8 +145,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _settings = context.read<SettingsRepository>();
-    _backups = context.read<AppBackupRepository>();
+    _settings = context.read<SettingsManagementService>();
     if (_isDesktop) {
       SgtpCamera.init();
     }
@@ -169,54 +159,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _standaloneServerAddress = cfg.serverAddr.trim();
       _myPublicKey = cfg.myPublicKey;
     }
-    _nicknames = Map.from(widget.initialNicknames ?? {});
     _loadFromDisk();
   }
 
   Future<void> _loadFromDisk() async {
-    // Load nodes first so we know which account is active.
-    final nodes = await _settings.loadNodes();
-    final accountIds = await _settings.loadAccountIds();
+    final bootstrap = await _settings.loadBootstrapData();
+    final nodes = bootstrap.nodes;
+    final accountIds = bootstrap.accountIds;
     unawaited(_logCachedDiscovery(nodes));
     for (final node in nodes) {
       unawaited(_runDiscoveryForNode(node));
     }
-    final preferredNode = await _settings.loadPreferredNode();
-    final preferredId =
-        preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
-    final savedAccountId = await _settings.loadLastAccountId();
-    final preferredAccountId =
-        (savedAccountId != null && accountIds.contains(savedAccountId))
-            ? savedAccountId
-            : (accountIds.isNotEmpty ? accountIds.first : null);
-
-    if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
-      await _settings
-          .migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
-    }
-
     if (mounted) {
       setState(() {
         _nodes = nodes;
         _accountIdsList = accountIds;
         _nodesLoading = false;
-        _preferredNodeId = preferredId;
-        _preferredAccountId = preferredAccountId;
+        _preferredNodeId = bootstrap.preferredNodeId;
+        _preferredAccountId = bootstrap.preferredAccountId;
       });
     }
 
     // Load account-scoped identity/profile/contacts for the active account.
-    if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
+    if (bootstrap.preferredAccountId != null &&
+        bootstrap.preferredAccountId!.trim().isNotEmpty) {
       final loadSeq = ++_accountLoadSeq;
       await _loadAccountData(
-        preferredAccountId,
+        bootstrap.preferredAccountId!,
         applyConfig: false,
         expectedLoadSeq: loadSeq,
       );
     } else {
       await _setMicrophoneCheckEnabled(false);
       await _setCameraCheckEnabled(false);
-      final lastAddr = await _settings.getLastAddress();
+      final lastAddr = bootstrap.lastAddress;
       if (lastAddr != null && _standaloneServerAddress.isEmpty) {
         setState(() => _standaloneServerAddress = lastAddr.trim());
       }
@@ -230,20 +206,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
 
-    final mediaSettings = await _settings.loadMediaTransferSettings();
+    final mediaSettings = bootstrap.mediaSettings;
+    final uiSettings = bootstrap.uiSettings;
 
     // Load persisted prefs (nickname + interaction)
-    final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _pingIntervalSeconds = prefs.getInt('sgtp_ping_interval') ?? 30;
+      _pingIntervalSeconds = uiSettings.pingIntervalSeconds;
       _compressFiles = mediaSettings.compressFiles;
       _compressPhotos = mediaSettings.compressPhotos;
       _compressVideos = mediaSettings.compressVideos;
       _mediaChunkSizeBytes = mediaSettings.mediaChunkSizeBytes;
-      _doubleTapDesktop =
-          prefs.getString('iprefs_doubletap_desktop') ?? 'react';
-      _swipeToReply = prefs.getBool('iprefs_swipe_to_reply') ?? true;
-      _longPressMenu = prefs.getBool('iprefs_longpress_menu') ?? true;
+      _doubleTapDesktop = uiSettings.doubleTapDesktop;
+      _swipeToReply = uiSettings.swipeToReply;
+      _longPressMenu = uiSettings.longPressMenu;
     });
     // Sync singleton
     InteractionPrefs.doubleTapDesktop = _doubleTapDesktop;
@@ -274,82 +249,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
-  Map<String, String> _buildNicknames(List<WhitelistEntry> entries) {
-    final result = <String, String>{};
-    for (final e in entries) {
-      result[e.hexKey] = e.name;
-    }
-    return result;
-  }
-
   Future<void> _loadAccountData(String accountId,
       {bool applyConfig = true, int? expectedLoadSeq}) async {
     bool isStale() =>
         expectedLoadSeq != null && expectedLoadSeq != _accountLoadSeq;
-    // Profile (nickname + username + avatar)
-    final nickname = await _settings.loadUserNicknameForNode(accountId);
-    final username = await _settings.loadUserUsernameForNode(accountId);
-    final avatar = await _settings.loadUserAvatarForNode(accountId);
-    if (isStale()) return;
-
-    // Identity key
-    Uint8List? privBytes;
-    String? privName;
-    Uint8List? pubKey;
-    final savedKey = await _settings.loadPrivateKeyForNode(accountId);
-    if (savedKey != null) {
-      try {
-        final parsed = parseOpenSshPrivateKey(savedKey.bytes);
-        privBytes = savedKey.bytes;
-        privName = savedKey.name;
-        pubKey = parsed.publicKey;
-      } catch (_) {}
-    }
-
-    // Contacts (whitelist)
-    final entries = await _settings.loadWhitelistEntriesForNode(accountId);
+    final snapshot = await _settings.loadAccountSnapshot(accountId);
     if (isStale()) return;
 
     if (!mounted) return;
     setState(() {
-      _nickname = nickname;
-      _nicknameCtrl.text = nickname;
-      _usernameCtrl.text = username;
+      _nickname = snapshot.nickname;
+      _nicknameCtrl.text = snapshot.nickname;
+      _usernameCtrl.text = snapshot.username;
       _usernameError = null;
-      _userAvatar = avatar;
-      _avatarsByNodeId[accountId] = avatar;
-      _nicknamesByNodeId[accountId] = nickname;
+      _userAvatar = snapshot.avatar;
+      _avatarsByNodeId[accountId] = snapshot.avatar;
+      _nicknamesByNodeId[accountId] = snapshot.nickname;
 
-      _privateKeyBytes = privBytes;
-      _privateKeyPath = privName;
-      _myPublicKey = pubKey;
+      _privateKeyBytes = snapshot.privateKeyBytes;
+      _privateKeyPath = snapshot.privateKeyName;
+      _myPublicKey = snapshot.publicKey;
 
-      _wlEntries = entries;
-      _nicknames = _buildNicknames(entries);
+      _wlEntries = snapshot.whitelistEntries;
     });
     if (isStale()) return;
     await _loadCaptureDevicesForAccount(accountId);
     if (isStale()) return;
 
-    widget.onUserAvatarChanged?.call(avatar);
+    widget.onUserAvatarChanged?.call(snapshot.avatar);
     if (applyConfig) _tryApplyConfig();
   }
 
   Future<void> _refreshProfilesCache(List<String> accountIds) async {
-    final nextAvatars = <String, Uint8List?>{};
-    final nextNicks = <String, String>{};
-    for (final accountId in accountIds) {
-      nextAvatars[accountId] = await _settings.loadUserAvatarForNode(accountId);
-      nextNicks[accountId] = await _settings.loadUserNicknameForNode(accountId);
-    }
+    final cache = await _settings.loadProfilesCache(accountIds);
     if (!mounted) return;
     setState(() {
       _avatarsByNodeId
         ..clear()
-        ..addAll(nextAvatars);
+        ..addAll(cache.avatarsByAccountId);
       _nicknamesByNodeId
         ..clear()
-        ..addAll(nextNicks);
+        ..addAll(cache.nicknamesByAccountId);
     });
   }
 
@@ -634,7 +574,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _cameraCheckLoading = false;
         });
       } else {
-        final mobile = selectedCamera?.mobileInfo;
+        final mobile = selectedCamera.mobileInfo;
         if (mobile == null) {
           setState(() {
             _cameraCheckEnabled = false;
@@ -680,27 +620,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final file = result.files.first;
       final bytes = file.bytes;
       if (bytes == null) {
-        _setError('Could not read key file');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not read key file')),
+          );
+        }
         return;
       }
-      final parsed = parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(accountId, bytes, file.name);
+      final keyData = await _settings.importPrivateKey(
+        accountId: accountId,
+        bytes: bytes,
+        name: file.name,
+      );
       setState(() {
-        _privateKeyBytes = bytes;
-        _privateKeyPath = file.name;
-        _myPublicKey = parsed.publicKey;
-        _error = null;
+        _privateKeyBytes = keyData.bytes;
+        _privateKeyPath = keyData.name;
+        _myPublicKey = keyData.publicKey;
       });
       _tryApplyConfig();
     } catch (e) {
-      _setError('Invalid private key: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Invalid private key: $e')),
+        );
+      }
     }
   }
 
   void _showPrivateKeyExportSheet() {
     final bytes = _privateKeyBytes;
     if (bytes == null || bytes.isEmpty) return;
-    final keyText = utf8.decode(bytes, allowMalformed: true).trim();
+    final keyText = String.fromCharCodes(bytes).trim();
 
     showModalBottomSheet<void>(
       context: context,
@@ -834,16 +784,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     try {
-      final bytes = Uint8List.fromList(text.codeUnits);
-      final parsed = parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(
-          accountId, bytes, 'clipboard_identity');
+      final keyData = await _settings.importPrivateKeyFromText(
+        accountId: accountId,
+        text: text,
+        name: 'clipboard_identity',
+      );
       if (!mounted) return;
       setState(() {
-        _privateKeyBytes = bytes;
-        _privateKeyPath = 'clipboard_identity';
-        _myPublicKey = parsed.publicKey;
-        _error = null;
+        _privateKeyBytes = keyData.bytes;
+        _privateKeyPath = keyData.name;
+        _myPublicKey = keyData.publicKey;
       });
       _tryApplyConfig();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -865,9 +815,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final file = result.files.first;
       final bytes = file.bytes;
       if (bytes == null) return false;
-      // Validate
-      parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(accountId, bytes, file.name);
+      await _settings.importPrivateKey(
+        accountId: accountId,
+        bytes: bytes,
+        name: file.name,
+      );
       return true;
     } catch (_) {
       return false;
@@ -902,23 +854,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() => _isGenerating = true);
     try {
-      // Generate new Ed25519 key pair
-      final algorithm = Ed25519();
-      final keyPair = await algorithm.newKeyPair();
-      final pubKey = await keyPair.extractPublicKey();
-      final privBytes = await keyPair.extractPrivateKeyBytes();
-      final pubBytes = Uint8List.fromList(pubKey.bytes);
-
-      // Encode as OpenSSH private key
-      final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      const name = 'identity';
-      await _settings.savePrivateKeyForNode(accountId, opensshBytes, name);
+      final keyData = await _settings.generatePrivateKey(accountId: accountId);
 
       setState(() {
-        _privateKeyBytes = opensshBytes;
-        _privateKeyPath = name;
-        _myPublicKey = pubBytes;
-        _error = null;
+        _privateKeyBytes = keyData.bytes;
+        _privateKeyPath = keyData.name;
+        _myPublicKey = keyData.publicKey;
         _isGenerating = false;
       });
       _tryApplyConfig();
@@ -929,23 +870,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } catch (e) {
-      setState(() {
-        _error = 'Key generation failed: $e';
-        _isGenerating = false;
-      });
+      setState(() => _isGenerating = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Key generation failed: $e')),
+        );
+      }
     }
   }
 
   Future<bool> _generatePrivateKeyForAccount(String accountId) async {
     try {
-      final algorithm = Ed25519();
-      final keyPair = await algorithm.newKeyPair();
-      final pubKey = await keyPair.extractPublicKey();
-      final privBytes = await keyPair.extractPrivateKeyBytes();
-      final pubBytes = Uint8List.fromList(pubKey.bytes);
-      final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      await _settings.savePrivateKeyForNode(
-          accountId, opensshBytes, 'identity');
+      await _settings.generatePrivateKey(accountId: accountId);
       return true;
     } catch (_) {
       return false;
@@ -954,11 +890,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<bool> _pastePrivateKeyForAccount(String accountId, String text) async {
     try {
-      final bytes = Uint8List.fromList(text.codeUnits);
-      // Validate
-      parseOpenSshPrivateKey(bytes);
-      await _settings.savePrivateKeyForNode(
-          accountId, bytes, 'pasted_identity');
+      await _settings.importPrivateKeyFromText(
+        accountId: accountId,
+        text: text,
+        name: 'pasted_identity',
+      );
       return true;
     } catch (_) {
       return false;
@@ -966,8 +902,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<bool> _promptPrivateKeyForAccount(String accountId) async {
-    final existing = await _settings.loadPrivateKeyForNode(accountId);
-    if (existing != null) return true;
+    if (await _settings.hasPrivateKey(accountId)) return true;
 
     bool saved = false;
     String? error;
@@ -1136,259 +1071,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return saved;
   }
 
-  /// Encode raw Ed25519 seed+public key as OpenSSH private key format.
-  /// Produces the minimal PEM-like structure our parser accepts.
-  Uint8List _encodeOpenSshPrivateKey(List<int> seed, Uint8List pubKey) {
-    // Build the OpenSSH binary format manually
-    // auth_magic + null byte
-    const magic = 'openssh-key-v1\x00';
-    // cipher "none", kdf "none", kdf options "", number of keys = 1
-    final header = _sshString('none') + // cipher name
-        _sshString('none') + // kdf name
-        _sshString('') + // kdf options
-        _uint32(1); // number of keys
-
-    // Public key block: type + pub key
-    final pubKeyBlock = _sshString('ssh-ed25519') + _sshString(pubKey);
-    final pubKeyWrapped = _sshString(pubKeyBlock);
-
-    // Private key block: checkint x2 + type + pubkey + full privkey (seed+pub) + comment
-    final rng = Random.secure();
-    final check = rng.nextInt(0xFFFFFFFF);
-    final fullPriv = Uint8List(64)
-      ..setAll(0, seed)
-      ..setAll(32, pubKey);
-    final privBlock = _uint32(check) +
-        _uint32(check) +
-        _sshString('ssh-ed25519') +
-        _sshString(pubKey) +
-        _sshString(fullPriv) +
-        _sshString('sgtp-generated');
-    // Pad to block size 8
-    final padded = List<int>.from(privBlock);
-    int pad = 1;
-    while (padded.length % 8 != 0) padded.add(pad++);
-    final privWrapped = _sshString(padded);
-
-    final body = magic.codeUnits + header + pubKeyWrapped + privWrapped;
-    final b64 = base64Encode(body);
-    // Wrap at 70 chars
-    final lines = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');
-    for (var i = 0; i < b64.length; i += 70) {
-      lines
-          .writeln(b64.substring(i, i + 70 > b64.length ? b64.length : i + 70));
-    }
-    lines.write('-----END OPENSSH PRIVATE KEY-----');
-    return Uint8List.fromList(lines.toString().codeUnits);
-  }
-
-  List<int> _sshString(dynamic data) {
-    final bytes = data is String ? data.codeUnits : (data as List<int>);
-    return _uint32(bytes.length) + bytes;
-  }
-
-  List<int> _uint32(int v) =>
-      [(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
-
-  // ── Whitelist: load folder ────────────────────────────────────────────────
-
-  Future<void> _pickWhitelistFolder() async {
-    try {
-      final dirPath = await FilePicker.platform.getDirectoryPath();
-      if (dirPath == null) return;
-      final dir = Directory(dirPath);
-      final entries = <WhitelistEntry>[];
-      await for (final entity in dir.list(recursive: false)) {
-        if (entity is File) {
-          try {
-            final bytes = await entity.readAsBytes();
-            final pubKey = tryParsePublicKeyFile(bytes);
-            if (pubKey != null) {
-              var name = entity.path.split(Platform.pathSeparator).last;
-              if (name.toLowerCase().endsWith('.pub')) {
-                name = name.substring(0, name.length - 4);
-              }
-              entries.add(WhitelistEntry(bytes: pubKey, name: name));
-            }
-          } catch (_) {}
-        }
-      }
-      if (entries.isEmpty) {
-        _setError('No valid ed25519 keys found in folder');
-        return;
-      }
-      final accountId = _activeAccountId();
-      if (accountId == null) return;
-      await _settings.saveWhitelistEntriesForNode(accountId, entries);
-      setState(() {
-        _wlEntries = entries;
-        _nicknames = _buildNicknames(entries);
-        _error = null;
-      });
-      _tryApplyConfig();
-    } catch (e) {
-      _setError('Failed to load whitelist: $e');
-    }
-  }
-
-  // ── Whitelist: load files ─────────────────────────────────────────────────
-
-  Future<void> _pickWhitelistFiles() async {
-    try {
-      final result = await FilePicker.platform
-          .pickFiles(type: FileType.any, withData: true, allowMultiple: true);
-      if (result == null || result.files.isEmpty) return;
-      final entries = <WhitelistEntry>[];
-      for (final file in result.files) {
-        final bytes = file.bytes;
-        if (bytes == null) continue;
-        final pubKey = tryParsePublicKeyFile(bytes);
-        if (pubKey != null) {
-          var name = file.name;
-          if (name.toLowerCase().endsWith('.pub'))
-            name = name.substring(0, name.length - 4);
-          entries.add(WhitelistEntry(bytes: pubKey, name: name));
-        }
-      }
-      if (entries.isEmpty) {
-        _setError('No valid ed25519 keys found');
-        return;
-      }
-      final combined = [..._wlEntries];
-      for (final e in entries) {
-        if (!combined.any((x) => x.hexKey == e.hexKey)) combined.add(e);
-      }
-      final accountId = _activeAccountId();
-      if (accountId == null) return;
-      await _settings.saveWhitelistEntriesForNode(accountId, combined);
-      setState(() {
-        _wlEntries = combined;
-        _nicknames = _buildNicknames(combined);
-        _error = null;
-      });
-      _tryApplyConfig();
-    } catch (e) {
-      _setError('Failed to load whitelist files: $e');
-    }
-  }
-
-  // ── Whitelist: paste from clipboard ──────────────────────────────────────
-
-  Future<void> _pastePublicKeyFromClipboard() async {
-    try {
-      final data = await Clipboard.getData(Clipboard.kTextPlain);
-      final text = data?.text?.trim() ?? '';
-      if (text.isEmpty) {
-        _setError('Clipboard is empty');
-        return;
-      }
-      final bytes = Uint8List.fromList(text.codeUnits);
-      final pubKey = tryParsePublicKeyFile(bytes);
-      if (pubKey == null) {
-        // Try hex decode
-        final hexEntry = _tryHexKey(text);
-        if (hexEntry == null) {
-          _setError('Not a valid Ed25519 public key');
-          return;
-        }
-        await _addWhitelistEntry(hexEntry);
-      } else {
-        final name = 'peer_${_wlEntries.length + 1}';
-        await _addWhitelistEntry(WhitelistEntry(bytes: pubKey, name: name));
-      }
-    } catch (e) {
-      _setError('Paste failed: $e');
-    }
-  }
-
-  WhitelistEntry? _tryHexKey(String hex) {
-    hex = hex.replaceAll(RegExp(r'\s'), '');
-    if (hex.length != 64) return null;
-    try {
-      final bytes = Uint8List.fromList(List.generate(
-          32, (i) => int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16)));
-      return WhitelistEntry(
-          bytes: bytes, name: 'peer_${_wlEntries.length + 1}');
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _addWhitelistEntry(WhitelistEntry entry) async {
-    if (_wlEntries.any((e) => e.hexKey == entry.hexKey)) {
-      _setError('Key already in whitelist');
-      return;
-    }
-    final combined = [..._wlEntries, entry];
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    await _settings.saveWhitelistEntriesForNode(accountId, combined);
-    setState(() {
-      _wlEntries = combined;
-      _nicknames = _buildNicknames(combined);
-      _error = null;
-    });
-    _tryApplyConfig();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added "${entry.name}" to whitelist')),
-      );
-    }
-  }
-
-  // ── Whitelist: rename ─────────────────────────────────────────────────────
-
-  Future<void> _renameEntry(int index) async {
-    final entry = _wlEntries[index];
-    final ctrl = TextEditingController(text: entry.name);
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Rename Peer'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Display name'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    ctrl.dispose();
-    if (newName == null || newName.isEmpty) return;
-    final updated = List<WhitelistEntry>.from(_wlEntries);
-    updated[index] = entry.copyWithName(newName);
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    await _settings.saveWhitelistEntriesForNode(accountId, updated);
-    setState(() {
-      _wlEntries = updated;
-      _nicknames = _buildNicknames(updated);
-    });
-    _tryApplyConfig();
-  }
-
-  // ── Whitelist: remove ─────────────────────────────────────────────────────
-
-  Future<void> _removeEntry(int index) async {
-    final newList = List<WhitelistEntry>.from(_wlEntries)..removeAt(index);
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    await _settings.saveWhitelistEntriesForNode(accountId, newList);
-    setState(() {
-      _wlEntries = newList;
-      _nicknames = _buildNicknames(newList);
-    });
-    _tryApplyConfig();
-  }
-
   // ── User avatar ───────────────────────────────────────────────────────────
 
   Future<void> _pickUserAvatar() async {
@@ -1421,10 +1103,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     if (bytes == null || bytes.isEmpty) return;
-    await _settings.saveUserAvatarForNode(accountId, bytes);
+    await _settings.saveUserAvatar(accountId: accountId, bytes: bytes);
     setState(() {
       _userAvatar = bytes;
-      _error = null;
     });
     widget.onUserAvatarChanged?.call(bytes);
     _avatarsByNodeId[accountId] = bytes;
@@ -1438,7 +1119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _removeUserAvatar() async {
     final accountId = _activeAccountId();
     if (accountId == null) return;
-    await _settings.clearUserAvatarForNode(accountId);
+    await _settings.clearUserAvatar(accountId);
     setState(() => _userAvatar = null);
     widget.onUserAvatarChanged?.call(null);
     _avatarsByNodeId[accountId] = null;
@@ -1448,46 +1129,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _tryApplyConfig() {
     if (_privateKeyBytes == null || _myPublicKey == null) return;
-    final server = _effectiveServerAddress();
     try {
-      final parsed = parseOpenSshPrivateKey(_privateKeyBytes!);
-      final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
-      final whitelist = _wlEntries.map((e) => e.hexKey).toSet();
-      final node = _selectedServerNode();
-      if (node == null) return;
       final accountId = _activeAccountId();
       if (accountId == null) return;
       if (accountId.trim().isEmpty) return;
-      final newConfig = SgtpConfig(
+      final applied = _settings.buildAppliedConfig(
         accountId: accountId,
-        serverAddr: server,
-        roomUUID: Uint8List(16),
-        identityKeyPair: keyPair,
-        myPublicKey: parsed.publicKey,
-        whitelist: whitelist,
-        transport: node.transport,
-        useTls: node.useTls,
-        nodeId: node.id,
+        privateKeyBytes: _privateKeyBytes!,
+        nodes: _nodes,
+        preferredNodeId: _preferredNodeId,
+        standaloneServerAddress: _standaloneServerAddress,
+        whitelistEntries: _wlEntries,
         pingIntervalSeconds: _pingIntervalSeconds,
         mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
-      widget.onConfigChanged
-          ?.call(accountId, newConfig, _nicknames, server, _wlEntries);
+      widget.onConfigChanged?.call(
+        applied.accountId,
+        applied.config,
+        applied.nicknames,
+        applied.serverAddress,
+        applied.whitelistEntries,
+      );
     } catch (e) {
-      _setError('Config error: $e');
-    }
-  }
-
-  void _setError(String msg) => setState(() => _error = msg);
-
-  NodeConfig? _activeNode() {
-    if (_preferredNodeId != null) {
-      for (final node in _nodes) {
-        if (node.id == _preferredNodeId) return node;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Config error: $e')),
+        );
       }
     }
-    if (_nodes.isNotEmpty) return _nodes.first;
-    return null;
   }
 
   List<String> _accountIds() {
@@ -1572,15 +1241,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ) ??
         false;
     if (!confirmed) return;
-    for (final n in linkedServers) {
-      await _settings.upsertNode(n.copyWith(accountId: ''));
-    }
-    await _settings.clearPrivateKeyForNode(id);
-    await _settings.clearWhitelistForNode(id);
-    await _settings.clearUserAvatarForNode(id);
-    await _settings.saveUserNicknameForNode(id, '');
-    await _settings.saveUserUsernameForNode(id, '');
-    await _settings.deleteAccountId(id);
+    await _settings.deleteAccount(id);
     await _reloadNodes();
     final nextAccount = _activeAccountId();
     if (nextAccount != null) {
@@ -1597,14 +1258,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _deleteNode(node);
   }
 
-  NodeConfig? _selectedServerNode() {
-    if (_preferredNodeId != null) {
-      for (final n in _nodes) {
-        if (n.id == _preferredNodeId) return n;
-      }
-    }
-    return _nodes.isNotEmpty ? _nodes.first : null;
-  }
+  NodeConfig? _selectedServerNode() => _settings.selectPreferredServer(
+        nodes: _nodes,
+        preferredNodeId: _preferredNodeId,
+      );
 
   String _selectedServerLabel() {
     final node = _selectedServerNode();
@@ -1619,93 +1276,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return id.isEmpty ? null : id;
   }
 
-  String _effectiveServerAddress() {
-    final active = _selectedServerNode();
-    if (active != null) return active.chatAddress;
-    final normalized = _standaloneServerAddress
-        .trim()
-        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
-        .trim();
-    return normalized.isEmpty ? 'localhost:443' : normalized;
-  }
-
   // ── Nodes ────────────────────────────────────────────────────────────────
 
   Future<void> _runDiscoveryForNode(NodeConfig node) async {
     try {
-      final (:opts, :port, :tls) =
-          await SgtpServerDiscovery.discover(node.host);
-      await _settings.saveNodeServerOptions(node.id, opts);
-      final labels = [
-        if (opts.tcp) 'TCP:${opts.tcpPort}',
-        if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
-        if (opts.http) 'HTTP:${opts.httpPort}',
-        if (opts.httpTls) 'HTTP+TLS:${opts.httpTlsPort}',
-        if (opts.websocket) 'WebSocket:${opts.websocketPort}',
-        if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
-      ];
-      AppLogger.i(
-          'Discovery [${node.name}] ${node.host} via '
-          '${tls ? 'https' : 'http'}:$port: ${labels.join(", ")}',
-          tag: 'DISC');
+      await _settings.discoverNodeAndCache(node);
     } catch (e) {
-      AppLogger.w('Discovery [${node.name}] ${node.host}: failed — $e',
+      AppLogger.w('Discovery [${node.name}] ${node.host}: failed - $e',
           tag: 'DISC');
     }
   }
 
   Future<void> _logCachedDiscovery(List<NodeConfig> nodes) async {
-    if (nodes.isEmpty) {
-      AppLogger.i('Discovery cache: no accounts configured', tag: 'DISC');
-      return;
-    }
-    for (final node in nodes) {
-      final opts = await _settings.loadNodeServerOptions(node.id);
-      final at = await _settings.loadNodeServerOptionsSavedAt(node.id);
-      if (opts == null) {
-        AppLogger.i(
-            'Discovery cache [${node.name}] ${node.chatAddress}: no cache',
-            tag: 'DISC');
-      } else {
-        final age = at != null
-            ? '${DateTime.now().difference(at).inMinutes}m ago'
-            : 'unknown age';
-        final labels = [
-          if (opts.tcp) 'TCP:${opts.tcpPort}',
-          if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
-          if (opts.http) 'HTTP:${opts.httpPort}',
-          if (opts.httpTls) 'HTTP+TLS:${opts.httpTlsPort}',
-          if (opts.websocket) 'WebSocket:${opts.websocketPort}',
-          if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
-        ];
-        AppLogger.i(
-            'Discovery cache [${node.name}] ${node.chatAddress}: '
-            '${labels.join(", ")} ($age)',
-            tag: 'DISC');
-      }
-    }
+    await _settings.logCachedDiscovery(nodes);
   }
 
   Future<void> _reloadNodes() async {
-    final nodes = await _settings.loadNodes();
-    final accountIds = await _settings.loadAccountIds();
-    final preferred = await _settings.loadPreferredNode();
-    final savedAccountId = await _settings.loadLastAccountId();
-    final nextAccountId =
-        (savedAccountId != null && accountIds.contains(savedAccountId))
-            ? savedAccountId
-            : (accountIds.isNotEmpty ? accountIds.first : null);
+    final registry = await _settings.reloadRegistryState();
     if (!mounted) return;
     setState(() {
-      _nodes = nodes;
-      _accountIdsList = accountIds;
+      _nodes = registry.nodes;
+      _accountIdsList = registry.accountIds;
       _nodesLoading = false;
-      _preferredNodeId =
-          preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
-      _preferredAccountId = nextAccountId;
+      _preferredNodeId = registry.preferredNodeId;
+      _preferredAccountId = registry.preferredAccountId;
     });
-    unawaited(_refreshProfilesCache(accountIds));
+    unawaited(_refreshProfilesCache(registry.accountIds));
   }
 
   Future<NodeConfig?> _openNodeEditor(
@@ -1736,7 +1332,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _addServerOnly() async {
     final node = await _openNodeEditor();
     if (node == null) return;
-    await _settings.upsertNode(node.copyWith(accountId: ''));
+    await _settings.saveDetachedNode(node);
     unawaited(_runDiscoveryForNode(node));
     await _reloadNodes();
     _tryApplyConfig();
@@ -1744,9 +1340,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _addAccountOnly() async {
     final accountId = uuidBytesToHex(generateUUIDv7());
-    await _settings.upsertAccountId(accountId);
-    await _settings.saveUserNicknameForNode(accountId, 'Account');
-    await _settings.setLastAccountId(accountId);
+    await _settings.addEmptyAccount(accountId);
     await _reloadNodes();
     if (!mounted) return;
     final ok = await _promptPrivateKeyForAccount(accountId);
@@ -1763,7 +1357,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _editNode(NodeConfig node) async {
     final updated = await _openNodeEditor(existing: node);
     if (updated == null) return;
-    await _settings.upsertNode(updated.copyWith(accountId: ''));
+    await _settings.saveDetachedNode(updated);
     unawaited(_runDiscoveryForNode(updated));
     await _reloadNodes();
     _tryApplyConfig();
@@ -2132,237 +1726,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           exportName: safeName.isEmpty ? 'node' : 'node-$safeName',
         ),
       ),
-    );
-  }
-
-  Future<void> _importNodeFromQr() async {
-    final data = await Navigator.push<QrShareData>(
-      context,
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => const QrScannerDialog(),
-      ),
-    );
-    if (!mounted || data == null) return;
-    final node = await _importNodeFromShareData(data);
-    if (!mounted || node == null) return;
-  }
-
-  Future<void> _showNodeHexImportSheet() async {
-    final inputCtrl = TextEditingController();
-    String? errorMsg;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.bgSurface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => Padding(
-          padding: EdgeInsets.fromLTRB(
-              20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Import Node',
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary)),
-                  IconButton(
-                    icon:
-                        const Icon(Icons.close, color: AppColors.textSecondary),
-                    onPressed: () => Navigator.pop(ctx),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Paste node share hex (or base64). You can also paste a raw host:port.',
-                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: inputCtrl,
-                maxLines: 4,
-                decoration: InputDecoration(
-                  hintText: 'Node share hex / base64 / host:port…',
-                  border: const OutlineInputBorder(),
-                  errorText: errorMsg,
-                ),
-                autocorrect: false,
-                enableSuggestions: false,
-                textCapitalization: TextCapitalization.none,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () async {
-                        final raw = inputCtrl.text.trim();
-                        if (raw.isEmpty) return;
-
-                        final data = QrShareData.parse(raw);
-                        if (data != null) {
-                          final node = await _importNodeFromShareData(data);
-                          if (!ctx.mounted) return;
-                          if (node != null) {
-                            Navigator.pop(ctx);
-                          }
-                          return;
-                        }
-
-                        final parsed = _parseHostPort(raw);
-                        if (parsed == null) {
-                          setS(() => errorMsg =
-                              'Could not parse — paste node share hex/base64 or host:port');
-                          return;
-                        }
-
-                        final (host, _) = parsed;
-                        final node = NodeConfig(
-                          id: uuidBytesToHex(generateUUIDv7()),
-                          name: host,
-                          host: host,
-                          chatPort: 443,
-                          voicePort: 443,
-                        );
-                        await _settings
-                            .upsertNode(node.copyWith(accountId: ''));
-                        await _reloadNodes();
-                        if (!mounted) return;
-                        if (ctx.mounted) Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content:
-                                  Text('Node imported: ${node.chatAddress}')),
-                        );
-                      },
-                      child: const Text('Import'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    inputCtrl.dispose();
-  }
-
-  (String, int?)? _parseHostPort(String raw) {
-    final normalized = raw
-        .trim()
-        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
-        .trim();
-    if (normalized.isEmpty) return null;
-
-    // IPv6 in brackets: [::1]:7777
-    if (normalized.startsWith('[')) {
-      final end = normalized.indexOf(']');
-      if (end <= 1) return null;
-      final host = normalized.substring(1, end).trim();
-      if (host.isEmpty) return null;
-      final rest = normalized.substring(end + 1).trim();
-      if (rest.isEmpty) return (host, null);
-      if (!rest.startsWith(':')) return null;
-      final port = int.tryParse(rest.substring(1).trim());
-      if (port == null) return null;
-      return (host, port);
-    }
-
-    final idx = normalized.lastIndexOf(':');
-    if (idx <= 0 || idx == normalized.length - 1) return (normalized, null);
-    final host = normalized.substring(0, idx).trim();
-    final port = int.tryParse(normalized.substring(idx + 1).trim());
-    if (port == null) return null;
-    return (host, port);
-  }
-
-  Future<NodeConfig?> _importNodeFromShareData(QrShareData data) async {
-    final node = _nodeFromQrShareData(data);
-    if (node == null) {
-      if (!mounted) return null;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid node QR/hex')),
-      );
-      return null;
-    }
-    await _settings.upsertNode(node.copyWith(accountId: ''));
-    await _reloadNodes();
-    if (!mounted) return node;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Node imported: ${node.chatAddress}')),
-    );
-    return node;
-  }
-
-  NodeConfig? _nodeFromQrShareData(QrShareData data) {
-    if (data.type != 'node') return null;
-
-    bool validPort(int? p) => p != null && p > 0 && p <= 65535;
-
-    String normalizeHost(String host) => host
-        .trim()
-        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
-        .trim();
-
-    final id = (data.nodeId ?? '').trim().isNotEmpty
-        ? data.nodeId!.trim()
-        : uuidBytesToHex(generateUUIDv7());
-
-    String? host = data.nodeHost != null ? normalizeHost(data.nodeHost!) : null;
-    int? chatPort;
-
-    if ((host == null || host.isEmpty) && data.serverAddress != null) {
-      final parsed = _parseHostPort(data.serverAddress!);
-      if (parsed != null) {
-        host = parsed.$1;
-        chatPort ??= parsed.$2;
-      }
-    }
-
-    host = host?.trim();
-    chatPort ??= 443;
-    final voicePort = chatPort;
-
-    if (host == null ||
-        host.isEmpty ||
-        !validPort(chatPort) ||
-        !validPort(voicePort)) {
-      return null;
-    }
-
-    final name = (data.nodeName ?? host).trim().isEmpty
-        ? 'Node'
-        : (data.nodeName ?? host).trim();
-
-    return NodeConfig(
-      id: id,
-      name: name,
-      host: host,
-      chatPort: chatPort,
-      voicePort: voicePort,
-      transport: data.nodeTransportFamily ?? SgtpTransportFamily.tcp,
-      useTls: data.nodeUseTls ?? false,
     );
   }
 
@@ -2830,87 +2193,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
-        ],
-      ],
-    );
-  }
-
-  // ── Whitelist card ────────────────────────────────────────────────────────
-
-  Widget _buildWhitelistCard() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Only listed keys can connect.',
-          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _ActionButton(
-              icon: Icons.snippet_folder_outlined,
-              label: 'Folder',
-              onPressed: _pickWhitelistFolder,
-            ),
-            _ActionButton(
-              icon: Icons.description_outlined,
-              label: 'Files',
-              onPressed: _pickWhitelistFiles,
-            ),
-            _ActionButton(
-              icon: Icons.content_paste_outlined,
-              label: 'Paste',
-              onPressed: _pastePublicKeyFromClipboard,
-            ),
-          ],
-        ),
-        if (_wlEntries.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: List.generate(_wlEntries.length, (i) {
-              final entry = _wlEntries[i];
-              return Container(
-                decoration: BoxDecoration(
-                  color: AppColors.bgMain,
-                  border: Border.all(color: AppColors.border),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                padding: const EdgeInsets.only(
-                    left: 12, right: 10, top: 6, bottom: 6),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    GestureDetector(
-                      onTap: () => _renameEntry(i),
-                      child: Text(
-                        entry.name,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    GestureDetector(
-                      onTap: () => _showDeleteConfirm(i),
-                      child: const Icon(Icons.close,
-                          size: 16, color: AppColors.statusRed),
-                    ),
-                  ],
-                ),
-              );
-            }),
-          ),
-        ],
-        if (_error != null) ...[
-          const SizedBox(height: 12),
-          Text(_error!,
-              style: const TextStyle(fontSize: 13, color: AppColors.statusRed)),
         ],
       ],
     );
@@ -3404,9 +2686,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   max: 120,
                   onChanged: (v) {
                     setState(() => _pingIntervalSeconds = v.round());
-                    SharedPreferences.getInstance().then(
-                      (p) =>
-                          p.setInt('sgtp_ping_interval', _pingIntervalSeconds),
+                    unawaited(
+                      _settings.savePingIntervalSeconds(_pingIntervalSeconds),
                     );
                     _tryApplyConfig();
                   },
@@ -3658,7 +2939,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _makeBackup() async {
     setState(() => _isCreatingBackup = true);
     try {
-      final backup = await _backups.createBackup();
+      final backup = await _settings.createBackup();
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Save SGTP backup',
         fileName: backup.suggestedFileName,
@@ -3699,7 +2980,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         throw const FormatException('Selected backup file is empty');
       }
 
-      final summary = await _backups.restoreFromBytes(bytes, merge: true);
+      final summary = await _settings.restoreFromBytes(bytes, merge: true);
       await _loadFromDisk();
       _tryApplyConfig();
 
@@ -3798,31 +3079,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SnackBar(content: Text('Failed to delete data: $e')),
       );
     }
-  }
-
-  void _showDeleteConfirm(int index) {
-    final entry = _wlEntries[index];
-    showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Remove Peer'),
-        content: Text(
-            'Remove "${entry.name}" from whitelist?\n\nThis applies to new rooms immediately.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _removeEntry(index);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _launchGitHub() async {
@@ -4183,7 +3439,7 @@ class _NodeEditorSheet extends StatefulWidget {
   final NodeConfig? existing;
   final String baseId;
   final String? accountIdForNew;
-  final SettingsRepository settings;
+  final SettingsManagementService settings;
   final void Function(NodeConfig) onSave;
 
   const _NodeEditorSheet({
@@ -4255,7 +3511,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       _optionsError = null;
     });
     try {
-      final (:opts, port: _, tls: _) = await SgtpServerDiscovery.discover(host);
+      final (:opts, port: _, tls: _) = await widget.settings.discoverServer(host);
       await widget.settings.saveNodeServerOptions(widget.baseId, opts);
       final savedAt =
           await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
@@ -4518,74 +3774,48 @@ class _StyledField extends StatelessWidget {
   final TextEditingController controller;
   final IconData icon;
   final String hint;
-  final TextInputType? keyboardType;
-  final bool monospace;
-  final String? error;
-  final ValueChanged<String>? onChanged;
 
   const _StyledField({
     required this.controller,
     required this.icon,
     required this.hint,
-    this.keyboardType,
-    this.monospace = false,
-    this.error,
-    this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            color: AppColors.bgSurfaceActive,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-                color: error != null ? AppColors.statusRed : AppColors.border),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              Icon(icon, size: 22, color: AppColors.textSecondary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  keyboardType: keyboardType,
-                  onChanged: onChanged,
-                  style: TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 15,
-                    fontFamily: monospace ? 'monospace' : null,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: hint,
-                    hintStyle: const TextStyle(
-                        color: AppColors.textSecondary, fontSize: 15),
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    filled: false,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.bgSurfaceActive,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          Icon(icon, size: 22, color: AppColors.textSecondary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 15,
               ),
-            ],
-          ),
-        ),
-        if (error != null) ...[
-          const SizedBox(height: 4),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(error!,
-                style:
-                    const TextStyle(fontSize: 12, color: AppColors.statusRed)),
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 15),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: false,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
           ),
         ],
-      ],
+      ),
     );
   }
 }

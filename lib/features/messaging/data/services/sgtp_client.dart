@@ -29,9 +29,13 @@ import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.
 import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/message.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/peer.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metadata.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+
+export 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -176,203 +180,6 @@ class _PendingFile {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-class SgtpConfig {
-  final String? accountId;
-  final String serverAddr;
-  final Uint8List roomUUID;
-  final SimpleKeyPairData identityKeyPair;
-  final Uint8List myPublicKey;
-  final Set<String> whitelist;
-  final SgtpTransportFamily transport;
-  final bool useTls;
-  final String? nodeId;
-
-  /// Initial chat name to send in CHAT_REQUEST and display until updated
-  final String chatName;
-
-  /// Initial avatar bytes (PNG/JPEG, ≤ 4 KB)
-  final Uint8List? chatAvatarBytes;
-
-  /// How often (seconds) to send pings and prune stale peers. Default 30.
-  final int pingIntervalSeconds;
-
-  /// Chunk size for outgoing media payloads.
-  final int mediaChunkSizeBytes;
-
-  const SgtpConfig({
-    this.accountId,
-    required this.serverAddr,
-    required this.roomUUID,
-    required this.identityKeyPair,
-    required this.myPublicKey,
-    required this.whitelist,
-    this.transport = SgtpTransportFamily.tcp,
-    this.useTls = false,
-    this.nodeId,
-    this.chatName = 'Chat',
-    this.chatAvatarBytes,
-    this.pingIntervalSeconds = 30,
-    this.mediaChunkSizeBytes = SgtpConstants.defaultMediaChunkSize,
-  });
-
-  SgtpConfig copyWithRoomUUID(Uint8List roomUUID) => SgtpConfig(
-        accountId: accountId,
-        serverAddr: serverAddr,
-        roomUUID: roomUUID,
-        identityKeyPair: identityKeyPair,
-        myPublicKey: myPublicKey,
-        whitelist: whitelist,
-        transport: transport,
-        useTls: useTls,
-        nodeId: nodeId,
-        chatName: chatName,
-        chatAvatarBytes: chatAvatarBytes,
-        pingIntervalSeconds: pingIntervalSeconds,
-        mediaChunkSizeBytes: mediaChunkSizeBytes,
-      );
-
-  SgtpConfig copyWithMeta({String? name, Uint8List? avatar}) => SgtpConfig(
-        accountId: accountId,
-        serverAddr: serverAddr,
-        roomUUID: roomUUID,
-        identityKeyPair: identityKeyPair,
-        myPublicKey: myPublicKey,
-        whitelist: whitelist,
-        transport: transport,
-        useTls: useTls,
-        nodeId: nodeId,
-        chatName: name ?? chatName,
-        chatAvatarBytes: avatar ?? chatAvatarBytes,
-        pingIntervalSeconds: pingIntervalSeconds,
-        mediaChunkSizeBytes: mediaChunkSizeBytes,
-      );
-
-  SgtpConfig copyWith(
-          {Set<String>? whitelist,
-          String? serverAddr,
-          String? accountId,
-          int? mediaChunkSizeBytes,
-          SgtpTransportFamily? transport,
-          bool? useTls,
-          String? nodeId}) =>
-      SgtpConfig(
-        accountId: accountId ?? this.accountId,
-        serverAddr: serverAddr ?? this.serverAddr,
-        roomUUID: roomUUID,
-        identityKeyPair: identityKeyPair,
-        myPublicKey: myPublicKey,
-        whitelist: whitelist ?? this.whitelist,
-        transport: transport ?? this.transport,
-        useTls: useTls ?? this.useTls,
-        nodeId: nodeId ?? this.nodeId,
-        chatName: chatName,
-        chatAvatarBytes: chatAvatarBytes,
-        pingIntervalSeconds: pingIntervalSeconds,
-        mediaChunkSizeBytes: mediaChunkSizeBytes ?? this.mediaChunkSizeBytes,
-      );
-}
-
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
-sealed class SgtpEvent {}
-
-class SgtpConnecting extends SgtpEvent {}
-
-class SgtpHandshaking extends SgtpEvent {}
-
-class SgtpReady extends SgtpEvent {
-  final bool isMaster;
-  final String roomUUIDHex;
-  SgtpReady({required this.isMaster, required this.roomUUIDHex});
-}
-
-class SgtpMessageReceived extends SgtpEvent {
-  final ChatMessage message;
-  SgtpMessageReceived({required this.message});
-}
-
-class SgtpPeerJoined extends SgtpEvent {
-  final String peerUUID;
-  final String ed25519PubHex;
-  SgtpPeerJoined({required this.peerUUID, required this.ed25519PubHex});
-}
-
-class SgtpPeerLeft extends SgtpEvent {
-  final String peerUUID;
-  SgtpPeerLeft({required this.peerUUID});
-}
-
-class SgtpError extends SgtpEvent {
-  final String error;
-  SgtpError({required this.error});
-}
-
-class SgtpDisconnected extends SgtpEvent {}
-
-/// A participant shared their chat metadata (name/avatar).
-/// Fired both when receiving a CHAT_REQUEST and when receiving a chat_meta message.
-class SgtpChatMetadataReceived extends SgtpEvent {
-  final String chatName;
-  final Uint8List? avatarBytes;
-  final String senderUUID;
-  SgtpChatMetadataReceived({
-    required this.chatName,
-    this.avatarBytes,
-    required this.senderUUID,
-  });
-}
-
-/// A peer sent a read receipt for a specific message.
-class SgtpMessageReadReceived extends SgtpEvent {
-  final String readMessageId;
-  final String readerUUID;
-  final String? readerPublicKeyHex;
-  SgtpMessageReadReceived({
-    required this.readMessageId,
-    required this.readerUUID,
-    this.readerPublicKeyHex,
-  });
-}
-
-/// Upload progress for our own outgoing media.
-class SgtpMediaProgress extends SgtpEvent {
-  final String echoId; // ChatMessage.id of the pending outgoing message
-  final String messageId;
-  final double progress; // 0.0–1.0
-  SgtpMediaProgress(
-      {required this.echoId, required this.messageId, required this.progress});
-}
-
-/// A peer added or removed an emoji reaction on a message.
-class SgtpReactionReceived extends SgtpEvent {
-  final String messageId;
-  final String emoji;
-  final String senderUUID;
-  final bool add; // true = add, false = remove
-  SgtpReactionReceived({
-    required this.messageId,
-    required this.emoji,
-    required this.senderUUID,
-    required this.add,
-  });
-}
-
-class PersistedHistoryBatchResult {
-  final int loaded;
-  final int total;
-
-  const PersistedHistoryBatchResult({
-    required this.loaded,
-    required this.total,
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Client state
 // ---------------------------------------------------------------------------
 
@@ -382,13 +189,14 @@ enum _ClientState { disconnected, connecting, waitingHandshake, ready }
 // SgtpClient
 // ---------------------------------------------------------------------------
 
-class SgtpClient {
+class SgtpClient implements ISgtpSession {
   final SgtpConfig _config;
   final Uint8List _myUUID;
   late final Uint8List _roomUUID;
   final Random _secureRandom = Random.secure();
 
   final _eventController = StreamController<SgtpEvent>.broadcast();
+  @override
   Stream<SgtpEvent> get events => _eventController.stream;
 
   SgtpTransport? _transport;
@@ -468,11 +276,15 @@ class SgtpClient {
   }
 
   bool get isMaster => _isMaster;
+  @override
   String get myUUIDHex => uuidBytesToHex(_myUUID);
+  @override
   String get roomUUIDHex => uuidBytesToHex(_roomUUID);
+  @override
   List<String> get peerUUIDs => _peers.keys.toList();
 
   /// Returns sessionUUID → ed25519PubHex for all ever-seen peers.
+  @override
   Map<String, String> get peerPublicKeys => Map.unmodifiable(_peerPublicKeys);
 
   /// When the socket last received any data. Used to detect dead TCP connections.
@@ -495,6 +307,7 @@ class SgtpClient {
     return repo.count();
   }
 
+  @override
   Future<PersistedHistoryBatchResult> replayPersistedHistoryBatch({
     required int offsetFromEnd,
     int limit = 100,
@@ -556,11 +369,13 @@ class SgtpClient {
   }
 
   /// User avatar is local UI-only and is not exchanged in SGTP MESSAGE payloads.
+  @override
   void setUserAvatar(Uint8List? avatar) {}
 
   /// Hot-update the peer whitelist without reconnecting.
   /// Newly added keys are accepted on the next ping/pong; removed keys are
   /// dropped at the next prune cycle.
+  @override
   void updateWhitelist(Set<String> whitelist) {
     _whitelist = Set.unmodifiable(whitelist);
   }
@@ -569,6 +384,7 @@ class SgtpClient {
   // Public API
   // ---------------------------------------------------------------------------
 
+  @override
   Future<void> connect() async {
     if (_state != _ClientState.disconnected) return;
     _state = _ClientState.connecting;
@@ -722,6 +538,7 @@ class SgtpClient {
     };
   }
 
+  @override
   Future<void> sendMessage(
     String text, {
     String? replyToId,
@@ -774,6 +591,7 @@ class SgtpClient {
   }
 
   /// Send an emoji reaction on a message. Peers receive it and update their UI.
+  @override
   Future<void> sendReaction(String messageId, String emoji, bool add) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
     try {
@@ -796,6 +614,7 @@ class SgtpClient {
   }
 
   /// Send a read receipt for a given message ID.
+  @override
   Future<void> sendMessageRead(String messageId) async {
     if (_state != _ClientState.ready || _chatKey == null) return;
     try {
@@ -816,6 +635,7 @@ class SgtpClient {
   }
 
   /// Broadcast updated chat name/avatar to all peers via encrypted message.
+  @override
   Future<void> sendChatMeta(String name, Uint8List? avatar) async {
     _currentChatName = name;
     _currentChatAvatar = avatar;
@@ -876,7 +696,7 @@ class SgtpClient {
       var lastProgressEmitMs = -1;
       for (int i = 0; i < totalChunks; i++) {
         final start = i * chunkSize;
-        final end = (start + chunkSize).clamp(0, totalSize);
+        final end = (start + chunkSize).clamp(0, totalSize).toInt();
         // Read only this chunk — no other bytes are held in RAM.
         final chunkBytes = await readChunk(start, end);
         final Map<String, dynamic> payload = {
@@ -1014,6 +834,7 @@ class SgtpClient {
     );
   }
 
+  @override
   Future<void> sendImage(Uint8List bytes, String name, String mime) =>
       _sendMedia(bytes, name, mime, mime == 'image/gif' ? 'gif' : 'image',
           echoMessage: ChatMessage(
@@ -1028,6 +849,7 @@ class SgtpClient {
               isFromHistory: false,
               isFromMe: true));
 
+  @override
   Future<void> sendVideo(XFile xFile, String name, String mime) async {
     final echoId = uuidBytesToHex(generateUUIDv7());
     final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
@@ -1051,6 +873,7 @@ class SgtpClient {
     );
   }
 
+  @override
   Future<void> sendVoice(Uint8List bytes, String mime) {
     final name = 'voice_${DateTime.now().millisecondsSinceEpoch}.${_ext(mime)}';
     return () async {
@@ -1079,6 +902,7 @@ class SgtpClient {
   }
 
   /// Send a circular video note (кружок) from an in-memory buffer (recorder).
+  @override
   Future<void> sendVideoNote(
     Uint8List bytes,
     String mime, {
@@ -1115,6 +939,7 @@ class SgtpClient {
 
   /// Send a circular video note from a file (picked from gallery) —
   /// streams from disk, never loads the full file into RAM.
+  @override
   Future<void> sendVideoNoteFromXFile(
     XFile xFile,
     String mime, {
@@ -1165,6 +990,7 @@ class SgtpClient {
         _ => 'audio',
       };
 
+  @override
   Future<void> disconnect() async {
     if (_state == _ClientState.disconnected) return;
     try {
@@ -1181,6 +1007,7 @@ class SgtpClient {
   /// Nudge the existing TCP session after app resume without tearing it down.
   /// We can't observe raw TCP ACKs from Dart, so we rely on a lightweight
   /// application-level keepalive and the socket's onDone/onError callbacks.
+  @override
   Future<void> probeConnection() async {
     if (_state == _ClientState.disconnected) return;
     try {
@@ -2510,6 +2337,7 @@ class SgtpClient {
     _transport = null;
   }
 
+  @override
   Future<void> close() async {
     await _cleanup();
     await _eventController.close();

@@ -6,17 +6,27 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/app/app_shell.dart';
+import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/window_size_service.dart';
-import 'package:sgtp_flutter/features/messaging/application/services/chat_storage_gateway.dart';
-import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
-import 'package:sgtp_flutter/features/shell/presentation/pages/home_screen.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/shell/application/services/app_startup_service.dart';
+import 'package:sgtp_flutter/features/shell/application/services/home_persistence_service.dart';
+import 'package:sgtp_flutter/features/shell/application/services/home_userdir_support_service.dart';
 
 bool get _isDesktop =>
     !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
 class SgtpApp extends StatefulWidget {
-  const SgtpApp({super.key});
+  const SgtpApp({
+    super.key,
+    required this.dependencies,
+  });
+
+  final AppDependencies dependencies;
 
   @override
   State<SgtpApp> createState() => _SgtpAppState();
@@ -47,14 +57,29 @@ class _SgtpAppState extends State<SgtpApp> with WindowListener {
   Widget build(BuildContext context) {
     return MultiRepositoryProvider(
       providers: [
-        RepositoryProvider<SettingsRepository>(
-          create: (_) => SettingsRepository(),
+        RepositoryProvider<AppDependencies>(
+          create: (_) => widget.dependencies,
         ),
-        RepositoryProvider<AppBackupRepository>(
-          create: (_) => AppBackupRepository(),
+RepositoryProvider<ChatStorageGateway>(
+          create: (_) => widget.dependencies.chatStorageGateway,
         ),
-        RepositoryProvider<ChatStorageGateway>(
-          create: (_) => const DefaultChatStorageGateway(),
+        RepositoryProvider<AppStartupService>(
+          create: (_) => widget.dependencies.appStartupService,
+        ),
+        RepositoryProvider<ContactsDirectoryService>(
+          create: (_) => widget.dependencies.contactsDirectoryService,
+        ),
+        RepositoryProvider<SettingsManagementService>(
+          create: (_) => widget.dependencies.settingsManagementService,
+        ),
+        RepositoryProvider<HomePersistenceService>(
+          create: (_) => widget.dependencies.homePersistenceService,
+        ),
+        RepositoryProvider<HomeUserDirSupportService>(
+          create: (_) => widget.dependencies.homeUserDirSupportService,
+        ),
+        RepositoryProvider<SgtpSessionFactory>(
+          create: (_) => widget.dependencies.sgtpSessionFactory,
         ),
       ],
       child: MaterialApp(
@@ -65,7 +90,7 @@ class _SgtpAppState extends State<SgtpApp> with WindowListener {
         themeMode: ThemeMode.dark,
         initialRoute: '/',
         routes: {
-          '/': (_) => const AppStartScreen(),
+          '/': (_) => const AppShell(),
         },
       ),
     );

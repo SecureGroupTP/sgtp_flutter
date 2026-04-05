@@ -1,8 +1,5 @@
-import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -13,9 +10,9 @@ import 'package:sgtp_flutter/core/openssh_parser.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
-import 'package:sgtp_flutter/features/messaging/application/services/messaging_data_access.dart';
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/setup/application/models/setup_models.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key});
@@ -25,8 +22,7 @@ class OnboardingPage extends StatefulWidget {
 }
 
 class _OnboardingPageState extends State<OnboardingPage> {
-  late final SettingsRepository _settings;
-  late final AppBackupRepository _backups;
+  late final SettingsManagementService _settings;
   final _serverCtrl = TextEditingController();
   final _nicknameCtrl = TextEditingController(text: 'Account');
   final _usernameCtrl = TextEditingController();
@@ -49,8 +45,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   @override
   void initState() {
     super.initState();
-    _settings = context.read<SettingsRepository>();
-    _backups = context.read<AppBackupRepository>();
+    _settings = context.read<SettingsManagementService>();
   }
 
   @override
@@ -73,7 +68,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     });
     try {
       final (host, explicitPort) = _parseHostPort(raw);
-      final result = await SgtpServerDiscovery.discover(host);
+      final result = await _settings.discoverServer(host);
       final picked = _pickTransport(result.opts);
       final port = explicitPort ?? picked.$3;
 
@@ -189,59 +184,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
     return accountId;
   }
 
-  Future<({Uint8List bytes, String name})?> _autoGenerateKey() async {
-    try {
-      final algorithm = Ed25519();
-      final keyPair = await algorithm.newKeyPair();
-      final pubKey = await keyPair.extractPublicKey();
-      final privBytes = await keyPair.extractPrivateKeyBytes();
-      final pubBytes = Uint8List.fromList(pubKey.bytes);
-      final opensshBytes = _encodeOpenSshPrivateKey(privBytes, pubBytes);
-      return (bytes: opensshBytes, name: 'identity');
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Uint8List _encodeOpenSshPrivateKey(List<int> seed, Uint8List pubKey) {
-    const magic = 'openssh-key-v1\x00';
-    final header = _sshStr('none') + _sshStr('none') + _sshStr('') + _u32(1);
-    final pubBlock = _sshStr('ssh-ed25519') + _sshStr(pubKey);
-    final pubWrapped = _sshStr(pubBlock);
-    final rng = Random.secure();
-    final check = rng.nextInt(0xFFFFFFFF);
-    final fullPriv = Uint8List(64)
-      ..setAll(0, seed)
-      ..setAll(32, pubKey);
-    final privBlock = _u32(check) +
-        _u32(check) +
-        _sshStr('ssh-ed25519') +
-        _sshStr(pubKey) +
-        _sshStr(fullPriv) +
-        _sshStr('sgtp-generated');
-    final padded = List<int>.from(privBlock);
-    var pad = 1;
-    while (padded.length % 8 != 0) {
-      padded.add(pad++);
-    }
-    final body = magic.codeUnits + header + pubWrapped + _sshStr(padded);
-    final b64 = base64Encode(body);
-    final sb = StringBuffer('-----BEGIN OPENSSH PRIVATE KEY-----\n');
-    for (var i = 0; i < b64.length; i += 70) {
-      sb.writeln(b64.substring(i, (i + 70).clamp(0, b64.length)));
-    }
-    sb.write('-----END OPENSSH PRIVATE KEY-----');
-    return Uint8List.fromList(sb.toString().codeUnits);
-  }
-
-  List<int> _sshStr(dynamic d) {
-    final b = d is String ? d.codeUnits : (d as List<int>);
-    return _u32(b.length) + b;
-  }
-
-  List<int> _u32(int v) =>
-      [(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
-
   Future<void> _finish() async {
     final nick = _nicknameCtrl.text.trim();
     if (nick.isEmpty) {
@@ -308,11 +250,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
       var savedKey = await _settings.loadPrivateKeyForNode(accountId);
       savedKey ??= await _settings.loadPrivateKey();
       if (savedKey == null) {
-        final generated = await _autoGenerateKey();
-        if (generated != null) {
-          await _settings.savePrivateKeyForNode(
-              accountId, generated.bytes, generated.name);
-        }
+        await _settings.generatePrivateKey(accountId: accountId);
       } else {
         // validate key once to ensure the startup screen won't fail loop
         parseOpenSshPrivateKey(savedKey.bytes);
@@ -380,7 +318,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
         return;
       }
 
-      await _backups.restoreFromBytes(bytes, merge: false);
+      await _settings.restoreFromBytes(bytes, merge: false);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Backup restored')),

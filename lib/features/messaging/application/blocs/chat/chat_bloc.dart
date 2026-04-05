@@ -6,15 +6,17 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 
-import 'package:sgtp_flutter/features/messaging/application/services/messaging_data_access.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
 class ChatBloc extends Bloc<ChatEvent, ChatState> {
-  SgtpClient? _client;
+  ISgtpSession? _client;
   StreamSubscription<SgtpEvent>? _eventSub;
-  final ChatMetadataRepository _metaRepo;
+  late final SgtpSessionFactory _sessionFactory;
+  final ChatMetadataStore _metaRepo;
   DateTime? _lastActivityPersistAt;
   static const int _historyBatchSize = 100;
   String _activeServerAddress = '';
@@ -30,9 +32,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   int _sessionId = 0;
   Map<String, Uint8List> _contactAvatarsByPub = const {};
 
-  ChatBloc({required String accountId})
-      : _metaRepo = ChatMetadataRepository(accountId: accountId),
+  ChatBloc({
+    required String accountId,
+    required ChatStorageGateway storageGateway,
+    required SgtpSessionFactory sessionFactory,
+  })  : _metaRepo = storageGateway.metadataForAccount(accountId),
         super(const ChatState()) {
+    _sessionFactory = sessionFactory;
     on<ChatConnect>(_onConnect);
     on<ChatOpenOffline>(_onOpenOffline);
     on<ChatReconnect>(_onReconnect);
@@ -102,7 +108,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     } catch (_) {}
 
     final sessionId = ++_sessionId;
-    final client = SgtpClient(event.config.copyWithMeta(
+    final client = _sessionFactory(event.config.copyWithMeta(
       name: chatName,
       avatar: chatAvatar,
     ));
@@ -212,7 +218,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       avatar: chatAvatar,
     );
 
-    final client = SgtpClient(resolvedConfig);
+    final client = _sessionFactory(resolvedConfig);
     // Pass user avatar to the client so it attaches it to outgoing messages
     if (state.userAvatarBytes != null) {
       client.setUserAvatar(state.userAvatarBytes);

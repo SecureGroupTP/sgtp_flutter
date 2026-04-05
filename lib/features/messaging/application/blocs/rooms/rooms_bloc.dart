@@ -4,13 +4,15 @@ import 'dart:typed_data';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
-import 'package:sgtp_flutter/features/messaging/application/services/messaging_data_access.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_state.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 
 // Internal event — triggers a rebuild when any ChatBloc status changes.
 class _RoomsRefresh extends RoomsEvent {
@@ -23,20 +25,28 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   final String _accountId;
   SgtpConfig _baseConfig;
   final Map<String, String> _nicknames;
+  final SettingsManagementService _settings;
+  final ChatStorageGateway _chatStorage;
+  final SgtpSessionFactory _sessionFactory;
   Map<String, Uint8List> _contactAvatarsByPub = const {};
   Uint8List? _userAvatar;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
-  final SettingsRepository _settings = SettingsRepository();
 
   RoomsBloc({
     required String accountId,
     required SgtpConfig baseConfig,
     required Map<String, String> nicknames,
+    required SettingsManagementService settingsRepository,
+    required ChatStorageGateway chatStorage,
     required String serverAddress,
+    required SgtpSessionFactory sessionFactory,
     Uint8List? userAvatar,
   })  : _baseConfig = baseConfig,
         _accountId = accountId,
         _nicknames = nicknames,
+        _settings = settingsRepository,
+        _chatStorage = chatStorage,
+        _sessionFactory = sessionFactory,
         _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
     on<RoomsCreateRoom>(_onCreate);
@@ -186,7 +196,10 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     final config = (configOverride ?? _baseConfig)
         .copyWith(accountId: _accountId)
         .copyWithRoomUUID(roomUUID);
-    final chatBloc = ChatBloc(accountId: _accountId)
+    final chatBloc = ChatBloc(
+        accountId: _accountId,
+        storageGateway: _chatStorage,
+        sessionFactory: _sessionFactory)
       ..add(openOffline
           ? ChatOpenOffline(config, nicknames: _nicknames)
           : ChatConnect(config, nicknames: _nicknames));

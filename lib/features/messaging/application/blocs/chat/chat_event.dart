@@ -1,8 +1,9 @@
 import 'dart:typed_data';
 import 'package:cross_file/cross_file.dart';
 import 'package:equatable/equatable.dart';
-import 'package:sgtp_flutter/features/messaging/application/services/messaging_data_access.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 
 abstract class ChatEvent extends Equatable {
   const ChatEvent();

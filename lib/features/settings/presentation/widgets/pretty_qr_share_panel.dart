@@ -11,7 +11,8 @@ import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/file_save.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
+import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart' show QrStyleSettings;
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 
 enum _PrettyQrShapeStyle { smooth, squares, dots }
 
@@ -103,7 +104,7 @@ class _PrettyQrSharePanelState extends State<PrettyQrSharePanel> {
 
   late String _shareHex;
   late QrImage _qrImage;
-  late final SettingsRepository _settingsRepo;
+  late final SettingsManagementService _settingsRepo;
   int _presetIndex = 0;
   Color _primary = _presets.first.primary;
   Color _secondary = _presets.first.secondary;
@@ -113,7 +114,7 @@ class _PrettyQrSharePanelState extends State<PrettyQrSharePanel> {
   @override
   void initState() {
     super.initState();
-    _settingsRepo = context.read<SettingsRepository>();
+    _settingsRepo = context.read<SettingsManagementService>();
     _syncQrPayload();
     _loadSavedStyle();
   }

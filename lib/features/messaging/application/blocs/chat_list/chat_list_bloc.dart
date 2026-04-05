@@ -3,18 +3,18 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
-import 'package:sgtp_flutter/features/messaging/application/services/messaging_data_access.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 
 part 'chat_list_event.dart';
 part 'chat_list_state.dart';
 
 /// BLoC для управления списком сохраненных чатов и их метаданными
 class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
-  final ChatMetadataRepository _repository;
+  final ChatMetadataStore _repository;
 
-  ChatListBloc({required ChatMetadataRepository repository})
+  ChatListBloc({required ChatMetadataStore repository})
       : _repository = repository,
         super(const ChatListState()) {
     on<ChatListLoadChats>(_onLoadChats);

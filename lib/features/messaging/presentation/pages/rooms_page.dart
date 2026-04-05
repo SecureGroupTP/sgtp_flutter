@@ -20,9 +20,10 @@ import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_avatar
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_status_dot.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/pages/chat_page.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
-import 'package:sgtp_flutter/features/messaging/application/services/chat_storage_gateway.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/setup/application/models/setup_models.dart';
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 bool get _isDesktop =>
     !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
@@ -796,31 +797,6 @@ class _MenuItem extends StatelessWidget {
 }
 
 /// White squircle FAB.
-/// Wrapped in Padding so the Scaffold positions it above the outer nav bar
-/// (the outer Scaffold with extendBody:true propagates nav bar height into
-/// MediaQuery.padding.bottom, which we use here to shift the FAB up).
-class _AddFab extends StatelessWidget {
-  final VoidCallback onPressed;
-  const _AddFab({required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomInset),
-      child: FloatingActionButton(
-        onPressed: onPressed,
-        tooltip: 'Add room',
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.black,
-        elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        child: const Icon(Icons.add, size: 32),
-      ),
-    );
-  }
-}
-
 /// Full-screen empty state.
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
@@ -876,7 +852,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   bool _showBase64Input = false;
   String? _decodeError;
 
-  late final SettingsRepository _settingsRepo;
+  late final SettingsManagementService _settingsRepo;
   List<NodeConfig> _nodes = const [];
   String? _selectedNodeId;
   bool _nodesLoading = true;
@@ -891,7 +867,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   @override
   void initState() {
     super.initState();
-    _settingsRepo = context.read<SettingsRepository>();
+    _settingsRepo = context.read<SettingsManagementService>();
     _loadNodes();
   }
 

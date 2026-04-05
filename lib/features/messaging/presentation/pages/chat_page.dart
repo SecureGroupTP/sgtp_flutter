@@ -16,7 +16,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
@@ -24,8 +23,8 @@ import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_
 import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/message_bubble.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
-import 'package:sgtp_flutter/features/setup/application/services/setup_data_access.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 
 class ChatPage extends StatefulWidget {
   final String accountId;
@@ -39,7 +38,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   static const int _maxUploadImageDimension = 2560;
   static const int _targetUploadImageBytes = 3 * 1024 * 1024;
 
-  late final SettingsRepository _settingsRepo;
+  late final SettingsManagementService _settingsRepo;
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final _recorder = AudioRecorder();
@@ -115,7 +114,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    _settingsRepo = context.read<SettingsRepository>();
+    _settingsRepo = context.read<SettingsManagementService>();
     WidgetsBinding.instance.addObserver(this);
     _scrollCtrl.addListener(_onScroll);
     _loadCaptureCapabilities();
@@ -323,9 +322,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final roomUUID = _chatBloc?.state.roomUUID ?? '';
     if (roomUUID.isEmpty || !_scrollCtrl.hasClients) return;
     final pos = _scrollCtrl.offset;
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.setDouble('chat_scroll_$roomUUID', pos);
-    }).catchError((_) {});
+    unawaited(_settingsRepo.saveChatScrollPosition(roomUUID, pos));
   }
 
   /// Restore the saved scroll position for [roomUUID], or jump to bottom if
@@ -336,8 +333,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       return;
     }
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedPos = prefs.getDouble('chat_scroll_$roomUUID');
+      final savedPos = await _settingsRepo.loadChatScrollPosition(roomUUID);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scrollCtrl.hasClients) return;
         if (savedPos != null) {

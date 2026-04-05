@@ -83,13 +83,6 @@ class _LogsScreenState extends State<LogsScreen> {
     LogLevel.error => const Color(0xFFFF3B30),
   };
 
-  Color _levelBg(LogLevel l) => switch (l) {
-    LogLevel.debug => const Color(0xFF1F1F24),
-    LogLevel.info  => const Color(0xFF0A1F3A),
-    LogLevel.warn  => const Color(0xFF2E1F00),
-    LogLevel.error => const Color(0xFF2E0A08),
-  };
-
   @override
   Widget build(BuildContext context) {
     final entries = _filtered;

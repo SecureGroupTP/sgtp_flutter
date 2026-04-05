@@ -7,12 +7,14 @@ import 'package:cryptography/cryptography.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
+import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/http_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
 
+export 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 export 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart'
     show SgtpTransport;
 
@@ -40,86 +42,6 @@ String _msgName(int t) => switch (t) {
       _ => '0x${t.toRadixString(16).padLeft(2, '0')}',
     };
 
-class UserDirFriendStatus {
-  static const int pendingOutgoing = 1;
-  static const int pendingIncoming = 2;
-  static const int friend = 3;
-  static const int rejected = 4;
-}
-
-class UserDirFriendState {
-  final Uint8List peerPubkey;
-  final int status;
-  final Uint8List? roomUUID;
-
-  const UserDirFriendState({
-    required this.peerPubkey,
-    required this.status,
-    required this.roomUUID,
-  });
-
-  String get peerPubkeyHex =>
-      peerPubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  String? get roomUUIDHex => roomUUID == null
-      ? null
-      : roomUUID!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-}
-
-class UserDirFriendNotify {
-  final int eventType; // 1=request created, 2=request answered, 3=dm ready
-  final int status;
-  final Uint8List actorPubkey;
-  final Uint8List? roomUUID;
-
-  const UserDirFriendNotify({
-    required this.eventType,
-    required this.status,
-    required this.actorPubkey,
-    required this.roomUUID,
-  });
-
-  String get actorPubkeyHex =>
-      actorPubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-}
-
-/// Lightweight profile data returned by GET_META / NOTIFY.
-class UserDirMeta {
-  final Uint8List pubkey;
-  final String username;
-  final String fullname;
-  final Uint8List avatarSha256; // 32 bytes
-  final int updatedAt; // unix seconds
-
-  const UserDirMeta({
-    required this.pubkey,
-    required this.username,
-    required this.fullname,
-    required this.avatarSha256,
-    required this.updatedAt,
-  });
-
-  String get pubkeyHex =>
-      pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  String get avatarSha256Hex =>
-      avatarSha256.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-}
-
-/// Full profile including avatar bytes, returned by GET_PROFILE.
-class UserDirProfile extends UserDirMeta {
-  final Uint8List avatarBytes;
-
-  const UserDirProfile({
-    required super.pubkey,
-    required super.username,
-    required super.fullname,
-    required super.avatarSha256,
-    required super.updatedAt,
-    required this.avatarBytes,
-  });
-}
-
 /// Binary protocol client for the SGTP user directory service.
 ///
 /// Transport-agnostic: works over any [SgtpTransport] (TCP, WebSocket, …).
@@ -130,8 +52,9 @@ class UserDirProfile extends UserDirMeta {
 /// All frames are: u32 frame_len (big-endian) | u8 msg_type | payload.
 /// Requests are sequential (no concurrent in-flight messages).
 /// NOTIFY (0x86) is unsolicited and handled via [notifyStream].
-class UserDirClient {
+class UserDirClient implements IUserDirClient {
   /// Human-readable label used in log output (e.g. "tcp://host:port").
+  @override
   final String label;
   final SgtpTransport _transport;
 
@@ -179,20 +102,24 @@ class UserDirClient {
         transport: transport, label: '$scheme://${node.host}:$port');
   }
 
+  @override
   Stream<UserDirMeta> get notifyStream {
     _notifyCtrl ??= StreamController<UserDirMeta>.broadcast();
     return _notifyCtrl!.stream;
   }
 
+  @override
   Stream<UserDirFriendNotify> get friendNotifyStream {
     _friendNotifyCtrl ??= StreamController<UserDirFriendNotify>.broadcast();
     return _friendNotifyCtrl!.stream;
   }
 
+  @override
   bool get isConnected => !_closed && _transport.isConnected;
 
   /// Connect via the underlying transport and send the 32-byte zero magic
   /// prefix that signals userdir intent to the relay server.
+  @override
   Future<void> connect() async {
     AppLogger.i('Connecting to $label', tag: _tag);
     await _transport.connect();
@@ -354,6 +281,7 @@ class UserDirClient {
     return result.ok;
   }
 
+  @override
   Future<({bool ok, int? errorCode, String? errorMessage})> registerWithResult({
     required String? username,
     required String fullname,
@@ -427,6 +355,7 @@ class UserDirClient {
 
   /// Fetches lightweight metadata (no avatar bytes) for [pubkey].
   /// Returns null on error or if the profile is not found.
+  @override
   Future<UserDirMeta?> getMeta(Uint8List pubkey) async {
     final pk8 = pubkey
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -447,6 +376,7 @@ class UserDirClient {
   }
 
   /// Fetches the full profile including avatar bytes for [pubkey].
+  @override
   Future<UserDirProfile?> getProfile(Uint8List pubkey) async {
     final pk8 = pubkey
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -475,6 +405,7 @@ class UserDirClient {
 
   /// Subscribes to change notifications for the given list of public keys.
   /// The server will send NOTIFY frames when any subscribed profile is updated.
+  @override
   Future<bool> subscribe(List<Uint8List> pubkeys) async {
     if (pubkeys.isEmpty) return true;
     AppLogger.i('SUBSCRIBE to ${pubkeys.length} contact(s)', tag: _tag);
@@ -502,6 +433,7 @@ class UserDirClient {
 
   /// Searches userdir by username/fullname query.
   /// Returns zero or more lightweight metadata entries.
+  @override
   Future<List<UserDirMeta>> search(String query, {int limit = 20}) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
@@ -540,6 +472,7 @@ class UserDirClient {
     return _parseSearchResults(resp.sublist(1));
   }
 
+  @override
   Future<bool> sendFriendRequest({
     required Uint8List myPubkey,
     required Uint8List peerPubkey,
@@ -560,6 +493,7 @@ class UserDirClient {
     return resp != null && resp.isNotEmpty && resp[0] == 0x81;
   }
 
+  @override
   Future<bool> sendFriendResponse({
     required Uint8List myPubkey,
     required Uint8List requesterPubkey,
@@ -582,6 +516,7 @@ class UserDirClient {
     return resp != null && resp.isNotEmpty && resp[0] == 0x81;
   }
 
+  @override
   Future<bool> sendFriendDelete({
     required Uint8List myPubkey,
     required Uint8List peerPubkey,
@@ -602,6 +537,7 @@ class UserDirClient {
     return resp != null && resp.isNotEmpty && resp[0] == 0x81;
   }
 
+  @override
   Future<List<UserDirFriendState>?> friendSync({
     required Uint8List myPubkey,
     required SimpleKeyPairData identityKeyPair,
@@ -839,6 +775,7 @@ class UserDirClient {
   int _readU16(Uint8List data, int offset) =>
       (data[offset] << 8) | data[offset + 1];
 
+  @override
   void close() {
     if (_closed) return;
     AppLogger.i('$label — closed by client', tag: _tag);
