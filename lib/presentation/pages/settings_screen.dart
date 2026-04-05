@@ -23,6 +23,8 @@ import '../../core/qr_data.dart';
 import '../../core/sgtp_server_options.dart';
 import '../../core/sgtp_transport.dart';
 import '../../core/uuid_v7.dart';
+import '../../core/file_save.dart';
+import '../../data/repositories/app_backup_repository.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
 import '../../data/transport/server_discovery.dart';
@@ -81,6 +83,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = SettingsRepository();
+  final _backups = AppBackupRepository();
   final _logsCountNotifier = _LogsCountNotifier();
   final _nicknameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
@@ -100,6 +103,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _isLoading = false;
   bool _isGenerating = false;
+  bool _isCreatingBackup = false;
+  bool _isRestoringBackup = false;
   String? _error;
   String? _usernameError;
 
@@ -1787,7 +1792,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       _SettingsSection.data => (
           backColor: AppColors.textSecondary,
-          title: 'Media Caching',
+          title: 'Data',
           titleSize: 20.0
         ),
       null => null,
@@ -1865,7 +1870,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _SettingsNavTile(
                 iconBgColor: const Color(0xFF995a00),
                 iconLabel: 'D',
-                title: 'Media Caching',
+                title: 'Data',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.data),
               ),
@@ -3528,6 +3533,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
+          'Export your local app data into a backup file.',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        _ActionButton(
+          icon: Icons.archive_outlined,
+          label: 'Create backup',
+          loading: _isCreatingBackup,
+          onPressed: (_isCreatingBackup || _isRestoringBackup)
+              ? null
+              : _makeBackup,
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Restore from a backup file and merge data without duplicates.',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        _ActionButton(
+          icon: Icons.restore,
+          label: 'Restore from backup',
+          loading: _isRestoringBackup,
+          onPressed: (_isCreatingBackup || _isRestoringBackup)
+              ? null
+              : _restoreFromBackupMerge,
+        ),
+        const SizedBox(height: 16),
+        const Text(
           'Delete all local app data (accounts, servers, keys, chats, cached files).',
           style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
         ),
@@ -3539,6 +3572,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ],
     );
+  }
+
+  Future<void> _makeBackup() async {
+    setState(() => _isCreatingBackup = true);
+    try {
+      final backup = await _backups.createBackup();
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save SGTP backup',
+        fileName: backup.suggestedFileName,
+        type: FileType.custom,
+        allowedExtensions: const ['sgtpbackup'],
+      );
+      if (path == null || path.trim().isEmpty) return;
+      final ok = await saveBytesToPath(path, backup.bytes);
+      if (!ok) {
+        throw StateError('Saving file is not supported on this platform');
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Backup saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create backup: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isCreatingBackup = false);
+    }
+  }
+
+  Future<void> _restoreFromBackupMerge() async {
+    setState(() => _isRestoringBackup = true);
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: true,
+        type: FileType.custom,
+        allowedExtensions: const ['sgtpbackup', 'json'],
+      );
+      if (picked == null || picked.files.isEmpty) return;
+      final bytes = picked.files.first.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        throw const FormatException('Selected backup file is empty');
+      }
+
+      final summary = await _backups.restoreFromBytes(bytes, merge: true);
+      await _loadFromDisk();
+      _tryApplyConfig();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Restore complete: +${summary.prefsImported} prefs, +${summary.filesImported} files',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to restore backup: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isRestoringBackup = false);
+    }
   }
 
   Future<void> _deleteAllMyData() async {

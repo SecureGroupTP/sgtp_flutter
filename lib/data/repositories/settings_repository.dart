@@ -78,6 +78,7 @@ class SettingsRepository {
       Directory('${docsDir.path}/sgtp'),
       Directory('${docsDir.path}/sgtp_accounts'),
       Directory('${docsDir.path}/sgtp_chats'),
+      Directory('${docsDir.path}/sgtp_media_cache'),
     ];
     for (final dir in folders) {
       if (await dir.exists()) {
@@ -180,7 +181,9 @@ class SettingsRepository {
         if (trimmed.isEmpty || out.contains(trimmed)) continue;
         out.add(trimmed);
       }
-      return out;
+      // If the key exists but ended up empty (for example after partial
+      // restore/merge), bootstrap from nodes/scoped data below.
+      if (out.isNotEmpty) return out;
     }
 
     // One-time legacy bootstrap.
@@ -200,6 +203,26 @@ class SettingsRepository {
         out.add(legacyId);
       }
     }
+
+    // If there are still no accounts, recover them from account-scoped keys.
+    if (out.isEmpty) {
+      final prefixes = <String>[
+        '${_privKeyB64Key}_',
+        '${_whitelistJsonKey}_',
+        '${_userAvatarB64Key}_',
+        '${_userNicknameKey}_',
+        '${_userUsernameKey}_',
+      ];
+      for (final key in p.getKeys()) {
+        for (final prefix in prefixes) {
+          if (!key.startsWith(prefix)) continue;
+          final accountId = key.substring(prefix.length).trim();
+          if (accountId.isEmpty || out.contains(accountId)) continue;
+          out.add(accountId);
+        }
+      }
+    }
+
     await p.setStringList(_accountIdsKey, out);
     return out;
   }

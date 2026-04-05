@@ -12,6 +12,7 @@ import '../../core/openssh_parser.dart';
 import '../../core/sgtp_server_options.dart';
 import '../../core/sgtp_transport.dart';
 import '../../core/uuid_v7.dart';
+import '../../data/repositories/app_backup_repository.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/transport/server_discovery.dart';
 import '../../domain/entities/node.dart';
@@ -25,6 +26,7 @@ class OnboardingPage extends StatefulWidget {
 
 class _OnboardingPageState extends State<OnboardingPage> {
   final _settings = SettingsRepository();
+  final _backups = AppBackupRepository();
   final _serverCtrl = TextEditingController();
   final _nicknameCtrl = TextEditingController(text: 'Account');
   final _usernameCtrl = TextEditingController();
@@ -33,6 +35,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   int _step = 0;
   bool _verifying = false;
   bool _saving = false;
+  bool _restoring = false;
   String? _error;
 
   String? _resolvedHost;
@@ -351,6 +354,39 @@ class _OnboardingPageState extends State<OnboardingPage> {
     setState(() => _avatarBytes = bytes);
   }
 
+  Future<void> _restoreFromBackup() async {
+    setState(() {
+      _restoring = true;
+      _error = null;
+    });
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: true,
+        type: FileType.custom,
+        allowedExtensions: const ['sgtpbackup', 'json'],
+      );
+      if (picked == null || picked.files.isEmpty) return;
+      final bytes = picked.files.first.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        setState(() => _error = 'Selected backup file is empty');
+        return;
+      }
+
+      await _backups.restoreFromBytes(bytes, merge: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Backup restored')),
+      );
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Failed to restore backup: $e');
+    } finally {
+      if (mounted) setState(() => _restoring = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -385,7 +421,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
               ],
               const SizedBox(height: 12),
               FilledButton(
-                onPressed: _verifying || _saving
+                onPressed: _verifying || _saving || _restoring
                     ? null
                     : (_step == 0 ? _verifyServer : _finish),
                 child: _verifying || _saving
@@ -396,6 +432,22 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       )
                     : Text(_step == 0 ? 'Continue' : 'Start'),
               ),
+              if (_step == 0) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _verifying || _saving || _restoring
+                      ? null
+                      : _restoreFromBackup,
+                  icon: _restoring
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.restore),
+                  label: const Text('Restore from backup'),
+                ),
+              ],
               if (_step == 1) ...[
                 const SizedBox(height: 8),
                 TextButton(
