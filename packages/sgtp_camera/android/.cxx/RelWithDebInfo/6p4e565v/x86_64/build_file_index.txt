@@ -1,0 +1,1 @@
+/root/sgtp/flutter/packages/sgtp_camera/src/CMakeLists.txt

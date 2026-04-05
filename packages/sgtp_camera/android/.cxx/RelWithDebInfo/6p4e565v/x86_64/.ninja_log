@@ -1,0 +1,3 @@
+# ninja log v5
+0	10	1775406526502327296	CMakeFiles/sgtp_camera.dir/sgtp_camera_stub.c.o	c92c563ec5d6baaf
+10	50	1775406526542329609	/root/sgtp/flutter/build/sgtp_camera/intermediates/cxx/RelWithDebInfo/6p4e565v/obj/x86_64/libsgtp_camera.so	a0082e5efdcdec8e

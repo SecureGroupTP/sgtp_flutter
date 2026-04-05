@@ -1,0 +1,20 @@
+                        -H/root/sgtp/flutter/packages/sgtp_camera/src
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=21
+-DANDROID_PLATFORM=android-21
+-DANDROID_ABI=x86_64
+-DCMAKE_ANDROID_ARCH_ABI=x86_64
+-DANDROID_NDK=/root/android-sdk/ndk/25.1.8937393
+-DCMAKE_ANDROID_NDK=/root/android-sdk/ndk/25.1.8937393
+-DCMAKE_TOOLCHAIN_FILE=/root/android-sdk/ndk/25.1.8937393/build/cmake/android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=/root/android-sdk/cmake/3.22.1/bin/ninja
+-DCMAKE_CXX_FLAGS=-std=c++17
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/root/sgtp/flutter/build/sgtp_camera/intermediates/cxx/RelWithDebInfo/6p4e565v/obj/x86_64
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/root/sgtp/flutter/build/sgtp_camera/intermediates/cxx/RelWithDebInfo/6p4e565v/obj/x86_64
+-DCMAKE_BUILD_TYPE=RelWithDebInfo
+-B/root/sgtp/flutter/packages/sgtp_camera/android/.cxx/RelWithDebInfo/6p4e565v/x86_64
+-GNinja
+-DANDROID_STL=c++_shared
+                        Build command args: []
+                        Version: 2

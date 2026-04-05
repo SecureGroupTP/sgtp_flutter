@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "/root/sgtp/flutter/packages/sgtp_camera/src/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/root/android-sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/root/sgtp/flutter/packages/sgtp_camera/android/.cxx/RelWithDebInfo/6p4e565v/armeabi-v7a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/root/android-sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/root/sgtp/flutter/packages/sgtp_camera/android/.cxx/RelWithDebInfo/6p4e565v/armeabi-v7a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "sgtp_camera::@6890427a1f51a3e7e1df": {
+      "artifactName": "sgtp_camera",
+      "abi": "armeabi-v7a",
+      "output": "/root/sgtp/flutter/build/sgtp_camera/intermediates/cxx/RelWithDebInfo/6p4e565v/obj/armeabi-v7a/libsgtp_camera.so",
+      "runtimeFiles": []
+    }
+  }
+}

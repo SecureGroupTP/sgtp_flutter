@@ -21,6 +21,7 @@ rootProject.allprojects {
 apply plugin: 'com.android.library'
 
 android {
+    namespace 'dev.sgtp.sgtp_camera'
     compileSdkVersion 33
     ndkVersion "25.1.8937393"
 
