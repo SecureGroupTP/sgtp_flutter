@@ -1764,12 +1764,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final activeSection = _activeSection;
+    final subHeader = switch (activeSection) {
+      _SettingsSection.chats => (
+          backColor: AppColors.textPrimary,
+          title: 'Chats & Media',
+          titleSize: 18.0
+        ),
+      _SettingsSection.help => (
+          backColor: const Color(0xFF0A84FF),
+          title: 'Information',
+          titleSize: 18.0
+        ),
+      _SettingsSection.key => (
+          backColor: AppColors.textSecondary,
+          title: 'Key Settings',
+          titleSize: 20.0
+        ),
+      _SettingsSection.system => (
+          backColor: AppColors.textSecondary,
+          title: 'Logs & Debug',
+          titleSize: 20.0
+        ),
+      _SettingsSection.data => (
+          backColor: AppColors.textSecondary,
+          title: 'Media Caching',
+          titleSize: 20.0
+        ),
+      null => null,
+    };
     return Scaffold(
       backgroundColor: AppColors.bgMain,
       appBar: activeSection == null
           ? const _SettingsAppBar()
           : _InlineSubSettingsAppBar(
-              title: _sectionTitle(activeSection),
+              title: subHeader!.title,
+              backColor: subHeader.backColor,
+              titleSize: subHeader.titleSize,
               onBack: () => setState(() => _activeSection = null),
             ),
       body: ListView(
@@ -1817,40 +1847,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Column(
             children: [
               _SettingsNavTile(
-                icon: Icons.vpn_key_outlined,
                 iconBgColor: const Color(0xFF004a99),
+                iconLabel: 'K',
                 title: 'Key Settings',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.key),
               ),
-              const Divider(height: 1, indent: 70, color: AppColors.border),
+              const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
-                icon: Icons.chat_bubble_outline,
                 iconBgColor: const Color(0xFF1a7431),
+                iconLabel: 'C',
                 title: 'Chats & Media',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.chats),
               ),
-              const Divider(height: 1, indent: 70, color: AppColors.border),
+              const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
-                icon: Icons.storage_outlined,
                 iconBgColor: const Color(0xFF995a00),
+                iconLabel: 'D',
                 title: 'Media Caching',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.data),
               ),
-              const Divider(height: 1, indent: 70, color: AppColors.border),
+              const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
-                icon: Icons.terminal_outlined,
                 iconBgColor: const Color(0xFF6a308a),
+                iconLabel: 'L',
                 title: 'Logs & Debug',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.system),
               ),
-              const Divider(height: 1, indent: 70, color: AppColors.border),
+              const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
-                icon: Icons.info_outline,
                 iconBgColor: const Color(0xFF4a4a4f),
+                iconLabel: 'I',
                 title: 'App Information',
                 onTap: () =>
                     setState(() => _activeSection = _SettingsSection.help),
@@ -1862,14 +1892,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  String _sectionTitle(_SettingsSection section) => switch (section) {
-        _SettingsSection.key => 'Key Settings',
-        _SettingsSection.chats => 'Chats & Media',
-        _SettingsSection.system => 'Logs & Debug',
-        _SettingsSection.data => 'Media Caching',
-        _SettingsSection.help => 'App Information',
-      };
-
   List<Widget> _sectionChildren(_SettingsSection section) => switch (section) {
         _SettingsSection.key => [
             _SettingsGroup(
@@ -1878,8 +1900,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         _SettingsSection.chats => [
-            _SettingsGroup(title: 'Interaction', child: _buildInteractionCard()),
-            _SettingsGroup(title: 'Media', child: _buildMediaCard()),
+            _RoundedSettingsSection(
+              title: 'Interaction',
+              child: _buildInteractionCard(),
+            ),
+            _RoundedSettingsSection(
+              title: 'Media & Devices',
+              child: _buildMediaCard(),
+            ),
           ],
         _SettingsSection.system => [
             _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
@@ -1888,8 +1916,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SettingsGroup(title: 'Data', child: _buildDataCard()),
           ],
         _SettingsSection.help => [
-            _SettingsGroup(title: 'About', child: _buildAboutCard()),
-            _buildGettingStarted(),
+            _buildInfoHero(),
+            _RoundedSettingsSection(
+              title: 'About App',
+              child: _buildAboutCard(),
+            ),
+            _RoundedSettingsSection(
+              title: 'Quick Start Guide',
+              child: _buildQuickStartCard(),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 20),
+              child: Center(
+                child: Text(
+                  'Secure Gossip Transfer Protocol',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ),
           ],
       };
 
@@ -3031,7 +3078,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _SwitchRow(
-          label: 'Compress my files',
+          label: 'Compress files',
+          subtitle: 'Reduce outgoing file size',
           value: _compressFiles,
           onChanged: (v) async {
             final updated = MediaTransferSettings(
@@ -3044,55 +3092,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             setState(() => _compressFiles = v);
           },
         ),
-        if (_compressFiles) ...[
-          const SizedBox(height: 8),
-          const Text(
-            'Compress selected file types before upload.',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _ChoiceChip(
-                label: 'Photos',
-                selected: _compressPhotos,
-                onTap: () async {
-                  final next = !_compressPhotos;
-                  final updated = MediaTransferSettings(
-                    compressFiles: _compressFiles,
-                    compressPhotos: next,
-                    compressVideos: _compressVideos,
-                    mediaChunkSizeBytes: _mediaChunkSizeBytes,
-                  );
-                  await _settings.saveMediaTransferSettings(updated);
-                  setState(() => _compressPhotos = next);
-                },
-              ),
-              const SizedBox(width: 8),
-              _ChoiceChip(
-                label: 'Videos',
-                selected: _compressVideos,
-                onTap: () async {
-                  final next = !_compressVideos;
-                  final updated = MediaTransferSettings(
-                    compressFiles: _compressFiles,
-                    compressPhotos: _compressPhotos,
-                    compressVideos: next,
-                    mediaChunkSizeBytes: _mediaChunkSizeBytes,
-                  );
-                  await _settings.saveMediaTransferSettings(updated);
-                  setState(() => _compressVideos = next);
-                },
-              ),
-            ],
-          ),
-        ],
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         const Text(
           'Outgoing media chunk size',
           style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -3116,14 +3121,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             );
           }).toList(),
         ),
-        const SizedBox(height: 18),
-        const Divider(color: AppColors.border),
-        const SizedBox(height: 12),
-        const Text(
-          'Voice & Video Notes',
-          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        const SizedBox(height: 16),
+        const Padding(
+          padding: EdgeInsets.only(top: 2, bottom: 8),
+          child: Text(
+            'VOICE & VIDEO',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
         ),
-        const SizedBox(height: 10),
+        const Text(
+          'Microphone',
+          style: TextStyle(fontSize: 15, color: AppColors.textPrimary),
+        ),
+        const SizedBox(height: 8),
         if (_captureDevicesLoading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
@@ -3143,17 +3157,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           )
         else ...[
-          const Text(
-            'Microphone',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 6),
           if (_microphones.isEmpty)
-            const Text(
-              'No microphones found',
-              style: TextStyle(color: AppColors.textSecondary),
-            )
-          else
+            const _StatusBox(text: 'No microphones found')
+          else ...[
             _buildCaptureDropdown(
               value: _selectedMicrophoneId,
               items: _microphones
@@ -3169,38 +3175,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 unawaited(_selectMicrophone(id));
               },
             ),
-          const SizedBox(height: 8),
-          SwitchListTile.adaptive(
+            const SizedBox(height: 12),
+          ],
+          _SwitchRow(
+            label: 'Microphone check',
             value: _micCheckEnabled,
             onChanged:
                 _selectedMicrophoneId != null && _microphones.isNotEmpty
                     ? (v) => unawaited(_setMicrophoneCheckEnabled(v))
                     : null,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            activeThumbColor: AppColors.accent,
-            activeTrackColor: AppColors.accent.withAlpha(110),
-            title: const Text(
-              'Microphone check',
-              style: TextStyle(color: AppColors.textPrimary),
-            ),
-            subtitle: const Text(
-              'Toggle on to hear your own voice',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 14),
           const Text(
             'Camera',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 15, color: AppColors.textPrimary),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           if (_cameras.isEmpty)
-            const Text(
-              'No cameras found',
-              style: TextStyle(color: AppColors.textSecondary),
-            )
-          else
+            const _StatusBox(text: 'No cameras found')
+          else ...[
             _buildCaptureDropdown(
               value: _selectedCameraName,
               items: _cameras
@@ -3216,24 +3209,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 unawaited(_selectCamera(name));
               },
             ),
-          const SizedBox(height: 8),
-          SwitchListTile.adaptive(
+            const SizedBox(height: 12),
+          ],
+          _SwitchRow(
+            label: 'Camera check preview',
             value: _cameraCheckEnabled,
             onChanged: _selectedCameraName != null && _cameras.isNotEmpty
                 ? (v) => unawaited(_setCameraCheckEnabled(v))
                 : null,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            activeThumbColor: AppColors.accent,
-            activeTrackColor: AppColors.accent.withAlpha(110),
-            title: const Text(
-              'Camera check',
-              style: TextStyle(color: AppColors.textPrimary),
-            ),
-            subtitle: const Text(
-              'Toggle on to see live camera preview',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-            ),
           ),
           if (_cameraCheckEnabled || _cameraCheckLoading || _cameraCheckError != null)
             Padding(
@@ -3253,7 +3236,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         // ── Swipe to reply (mobile) ─────────────────────────────────────
         _SwitchRow(
-          label: 'Swipe right to reply (mobile)',
+          label: 'Swipe right to reply',
           value: _swipeToReply,
           onChanged: (v) {
             setState(() => _swipeToReply = v);
@@ -3263,7 +3246,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
         // ── Long-press shows full menu ──────────────────────────────────
         _SwitchRow(
-          label: 'Long-press shows menu (react + reply)',
+          label: 'Long-press menu',
+          subtitle: 'Show reactions and reply options',
           value: _longPressMenu,
           onChanged: (v) {
             setState(() => _longPressMenu = v);
@@ -3273,21 +3257,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 12),
         // ── Desktop double-click action ─────────────────────────────────
         const Text(
-          'Desktop double-click',
+          'Desktop double-click action',
           style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
         ),
-        const SizedBox(height: 6),
-        Row(
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
             _ChoiceChip(
-              label: 'Open react picker',
+              label: 'Open reactions',
               selected: _doubleTapDesktop == 'react',
               onTap: () {
                 setState(() => _doubleTapDesktop = 'react');
                 InteractionPrefs.setDoubleTapDesktop('react');
               },
             ),
-            const SizedBox(width: 8),
             _ChoiceChip(
               label: 'Set reply',
               selected: _doubleTapDesktop == 'reply',
@@ -3300,11 +3285,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 16),
         // ── Ping interval ───────────────────────────────────────────────
-        const Text(
-          'Ping interval',
-          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Ping interval',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -3312,11 +3304,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 data: SliderTheme.of(context).copyWith(
                   trackHeight: 4,
                   thumbShape:
-                      const RoundSliderThumbShape(enabledThumbRadius: 10),
+                      const RoundSliderThumbShape(enabledThumbRadius: 12),
                   overlayShape:
                       const RoundSliderOverlayShape(overlayRadius: 18),
-                  activeTrackColor: AppColors.border,
-                  inactiveTrackColor: AppColors.border,
+                  activeTrackColor: const Color(0xFF2C2C2E),
+                  inactiveTrackColor: const Color(0xFF2C2C2E),
                   thumbColor: Colors.white,
                   overlayColor: Colors.white.withAlpha(30),
                 ),
@@ -3336,102 +3328,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 40,
-              child: Text(
-                '${_pingIntervalSeconds} s',
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                ),
-                textAlign: TextAlign.right,
+            Text(
+              '${_pingIntervalSeconds}s',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ],
         ),
       ],
-    );
-  }
-
-  // ── Getting Started (collapsible) ─────────────────────────────────────────
-
-  Widget _buildGettingStarted() {
-    const steps = [
-      ('Generate key:', 'Create or load an Ed25519 private key.'),
-      ('Add peers:', 'Whitelist public keys of your friends.'),
-      ('Server:', 'Enter a valid SGTP relay address.'),
-      ('Rooms:', 'Create a new room or join by UUID.'),
-      ('Chat:', 'Send messages (End-to-End Encrypted).'),
-    ];
-    return Container(
-      margin: const EdgeInsets.only(bottom: 24),
-      decoration: const BoxDecoration(
-        color: AppColors.bgSurface,
-        border: Border(
-          top: BorderSide(color: AppColors.border),
-          bottom: BorderSide(color: AppColors.border),
-        ),
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: const EdgeInsets.symmetric(horizontal: 20),
-          childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          title: const Text(
-            'Getting Started',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          iconColor: AppColors.textSecondary,
-          collapsedIconColor: AppColors.textSecondary,
-          children: [
-            const Text(
-              'Follow these steps to start chatting securely:',
-              style: TextStyle(
-                  fontSize: 14, color: AppColors.textSecondary, height: 1.6),
-            ),
-            const SizedBox(height: 8),
-            ...List.generate(steps.length, (i) {
-              final step = steps[i];
-              return Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${i + 1}. ',
-                        style: const TextStyle(
-                            fontSize: 14, color: AppColors.textSecondary)),
-                    Expanded(
-                      child: Text.rich(TextSpan(children: [
-                        TextSpan(
-                          text: '${step.$1} ',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        TextSpan(
-                          text: step.$2,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: AppColors.textSecondary,
-                            height: 1.6,
-                          ),
-                        ),
-                      ])),
-                    ),
-                  ],
-                ),
-              );
-            }),
-          ],
-        ),
-      ),
     );
   }
 
@@ -3488,24 +3396,130 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _AboutRow(label: 'App Version', value: '1.0.0-beta'),
-        const SizedBox(height: 4),
-        _AboutRow(label: 'Protocol', value: 'SGTP v1'),
-        const SizedBox(height: 12),
+        const _InfoKvRow(label: 'Version', value: '1.0.0-beta'),
+        const Divider(height: 1, color: Color.fromRGBO(255, 255, 255, 0.1)),
+        const _InfoKvRow(label: 'Protocol', value: 'SGTP v1'),
+        const Divider(height: 1, color: Color.fromRGBO(255, 255, 255, 0.1)),
         GestureDetector(
           onTap: _launchGitHub,
-          child: const Row(
+          behavior: HitTestBehavior.opaque,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Row(
             children: [
-              Icon(Icons.open_in_new, size: 18, color: Color(0xFF0A84FF)),
-              SizedBox(width: 4),
+              Icon(Icons.code, size: 18, color: Color(0xFF0A84FF)),
+              SizedBox(width: 8),
               Text(
                 'GitHub Repository',
-                style: TextStyle(fontSize: 14, color: Color(0xFF0A84FF)),
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF0A84FF),
+                ),
               ),
             ],
           ),
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildInfoHero() {
+    return const Padding(
+      padding: EdgeInsets.fromLTRB(16, 8, 16, 18),
+      child: Column(
+        children: [
+          SizedBox(height: 4),
+          _InfoAppIcon(),
+          SizedBox(height: 12),
+          Text(
+            'SGTP Messenger',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickStartCard() {
+    const steps = [
+      (
+        'Generate Key',
+        'Create a new secure Ed25519 private key to identify yourself.'
+      ),
+      (
+        'Add Peers',
+        'Exchange public keys with your friends and add them to whitelist.'
+      ),
+      (
+        'Relay Server',
+        'Connect to a valid SGTP relay address to start broadcasting.'
+      ),
+      (
+        'Chat Securely',
+        'All messages are end-to-end encrypted by default.'
+      ),
+    ];
+    return Column(
+      children: List.generate(steps.length, (i) {
+        final step = steps[i];
+        return Padding(
+          padding: EdgeInsets.only(bottom: i == steps.length - 1 ? 0 : 16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2C2C2E),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${i + 1}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: RichText(
+                  text: TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '${step.$1}\n',
+                        style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      ),
+                      TextSpan(
+                        text: step.$2,
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 14,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
     );
   }
 
@@ -3691,9 +3705,13 @@ class _InlineSubSettingsAppBar extends StatelessWidget
     implements PreferredSizeWidget {
   final String title;
   final VoidCallback onBack;
+  final Color backColor;
+  final double titleSize;
   const _InlineSubSettingsAppBar({
     required this.title,
     required this.onBack,
+    this.backColor = AppColors.textSecondary,
+    this.titleSize = 20,
   });
 
   @override
@@ -3716,13 +3734,13 @@ class _InlineSubSettingsAppBar extends StatelessWidget
               children: [
                 IconButton(
                   onPressed: onBack,
-                  icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+                  icon: Icon(Icons.arrow_back, color: backColor),
                 ),
                 Expanded(
                   child: Text(
                     title,
-                    style: const TextStyle(
-                      fontSize: 20,
+                    style: TextStyle(
+                      fontSize: titleSize,
                       fontWeight: FontWeight.w600,
                       letterSpacing: -0.2,
                       color: AppColors.textPrimary,
@@ -3779,15 +3797,76 @@ class _SettingsGroup extends StatelessWidget {
   }
 }
 
+class _RoundedSettingsSection extends StatelessWidget {
+  final String title;
+  final Widget child;
+  const _RoundedSettingsSection({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+            child: Text(
+              title.toUpperCase(),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.5,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1C1E),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: child,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusBox extends StatelessWidget {
+  final String text;
+  const _StatusBox({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color.fromRGBO(255, 255, 255, 0.05),
+        border: Border.all(color: const Color.fromRGBO(255, 255, 255, 0.1)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
 class _SettingsNavTile extends StatelessWidget {
-  final IconData icon;
   final Color iconBgColor;
+  final String iconLabel;
   final String title;
   final VoidCallback onTap;
 
   const _SettingsNavTile({
-    required this.icon,
     required this.iconBgColor,
+    required this.iconLabel,
     required this.title,
     required this.onTap,
   });
@@ -3809,7 +3888,16 @@ class _SettingsNavTile extends StatelessWidget {
                 color: iconBgColor,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(icon, size: 20, color: Colors.white.withValues(alpha: 0.9)),
+              child: Center(
+                child: Text(
+                  iconLabel,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
+                ),
+              ),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -3822,9 +3910,12 @@ class _SettingsNavTile extends StatelessWidget {
                 ),
               ),
             ),
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: AppColors.textSecondary,
+            const Text(
+              '>',
+              style: TextStyle(
+                fontSize: 18,
+                color: AppColors.textSecondary,
+              ),
             ),
           ],
         ),
@@ -4477,22 +4568,71 @@ class _AddAccountOption extends StatelessWidget {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _AboutRow extends StatelessWidget {
+class _InfoKvRow extends StatelessWidget {
   final String label;
   final String value;
-  const _AboutRow({required this.label, required this.value});
+  const _InfoKvRow({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label,
-            style:
-                const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-        Text(value,
-            style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 15,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 14,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoAppIcon extends StatelessWidget {
+  const _InfoAppIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 80,
+      height: 80,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1C1C1E), Colors.black],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color.fromRGBO(255, 255, 255, 0.1)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color.fromRGBO(0, 0, 0, 0.3),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Text(
+        'S',
+        style: TextStyle(
+          fontSize: 40,
+          color: AppColors.textPrimary,
+        ),
+      ),
     );
   }
 }
@@ -4517,25 +4657,52 @@ class _LogsCountNotifier extends ChangeNotifier {
 
 class _SwitchRow extends StatelessWidget {
   final String label;
+  final String? subtitle;
   final bool value;
-  final ValueChanged<bool> onChanged;
+  final ValueChanged<bool>? onChanged;
   const _SwitchRow(
-      {required this.label, required this.value, required this.onChanged});
+      {required this.label,
+      this.subtitle,
+      required this.value,
+      required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     return Row(
+      crossAxisAlignment:
+          subtitle == null ? CrossAxisAlignment.center : CrossAxisAlignment.start,
       children: [
         Expanded(
-          child: Text(label,
-              style:
-                  const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style:
+                    const TextStyle(fontSize: 15, color: AppColors.textPrimary),
+              ),
+              if (subtitle != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    subtitle!,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
         Switch(
           value: value,
           onChanged: onChanged,
-          activeColor: AppColors.accentBlue,
-          trackColor: WidgetStatePropertyAll(AppColors.border),
+          activeTrackColor: Colors.white,
+          activeThumbColor: Colors.black,
+          inactiveTrackColor: const Color(0xFF39393D),
+          inactiveThumbColor: Colors.white,
+          trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
         ),
       ],
     );
@@ -4554,21 +4721,17 @@ class _ChoiceChip extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: selected
-              ? AppColors.accentBlue.withAlpha(40)
-              : AppColors.bgSurfaceActive,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: selected ? AppColors.accentBlue : AppColors.border,
-          ),
+          color: selected ? Colors.white : const Color(0xFF2C2C2E),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: selected ? Colors.white : Colors.transparent),
         ),
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 13,
-            color: selected ? AppColors.accentBlue : AppColors.textSecondary,
+            fontSize: 14,
+            color: selected ? Colors.black : AppColors.textPrimary,
             fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
