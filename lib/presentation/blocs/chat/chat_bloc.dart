@@ -327,6 +327,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     return out;
   }
 
+  ({String name, Uint8List? avatar})? _directChatDisplayFor(
+      Map<String, String> peerPublicKeys) {
+    if (peerPublicKeys.length != 1) return null;
+    final pubHex = peerPublicKeys.values.first;
+    final name = state.nicknames[pubHex];
+    if (name == null || name.trim().isEmpty) return null;
+    final avatar = _contactAvatarsByPub[pubHex];
+    return (name: name, avatar: avatar);
+  }
+
   void _onSetReply(ChatSetReply event, Emitter<ChatState> emit) {
     emit(state.copyWith(replyToMessage: event.message));
   }
@@ -621,6 +631,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (nick != null) updatedHistory[peerUUID] = nick;
         final updatedPubKeys = Map<String, String>.from(state.peerPublicKeys);
         updatedPubKeys[peerUUID] = ed25519PubHex;
+        final directDisplay = _directChatDisplayFor(updatedPubKeys);
+        final nextChatName = directDisplay?.name ?? state.chatName;
+        final nextChatAvatar = directDisplay?.avatar ?? state.chatAvatarBytes;
         if (!state.peerUUIDs.contains(peerUUID)) {
           emit(state.copyWith(
             messages: updatedMessages,
@@ -629,6 +642,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             peerNicknamesHistory: updatedHistory,
             peerPublicKeys: updatedPubKeys,
             peerAvatars: _peerAvatarsFor(updatedPubKeys),
+            chatName: nextChatName,
+            chatAvatarBytes: nextChatAvatar,
           ));
         } else {
           emit(state.copyWith(
@@ -637,8 +652,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             peerNicknamesHistory: updatedHistory,
             peerPublicKeys: updatedPubKeys,
             peerAvatars: _peerAvatarsFor(updatedPubKeys),
+            chatName: nextChatName,
+            chatAvatarBytes: nextChatAvatar,
           ));
         }
+        final roomUUID = state.roomUUID.isNotEmpty
+            ? state.roomUUID
+            : (_client?.roomUUIDHex ?? '');
+        _saveMetadata(roomUUID, nextChatName, nextChatAvatar);
 
       case SgtpPeerLeft(:final peerUUID):
         final nick = state.peerNicknames[peerUUID] ??
@@ -683,12 +704,30 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           :final avatarBytes,
           :final senderUUID
         ):
-        AppLogger.i('[ChatBloc] Got metadata from $senderUUID: "$chatName"');
-        emit(state.copyWith(chatName: chatName, chatAvatarBytes: avatarBytes));
+        final mergedPubKeys = Map<String, String>.from(state.peerPublicKeys)
+          ..addAll(_client?.peerPublicKeys ?? const {});
+        final senderPub = mergedPubKeys[senderUUID];
+        final localNick = senderPub == null ? null : state.nicknames[senderPub];
+        final isDirect = mergedPubKeys.length == 1 &&
+            senderPub != null &&
+            localNick != null &&
+            localNick.trim().isNotEmpty;
+        final effectiveName = isDirect ? localNick : chatName;
+        final effectiveAvatar = isDirect
+            ? (_contactAvatarsByPub[senderPub] ?? avatarBytes)
+            : avatarBytes;
+        AppLogger.i(
+            '[ChatBloc] Got metadata from $senderUUID: "$chatName" -> "$effectiveName"');
+        emit(state.copyWith(
+          chatName: effectiveName,
+          chatAvatarBytes: effectiveAvatar,
+          peerPublicKeys: mergedPubKeys,
+          peerAvatars: _peerAvatarsFor(mergedPubKeys),
+        ));
         final roomUUID = state.roomUUID.isNotEmpty
             ? state.roomUUID
             : (_client?.roomUUIDHex ?? '');
-        _saveMetadata(roomUUID, chatName, avatarBytes);
+        _saveMetadata(roomUUID, effectiveName, effectiveAvatar);
 
       case SgtpMediaProgress(:final echoId, :final progress):
         // Update sendProgress on the in-flight outgoing message.

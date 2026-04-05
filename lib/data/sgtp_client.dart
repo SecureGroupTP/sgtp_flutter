@@ -508,8 +508,7 @@ class SgtpClient {
     // hundreds of history records, so loading only the default 100 records may
     // return an incomplete tail of chunks and the video won't reconstruct.
     // For the initial open, pull a larger window to reliably include full media.
-    final effectiveLimit =
-        offsetFromEnd == 0 ? max(limit, 1200) : limit;
+    final effectiveLimit = offsetFromEnd == 0 ? max(limit, 1200) : limit;
     final records = await repo.readBatchFromEnd(
       offsetFromEnd: offsetFromEnd,
       limit: effectiveLimit,
@@ -1651,8 +1650,33 @@ class SgtpClient {
         _requestHistory();
       }
     } catch (e) {
-      AppLogger.e('Failed to decrypt CHAT_KEY: $e', tag: 'SGTP');
-      _eventController.add(SgtpError(error: 'Failed to decrypt CHAT_KEY: $e'));
+      // Rapid focus/background switches can race old/new handshakes.
+      // In that case stale CHAT_KEY frames may fail MAC check transiently.
+      // Recover silently by re-running handshake instead of spamming UI errors.
+      AppLogger.w('CHAT_KEY decrypt failed (will recover): $e', tag: 'SGTP');
+      await _recoverFromChatKeyDecryptFailure(f.senderUUID);
+    }
+  }
+
+  Future<void> _recoverFromChatKeyDecryptFailure(Uint8List senderUUID) async {
+    try {
+      final h = uuidBytesToHex(senderUUID);
+      _chatKey = null;
+      _chatRequestSent = false;
+      _pendingHandshakes.add(h);
+      _pendingHandshakeTimers[h]?.cancel();
+      _pendingHandshakeTimers[h] = Timer(const Duration(seconds: 5), () async {
+        if (_pendingHandshakes.remove(h)) {
+          _pendingHandshakeTimers.remove(h)?.cancel();
+          _pendingHandshakeTimers.remove(h);
+          await _checkChatReq();
+        }
+      });
+      await _sendPing(senderUUID);
+      // Trigger a fresh key exchange after shared-secret re-derivation.
+      await _checkChatReq();
+    } catch (e) {
+      AppLogger.w('CHAT_KEY recovery failed: $e', tag: 'SGTP');
     }
   }
 
@@ -1729,8 +1753,7 @@ class SgtpClient {
     _maybeApplyChatAvatarFromPayload(p, senderUUIDHex, history);
     final senderPub = p['pub'] as String?;
     final mine = _isOwnMessage(senderUUIDHex, senderPub);
-    if (senderPub != null)
-      _peerPublicKeys[senderUUIDHex] = senderPub;
+    if (senderPub != null) _peerPublicKeys[senderUUIDHex] = senderPub;
 
     switch (p['type'] as String?) {
       case 'text':

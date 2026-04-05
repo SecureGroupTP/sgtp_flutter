@@ -24,14 +24,63 @@ String _msgName(int t) => switch (t) {
       0x04 => 'GET_META',
       0x05 => 'SUBSCRIBE',
       0x06 => 'UNSUBSCRIBE',
+      0x07 => 'FRIEND_REQUEST',
+      0x08 => 'FRIEND_RESPONSE',
+      0x09 => 'FRIEND_SYNC',
+      0x0a => 'FRIEND_DELETE',
       0x81 => 'OK',
       0x82 => 'ERROR',
       0x83 => 'SEARCH_RESULTS',
       0x84 => 'PROFILE',
       0x85 => 'META',
       0x86 => 'NOTIFY',
+      0x87 => 'FRIEND_STATE',
+      0x88 => 'FRIEND_NOTIFY',
       _ => '0x${t.toRadixString(16).padLeft(2, '0')}',
     };
+
+class UserDirFriendStatus {
+  static const int pendingOutgoing = 1;
+  static const int pendingIncoming = 2;
+  static const int friend = 3;
+  static const int rejected = 4;
+}
+
+class UserDirFriendState {
+  final Uint8List peerPubkey;
+  final int status;
+  final Uint8List? roomUUID;
+
+  const UserDirFriendState({
+    required this.peerPubkey,
+    required this.status,
+    required this.roomUUID,
+  });
+
+  String get peerPubkeyHex =>
+      peerPubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  String? get roomUUIDHex => roomUUID == null
+      ? null
+      : roomUUID!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+class UserDirFriendNotify {
+  final int eventType; // 1=request created, 2=request answered, 3=dm ready
+  final int status;
+  final Uint8List actorPubkey;
+  final Uint8List? roomUUID;
+
+  const UserDirFriendNotify({
+    required this.eventType,
+    required this.status,
+    required this.actorPubkey,
+    required this.roomUUID,
+  });
+
+  String get actorPubkeyHex =>
+      actorPubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
 
 /// Lightweight profile data returned by GET_META / NOTIFY.
 class UserDirMeta {
@@ -88,6 +137,7 @@ class UserDirClient {
   final _buf = <int>[];
   final _pending = <Completer<Uint8List?>>[];
   StreamController<UserDirMeta>? _notifyCtrl;
+  StreamController<UserDirFriendNotify>? _friendNotifyCtrl;
   StreamSubscription<Uint8List>? _sub;
   var _closed = false;
 
@@ -132,6 +182,13 @@ class UserDirClient {
     _notifyCtrl ??= StreamController<UserDirMeta>.broadcast();
     return _notifyCtrl!.stream;
   }
+
+  Stream<UserDirFriendNotify> get friendNotifyStream {
+    _friendNotifyCtrl ??= StreamController<UserDirFriendNotify>.broadcast();
+    return _friendNotifyCtrl!.stream;
+  }
+
+  bool get isConnected => !_closed && _transport.isConnected;
 
   /// Connect via the underlying transport and send the 32-byte zero magic
   /// prefix that signals userdir intent to the relay server.
@@ -199,6 +256,16 @@ class UserDirClient {
       return;
     }
 
+    if (msgType == 0x88) {
+      final evt = _parseFriendNotify(payload);
+      AppLogger.d(
+        '← INBOUND   ${_msgName(msgType).padRight(14)} ${payload.length}B',
+        tag: _tag,
+      );
+      if (evt != null) _friendNotifyCtrl?.add(evt);
+      return;
+    }
+
     AppLogger.d(
       '← INBOUND   ${_msgName(msgType).padRight(14)} ${payload.length}B',
       tag: _tag,
@@ -210,9 +277,8 @@ class UserDirClient {
         if (payload.length >= 4) {
           final code = (payload[0] << 8) | payload[1];
           final msgLen = (payload[2] << 8) | payload[3];
-          final msg = msgLen > 0
-              ? utf8.decode(payload.sublist(4, 4 + msgLen))
-              : '';
+          final msg =
+              msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
           AppLogger.w('Server error code=0x${code.toRadixString(16)} "$msg"',
               tag: _tag);
         }
@@ -232,6 +298,7 @@ class UserDirClient {
     }
     _pending.clear();
     _notifyCtrl?.close();
+    _friendNotifyCtrl?.close();
   }
 
   Future<Uint8List?> _send(int msgType, Uint8List payload) async {
@@ -299,10 +366,13 @@ class UserDirClient {
 
     // Build payload without signature (65 bytes placeholder at end)
     final payloadSize = 1 + // version
-        2 + usernameBytes.length +
-        2 + fullnameBytes.length +
+        2 +
+        usernameBytes.length +
+        2 +
+        fullnameBytes.length +
         32 + // pubkey
-        4 + avatarLen +
+        4 +
+        avatarLen +
         1 + // sig_alg
         64; // signature placeholder
     final payload = Uint8List(payloadSize);
@@ -357,8 +427,10 @@ class UserDirClient {
   /// Fetches lightweight metadata (no avatar bytes) for [pubkey].
   /// Returns null on error or if the profile is not found.
   Future<UserDirMeta?> getMeta(Uint8List pubkey) async {
-    final pk8 =
-        pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
+    final pk8 = pubkey
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .substring(0, 8);
     AppLogger.d('GET_META pubkey=$pk8…', tag: _tag);
     final payload = Uint8List(33);
     payload[0] = 1; // version
@@ -375,8 +447,10 @@ class UserDirClient {
 
   /// Fetches the full profile including avatar bytes for [pubkey].
   Future<UserDirProfile?> getProfile(Uint8List pubkey) async {
-    final pk8 =
-        pubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
+    final pk8 = pubkey
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .substring(0, 8);
     AppLogger.d('GET_PROFILE pubkey=$pk8…', tag: _tag);
     final payload = Uint8List(33);
     payload[0] = 1; // version
@@ -465,6 +539,87 @@ class UserDirClient {
     return _parseSearchResults(resp.sublist(1));
   }
 
+  Future<bool> sendFriendRequest({
+    required Uint8List myPubkey,
+    required Uint8List peerPubkey,
+    required SimpleKeyPairData identityKeyPair,
+  }) async {
+    final payload = Uint8List(1 + 32 + 32 + 1 + 64);
+    payload[0] = 1;
+    payload.setRange(1, 33, myPubkey);
+    payload.setRange(33, 65, peerPubkey);
+    payload[65] = 1; // sig_alg ed25519
+    final signed = Uint8List(1 + payload.length - 64);
+    signed[0] = 0x07;
+    signed.setRange(1, signed.length, payload.sublist(0, payload.length - 64));
+    final sig = await Ed25519().sign(signed, keyPair: identityKeyPair);
+    payload.setRange(payload.length - 64, payload.length, sig.bytes);
+
+    final resp = await _send(0x07, payload);
+    return resp != null && resp.isNotEmpty && resp[0] == 0x81;
+  }
+
+  Future<bool> sendFriendResponse({
+    required Uint8List myPubkey,
+    required Uint8List requesterPubkey,
+    required bool accept,
+    required SimpleKeyPairData identityKeyPair,
+  }) async {
+    final payload = Uint8List(1 + 32 + 32 + 1 + 1 + 64);
+    payload[0] = 1;
+    payload.setRange(1, 33, myPubkey);
+    payload.setRange(33, 65, requesterPubkey);
+    payload[65] = accept ? 1 : 2;
+    payload[66] = 1; // sig_alg ed25519
+    final signed = Uint8List(1 + payload.length - 64);
+    signed[0] = 0x08;
+    signed.setRange(1, signed.length, payload.sublist(0, payload.length - 64));
+    final sig = await Ed25519().sign(signed, keyPair: identityKeyPair);
+    payload.setRange(payload.length - 64, payload.length, sig.bytes);
+
+    final resp = await _send(0x08, payload);
+    return resp != null && resp.isNotEmpty && resp[0] == 0x81;
+  }
+
+  Future<bool> sendFriendDelete({
+    required Uint8List myPubkey,
+    required Uint8List peerPubkey,
+    required SimpleKeyPairData identityKeyPair,
+  }) async {
+    final payload = Uint8List(1 + 32 + 32 + 1 + 64);
+    payload[0] = 1;
+    payload.setRange(1, 33, myPubkey);
+    payload.setRange(33, 65, peerPubkey);
+    payload[65] = 1; // sig_alg ed25519
+    final signed = Uint8List(1 + payload.length - 64);
+    signed[0] = 0x0a;
+    signed.setRange(1, signed.length, payload.sublist(0, payload.length - 64));
+    final sig = await Ed25519().sign(signed, keyPair: identityKeyPair);
+    payload.setRange(payload.length - 64, payload.length, sig.bytes);
+
+    final resp = await _send(0x0a, payload);
+    return resp != null && resp.isNotEmpty && resp[0] == 0x81;
+  }
+
+  Future<List<UserDirFriendState>?> friendSync({
+    required Uint8List myPubkey,
+    required SimpleKeyPairData identityKeyPair,
+  }) async {
+    final payload = Uint8List(1 + 32 + 1 + 64);
+    payload[0] = 1;
+    payload.setRange(1, 33, myPubkey);
+    payload[33] = 1; // sig_alg ed25519
+    final signed = Uint8List(1 + payload.length - 64);
+    signed[0] = 0x09;
+    signed.setRange(1, signed.length, payload.sublist(0, payload.length - 64));
+    final sig = await Ed25519().sign(signed, keyPair: identityKeyPair);
+    payload.setRange(payload.length - 64, payload.length, sig.bytes);
+
+    final resp = await _send(0x09, payload);
+    if (resp == null || resp.isEmpty || resp[0] != 0x87) return null;
+    return _parseFriendSnapshot(resp.sublist(1));
+  }
+
   UserDirMeta? _parseMeta(Uint8List data) {
     try {
       var o = 0;
@@ -525,6 +680,59 @@ class UserDirClient {
         avatarBytes: avatarBytes,
         avatarSha256: sha256,
         updatedAt: updatedAt,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<UserDirFriendState> _parseFriendSnapshot(Uint8List data) {
+    try {
+      var o = 0;
+      if (data[o++] != 1) return const [];
+      final count = (data[o] << 8) | data[o + 1];
+      o += 2;
+      final out = <UserDirFriendState>[];
+      for (var i = 0; i < count; i++) {
+        final peer = Uint8List.fromList(data.sublist(o, o + 32));
+        o += 32;
+        final status = data[o++];
+        final hasRoom = data[o++] == 1;
+        Uint8List? room;
+        if (hasRoom) {
+          room = Uint8List.fromList(data.sublist(o, o + 16));
+          o += 16;
+        }
+        out.add(UserDirFriendState(
+          peerPubkey: peer,
+          status: status,
+          roomUUID: room,
+        ));
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  UserDirFriendNotify? _parseFriendNotify(Uint8List data) {
+    try {
+      var o = 0;
+      if (data[o++] != 1) return null;
+      final eventType = data[o++];
+      final actor = Uint8List.fromList(data.sublist(o, o + 32));
+      o += 32;
+      final status = data[o++];
+      final hasRoom = data[o++] == 1;
+      Uint8List? room;
+      if (hasRoom) {
+        room = Uint8List.fromList(data.sublist(o, o + 16));
+      }
+      return UserDirFriendNotify(
+        eventType: eventType,
+        status: status,
+        actorPubkey: actor,
+        roomUUID: room,
       );
     } catch (_) {
       return null;
@@ -596,8 +804,7 @@ class UserDirClient {
       if (payload.length < 4) return '';
       final code = (payload[0] << 8) | payload[1];
       final msgLen = (payload[2] << 8) | payload[3];
-      final msg =
-          msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
+      final msg = msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
       return '  code=0x${code.toRadixString(16).padLeft(4, '0')} "$msg"';
     } catch (_) {
       return '';
@@ -613,8 +820,7 @@ class UserDirClient {
       if (payload.length < 4) return (null, null);
       final code = (payload[0] << 8) | payload[1];
       final msgLen = (payload[2] << 8) | payload[3];
-      final msg =
-          msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
+      final msg = msgLen > 0 ? utf8.decode(payload.sublist(4, 4 + msgLen)) : '';
       return (code, msg);
     } catch (_) {
       return (null, null);
@@ -639,5 +845,6 @@ class UserDirClient {
     _sub?.cancel();
     _transport.close();
     _notifyCtrl?.close();
+    _friendNotifyCtrl?.close();
   }
 }

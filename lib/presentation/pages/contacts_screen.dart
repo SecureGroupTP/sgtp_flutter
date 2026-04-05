@@ -18,10 +18,14 @@ class ContactsScreen extends StatefulWidget {
   final String? serverNodeId;
   final List<WhitelistEntry> initialEntries;
   final Map<String, ContactProfile> contactProfiles;
+  final Map<String, FriendStateRecord> friendStates;
 
   /// Called whenever the whitelist changes so HomeScreen can propagate
   /// updated nicknames to RoomsBloc.
   final void Function(List<WhitelistEntry> entries) onEntriesChanged;
+  final Future<bool> Function(String peerPubkeyHex, bool accept)?
+      onFriendRespond;
+  final void Function(String roomUUIDHex)? onOpenDm;
 
   const ContactsScreen({
     super.key,
@@ -30,6 +34,9 @@ class ContactsScreen extends StatefulWidget {
     required this.initialEntries,
     required this.onEntriesChanged,
     this.contactProfiles = const {},
+    this.friendStates = const {},
+    this.onFriendRespond,
+    this.onOpenDm,
   });
 
   @override
@@ -56,18 +63,33 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   void didUpdateWidget(covariant ContactsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final entriesChanged =
+        !_sameEntries(oldWidget.initialEntries, widget.initialEntries);
     if (oldWidget.accountId != widget.accountId ||
-        oldWidget.serverNodeId != widget.serverNodeId) {
+        oldWidget.serverNodeId != widget.serverNodeId ||
+        entriesChanged) {
       _searchDebounce?.cancel();
       _searchRequestId++;
       setState(() {
         _entries = List.from(widget.initialEntries);
-        _search = '';
-        _searchCtrl.clear();
-        _serverSearchHit = null;
-        _recentlyAddedUsername = null;
+        if (oldWidget.accountId != widget.accountId ||
+            oldWidget.serverNodeId != widget.serverNodeId) {
+          _search = '';
+          _searchCtrl.clear();
+          _serverSearchHit = null;
+          _recentlyAddedUsername = null;
+        }
       });
     }
+  }
+
+  bool _sameEntries(List<WhitelistEntry> a, List<WhitelistEntry> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].hexKey.toLowerCase() != b[i].hexKey.toLowerCase()) return false;
+      if (a[i].name != b[i].name) return false;
+    }
+    return true;
   }
 
   @override
@@ -100,6 +122,19 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
     scored.sort((a, b) => a.score.compareTo(b.score));
     return scored.map((s) => s.entry).toList();
+  }
+
+  List<FriendStateRecord> get _incomingRequests {
+    final existing = _entries.map((e) => e.hexKey.toLowerCase()).toSet();
+    final out = <FriendStateRecord>[];
+    for (final fs in widget.friendStates.values) {
+      if (fs.statusEnum != FriendStatus.pendingIncoming) continue;
+      final key = fs.peerPubkeyHex.toLowerCase();
+      if (existing.contains(key)) continue;
+      out.add(fs);
+    }
+    out.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return out;
   }
 
   String? _normalizeSearchUsername(String raw) {
@@ -167,7 +202,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
         await client.connect();
         final items = await client.search(normalizedUsername, limit: 20);
         final lower = normalizedUsername.toLowerCase();
-        final exact = items.where((m) => m.username.toLowerCase() == lower).firstOrNull;
+        final exact =
+            items.where((m) => m.username.toLowerCase() == lower).firstOrNull;
         if (!mounted || reqId != _searchRequestId) return;
         if (exact == null) {
           setState(() {
@@ -175,8 +211,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
           });
           return;
         }
-        final alreadyTrusted = _entries
-            .any((e) => e.hexKey.toLowerCase() == exact.pubkeyHex.toLowerCase());
+        final alreadyTrusted = _entries.any(
+            (e) => e.hexKey.toLowerCase() == exact.pubkeyHex.toLowerCase());
         setState(() {
           _serverSearchHit = alreadyTrusted
               ? null
@@ -534,7 +570,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.border),
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   child: Row(
                     children: [
                       const Icon(
@@ -759,6 +796,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   Widget build(BuildContext context) {
     final filtered = _filtered;
+    final incoming = _incomingRequests;
 
     return Scaffold(
       backgroundColor: AppColors.bgMain,
@@ -923,6 +961,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
               ),
             ],
 
+            if (incoming.isNotEmpty) ...[
+              _SectionDivider(label: 'Friend Requests', count: incoming.length),
+              ...incoming.map((fs) => _IncomingFriendTile(
+                    peerHex: fs.peerPubkeyHex,
+                    profile:
+                        widget.contactProfiles[fs.peerPubkeyHex.toLowerCase()],
+                    onRespond: widget.onFriendRespond,
+                  )),
+            ],
+
             // ── Section Divider ──────────────────────────────────────────
             _SectionDivider(label: 'Trusted Peers', count: _entries.length),
 
@@ -935,13 +983,17 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       itemCount: filtered.length,
                       itemBuilder: (ctx, i) {
                         final e = filtered[i];
+                        final fs = widget.friendStates[e.hexKey.toLowerCase()];
                         return _ContactTile(
                           entry: e,
                           profile: widget.contactProfiles[e.hexKey],
+                          friendState: fs,
                           shortKey: _shortKey(e.hexKey),
                           onTap: () => _editContact(e),
                           onShare: () => _shareContact(e),
                           onDelete: () => _deleteContact(e),
+                          onFriendRespond: widget.onFriendRespond,
+                          onOpenDm: widget.onOpenDm,
                         );
                       },
                     ),
@@ -1074,7 +1126,8 @@ class _ServerAddTile extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: Colors.white,
               ),
-              child: const Icon(Icons.person_add, size: 22, color: Colors.black),
+              child:
+                  const Icon(Icons.person_add, size: 22, color: Colors.black),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -1093,8 +1146,8 @@ class _ServerAddTile extends StatelessWidget {
                   const SizedBox(height: 2),
                   const Text(
                     'Click to create and add to trusted peers',
-                    style: TextStyle(
-                        fontSize: 11, color: AppColors.textSecondary),
+                    style:
+                        TextStyle(fontSize: 11, color: AppColors.textSecondary),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
@@ -1118,10 +1171,14 @@ class _ServerAddTile extends StatelessWidget {
 class _ContactTile extends StatelessWidget {
   final WhitelistEntry entry;
   final ContactProfile? profile;
+  final FriendStateRecord? friendState;
   final String shortKey;
   final VoidCallback onTap;
   final VoidCallback onShare;
   final VoidCallback onDelete;
+  final Future<bool> Function(String peerPubkeyHex, bool accept)?
+      onFriendRespond;
+  final void Function(String roomUUIDHex)? onOpenDm;
 
   const _ContactTile({
     required this.entry,
@@ -1130,11 +1187,15 @@ class _ContactTile extends StatelessWidget {
     required this.onShare,
     required this.onDelete,
     this.profile,
+    this.friendState,
+    this.onFriendRespond,
+    this.onOpenDm,
   });
-
 
   @override
   Widget build(BuildContext context) {
+    final status = friendState?.statusEnum ?? FriendStatus.none;
+    final roomUUID = friendState?.roomUUIDHex;
     return InkWell(
       onTap: onTap,
       splashColor: AppColors.bgSurfaceActive,
@@ -1177,6 +1238,8 @@ class _ContactTile extends StatelessWidget {
                           fontSize: 11,
                           fontFamily: 'monospace',
                           color: AppColors.textSecondary)),
+                  const SizedBox(height: 6),
+                  _FriendBadge(status: status),
                 ],
               ),
             ),
@@ -1185,6 +1248,33 @@ class _ContactTile extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (status == FriendStatus.pendingIncoming &&
+                    onFriendRespond != null)
+                  _MiniTextBtn(
+                    label: 'NO',
+                    color: AppColors.statusRed,
+                    onTap: () => onFriendRespond!(entry.hexKey, false),
+                  ),
+                if (status == FriendStatus.pendingIncoming &&
+                    onFriendRespond != null)
+                  const SizedBox(width: 4),
+                if (status == FriendStatus.pendingIncoming &&
+                    onFriendRespond != null)
+                  _MiniTextBtn(
+                    label: 'YES',
+                    color: const Color(0xFF2E7D32),
+                    onTap: () => onFriendRespond!(entry.hexKey, true),
+                  ),
+                if (status == FriendStatus.friend &&
+                    roomUUID != null &&
+                    roomUUID.isNotEmpty &&
+                    onOpenDm != null)
+                  _MiniTextBtn(
+                    label: 'Message',
+                    color: AppColors.accent,
+                    textColor: Colors.black,
+                    onTap: () => onOpenDm!(roomUUID),
+                  ),
                 _ActionBtn(
                   icon: Icons.ios_share_outlined,
                   tooltip: 'Share / Copy',
@@ -1199,6 +1289,190 @@ class _ContactTile extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IncomingFriendTile extends StatelessWidget {
+  final String peerHex;
+  final ContactProfile? profile;
+  final Future<bool> Function(String peerPubkeyHex, bool accept)? onRespond;
+
+  const _IncomingFriendTile({
+    required this.peerHex,
+    required this.profile,
+    required this.onRespond,
+  });
+
+  String get _shortKey =>
+      '${peerHex.substring(0, 8)}…${peerHex.substring(peerHex.length - 8)}';
+
+  String get _displayName {
+    final full = (profile?.fullname ?? '').trim();
+    if (full.isNotEmpty) return full;
+    final user =
+        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+    if (user.isNotEmpty) return user;
+    return 'Unknown sender';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      child: Row(
+        children: [
+          UserAvatar(name: _displayName, bytes: profile?.avatarBytes, size: 46),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _displayName,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if ((profile?.username?.trim().isNotEmpty ?? false)) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    profile!.username!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                const SizedBox(height: 2),
+                Text(
+                  _shortKey,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const _FriendBadge(status: FriendStatus.pendingIncoming),
+              ],
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _MiniTextBtn(
+                label: 'NO',
+                color: AppColors.statusRed,
+                onTap: onRespond == null
+                    ? () {}
+                    : () => onRespond!(peerHex, false),
+              ),
+              const SizedBox(width: 4),
+              _MiniTextBtn(
+                label: 'YES',
+                color: const Color(0xFF2E7D32),
+                onTap:
+                    onRespond == null ? () {} : () => onRespond!(peerHex, true),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FriendBadge extends StatelessWidget {
+  final FriendStatus status;
+  const _FriendBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == FriendStatus.none) return const SizedBox.shrink();
+    Color bg;
+    Color border;
+    String text;
+    switch (status) {
+      case FriendStatus.pendingOutgoing:
+      case FriendStatus.pendingIncoming:
+        bg = const Color(0x33FFB300);
+        border = const Color(0xFFE6A100);
+        text = 'Pending';
+        break;
+      case FriendStatus.friend:
+        bg = const Color(0x332E7D32);
+        border = const Color(0xFF2E7D32);
+        text = 'Friend';
+        break;
+      case FriendStatus.rejected:
+        bg = const Color(0x33C62828);
+        border = const Color(0xFFC62828);
+        text = 'Rejected';
+        break;
+      case FriendStatus.none:
+        return const SizedBox.shrink();
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary,
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniTextBtn extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  const _MiniTextBtn({
+    required this.label,
+    required this.color,
+    required this.onTap,
+    this.textColor = Colors.white,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 30,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: textColor,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

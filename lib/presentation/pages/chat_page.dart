@@ -86,6 +86,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   /// Timestamp when the app went to background. Used to decide whether
   /// to log how long the app stayed backgrounded before resuming.
   DateTime? _wentToBackground;
+  static const Duration _resumeProbeMinGap = Duration(seconds: 2);
 
   static const _videoExtensions = {
     'mp4',
@@ -161,6 +162,14 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               ? DateTime.now().difference(_wentToBackground!)
               : Duration.zero;
           _wentToBackground = null;
+
+          // Desktop focus flips (switching between windows) often fire
+          // inactive->resumed rapidly. Avoid noisy probe/reconnect storms
+          // for very short gaps.
+          if (bgDuration < _resumeProbeMinGap) {
+            _flushPendingReadReceipts();
+            break;
+          }
 
           final status = bloc.state.status;
           if (status == ChatStatus.ready) {

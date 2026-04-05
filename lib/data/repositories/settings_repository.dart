@@ -19,6 +19,7 @@ class SettingsRepository {
   static const _lastNodeIdKey = 'sgtp_last_node_id';
   static const _lastAccountIdKey = 'sgtp_last_account_id';
   static const _accountIdsKey = 'sgtp_account_ids_v1';
+  static const _accountMarkerKey = 'sgtp_account_marker_v1';
   // Legacy (global) identity + profile keys. New code should prefer per-account scoped variants.
   static const _privKeyB64Key = 'sgtp_private_key_b64';
   static const _privKeyNameKey = 'sgtp_private_key_name';
@@ -41,6 +42,8 @@ class SettingsRepository {
   static const _qrShapeStyleKey = 'sgtp_qr_shape_style';
   static const _qrShowLogoKey = 'sgtp_qr_show_logo';
   static const _contactProfilesKey = 'sgtp_contact_profiles';
+  static const _friendStatesKey = 'sgtp_friend_states_v1';
+  static const _suppressedContactsKey = 'sgtp_suppressed_contacts_v1';
   static const _nodeServerOptionsKeyPrefix = 'sgtp_node_server_options_v1_';
   static const _nodeServerOptionsSavedAtKeyPrefix =
       'sgtp_node_server_options_saved_at_v1_';
@@ -175,15 +178,15 @@ class SettingsRepository {
     final out = <String>[];
 
     // New schema: accounts are managed independently from servers.
+    // IMPORTANT: do not early-return when this list is non-empty.
+    // We merge with discoverable scoped data below so accounts can recover
+    // after partial prefs corruption or stale list writes.
     if (raw != null) {
       for (final id in raw) {
         final trimmed = id.trim();
         if (trimmed.isEmpty || out.contains(trimmed)) continue;
         out.add(trimmed);
       }
-      // If the key exists but ended up empty (for example after partial
-      // restore/merge), bootstrap from nodes/scoped data below.
-      if (out.isNotEmpty) return out;
     }
 
     // One-time legacy bootstrap.
@@ -204,25 +207,28 @@ class SettingsRepository {
       }
     }
 
-    // If there are still no accounts, recover them from account-scoped keys.
-    if (out.isEmpty) {
-      final prefixes = <String>[
-        '${_privKeyB64Key}_',
-        '${_whitelistJsonKey}_',
-        '${_userAvatarB64Key}_',
-        '${_userNicknameKey}_',
-        '${_userUsernameKey}_',
-      ];
-      for (final key in p.getKeys()) {
-        for (final prefix in prefixes) {
-          if (!key.startsWith(prefix)) continue;
-          final accountId = key.substring(prefix.length).trim();
-          if (accountId.isEmpty || out.contains(accountId)) continue;
-          out.add(accountId);
-        }
+    // Recover accounts from account-scoped keys as well (always merge).
+    final prefixes = <String>[
+      '${_accountMarkerKey}_',
+      '${_privKeyB64Key}_',
+      '${_whitelistJsonKey}_',
+      '${_userAvatarB64Key}_',
+      '${_userNicknameKey}_',
+      '${_userUsernameKey}_',
+    ];
+    for (final key in p.getKeys()) {
+      for (final prefix in prefixes) {
+        if (!key.startsWith(prefix)) continue;
+        final accountId = key.substring(prefix.length).trim();
+        if (accountId.isEmpty || out.contains(accountId)) continue;
+        out.add(accountId);
       }
     }
 
+    // Ensure account markers exist for all recovered IDs.
+    for (final id in out) {
+      await p.setBool(_scopedKey(_accountMarkerKey, id), true);
+    }
     await p.setStringList(_accountIdsKey, out);
     return out;
   }
@@ -252,6 +258,7 @@ class SettingsRepository {
       list.add(id);
       await p.setStringList(_accountIdsKey, list);
     }
+    await p.setBool(_scopedKey(_accountMarkerKey, id), true);
     final last = await loadLastAccountId();
     if (last == null || last.isEmpty) {
       await setLastAccountId(id);
@@ -265,6 +272,7 @@ class SettingsRepository {
     final list = await loadAccountIds();
     list.removeWhere((x) => x == id);
     await p.setStringList(_accountIdsKey, list);
+    await p.remove(_scopedKey(_accountMarkerKey, id));
     final last = await loadLastAccountId();
     if (last == id) {
       if (list.isNotEmpty) {
@@ -753,12 +761,16 @@ class SettingsRepository {
       'sha256': profile.avatarSha256Hex,
       'updatedAt': profile.updatedAt,
     };
-    if (kIsWeb && profile.avatarBytes != null && profile.avatarBytes!.isNotEmpty) {
+    if (kIsWeb &&
+        profile.avatarBytes != null &&
+        profile.avatarBytes!.isNotEmpty) {
       entry['avatarB64'] = base64Encode(profile.avatarBytes!);
     }
     map[profile.pubkeyHex] = entry;
     await p.setString(key, json.encode(map));
-    if (!kIsWeb && profile.avatarBytes != null && profile.avatarBytes!.isNotEmpty) {
+    if (!kIsWeb &&
+        profile.avatarBytes != null &&
+        profile.avatarBytes!.isNotEmpty) {
       try {
         final dir = await _contactAvatarDir(nodeId);
         final file = File('${dir.path}/${profile.pubkeyHex}.bin');
@@ -846,6 +858,72 @@ class SettingsRepository {
       );
     }
     return result;
+  }
+
+  // ── Friend states ─────────────────────────────────────────────────────────
+
+  Future<Map<String, FriendStateRecord>> loadFriendStates(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_friendStatesKey, nodeId);
+    final raw = p.getString(key);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = json.decode(raw) as Map<String, dynamic>;
+      final out = <String, FriendStateRecord>{};
+      for (final entry in decoded.entries) {
+        final peer = entry.key.toLowerCase();
+        final m = entry.value as Map<String, dynamic>;
+        out[peer] = FriendStateRecord(
+          peerPubkeyHex: peer,
+          status: (m['status'] as String? ?? FriendStatus.none.name),
+          roomUUIDHex: (m['roomUUIDHex'] as String?)?.trim(),
+          updatedAt: (m['updatedAt'] as int?) ?? 0,
+        );
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveFriendStates(
+      String nodeId, Map<String, FriendStateRecord> states) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_friendStatesKey, nodeId);
+    final encoded = <String, dynamic>{};
+    for (final e in states.entries) {
+      final v = e.value;
+      encoded[e.key.toLowerCase()] = {
+        'status': v.status,
+        'roomUUIDHex': v.roomUUIDHex,
+        'updatedAt': v.updatedAt,
+      };
+    }
+    await p.setString(key, json.encode(encoded));
+  }
+
+  Future<Set<String>> loadSuppressedContacts(String nodeId) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_suppressedContactsKey, nodeId);
+    final raw = p.getStringList(key) ?? const [];
+    final out = <String>{};
+    for (final item in raw) {
+      final t = item.trim().toLowerCase();
+      if (t.length == 64) out.add(t);
+    }
+    return out;
+  }
+
+  Future<void> saveSuppressedContacts(
+      String nodeId, Set<String> pubkeysHex) async {
+    final p = await SharedPreferences.getInstance();
+    final key = _scopedKey(_suppressedContactsKey, nodeId);
+    final list = pubkeysHex
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.length == 64)
+        .toList()
+      ..sort();
+    await p.setStringList(key, list);
   }
 }
 
@@ -949,4 +1027,46 @@ class ContactProfile {
     required this.avatarSha256Hex,
     required this.updatedAt,
   });
+}
+
+enum FriendStatus {
+  none,
+  pendingOutgoing,
+  pendingIncoming,
+  friend,
+  rejected,
+}
+
+class FriendStateRecord {
+  final String peerPubkeyHex;
+  final String status;
+  final String? roomUUIDHex;
+  final int updatedAt;
+
+  const FriendStateRecord({
+    required this.peerPubkeyHex,
+    required this.status,
+    required this.roomUUIDHex,
+    required this.updatedAt,
+  });
+
+  FriendStatus get statusEnum {
+    for (final s in FriendStatus.values) {
+      if (s.name == status) return s;
+    }
+    return FriendStatus.none;
+  }
+
+  FriendStateRecord copyWith({
+    String? status,
+    String? roomUUIDHex,
+    int? updatedAt,
+  }) {
+    return FriendStateRecord(
+      peerPubkeyHex: peerPubkeyHex,
+      status: status ?? this.status,
+      roomUUIDHex: roomUUIDHex ?? this.roomUUIDHex,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
 }

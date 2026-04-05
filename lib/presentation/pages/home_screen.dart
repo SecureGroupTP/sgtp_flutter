@@ -12,9 +12,11 @@ import '../../core/sgtp_transport.dart';
 import '../../core/openssh_parser.dart';
 import '../../core/crypto/ed25519_utils.dart';
 import '../../core/uuid_v7.dart';
+import '../../data/repositories/chat_metadata_repository.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/sgtp_client.dart';
 import '../../data/userdir_client.dart';
+import '../../domain/entities/chat_metadata.dart';
 import '../blocs/rooms/rooms_bloc.dart';
 import '../blocs/rooms/rooms_event.dart';
 import '../widgets/app_nav_bar.dart';
@@ -60,10 +62,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   UserDirClient? _userDirClient;
   StreamSubscription<UserDirMeta>? _userDirSub;
+  StreamSubscription<UserDirFriendNotify>? _friendDirSub;
+  Timer? _friendSyncTimer;
+  Timer? _profileRegisterTimer;
   Map<String, ContactProfile> _contactProfiles = {};
+  Map<String, FriendStateRecord> _friendStates = {};
+  Set<String> _suppressedContacts = {};
   Future<void> _notifyQueue = Future.value();
   String _nickname = '';
   String _username = '';
+  String _lastRegisteredFingerprint = '';
 
   @override
   void initState() {
@@ -88,7 +96,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_accountId.trim().isNotEmpty) {
       final repo = SettingsRepository();
       _nickname = await repo.loadUserNicknameForNode(_accountId);
-      _username = await repo.loadUserUsernameForNode(_accountId);
+      final rawUsername = await repo.loadUserUsernameForNode(_accountId);
+      final normalized = _normalizeUsername(rawUsername);
+      _username = normalized ?? '';
+      if ((rawUsername.trim()) != _username) {
+        await repo.saveUserUsernameForNode(_accountId, _username);
+      }
+      _friendStates = await repo.loadFriendStates(_accountId);
+      _suppressedContacts = await repo.loadSuppressedContacts(_accountId);
     }
     await _initUserDir();
   }
@@ -96,6 +111,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _userDirSub?.cancel();
+    _friendDirSub?.cancel();
+    _friendSyncTimer?.cancel();
+    _profileRegisterTimer?.cancel();
     _userDirClient?.close();
     _roomsBloc.close();
     super.dispose();
@@ -115,6 +133,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _nicknames = {for (final e in whitelistEntries) e.hexKey: e.name};
       _serverAddress = newServer;
       _contactProfiles = {};
+      _friendStates = {};
+      _suppressedContacts = {};
+      _lastRegisteredFingerprint = '';
     });
     _roomsBloc.close();
     _roomsBloc = RoomsBloc(
@@ -129,16 +150,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onNicknameChanged(String nickname) {
+    if (_nickname == nickname) return;
     _nickname = nickname;
-    unawaited(_registerSelf());
+    unawaited(_registerSelf(force: true));
   }
 
   Future<String?> _onUsernameChanged(String username) async {
-    _username = username;
-    return _registerSelf();
+    final next = _normalizeUsername(username) ?? '';
+    if (_username == next) return null;
+    _username = next;
+    return _registerSelf(force: true);
   }
 
   void _onWhitelistChanged(List<WhitelistEntry> entries) {
+    final old = List<WhitelistEntry>.from(_whitelist);
     setState(() {
       _whitelist = entries;
       _nicknames = {for (final e in entries) e.hexKey: e.name};
@@ -156,6 +181,52 @@ class _HomeScreenState extends State<HomeScreen> {
     ));
     _pushContactAvatarsToRooms();
     unawaited(_initUserDir());
+    final oldSet = old.map((e) => e.hexKey.toLowerCase()).toSet();
+    final nextSet = entries.map((e) => e.hexKey.toLowerCase()).toSet();
+    final removed = old.where((e) => !nextSet.contains(e.hexKey.toLowerCase()));
+    final added =
+        entries.where((e) => !oldSet.contains(e.hexKey.toLowerCase()));
+    if (removed.isNotEmpty) {
+      for (final entry in removed) {
+        _suppressedContacts.add(entry.hexKey.toLowerCase());
+        unawaited(_removeFriendOnServer(entry.hexKey));
+      }
+      unawaited(SettingsRepository().saveSuppressedContacts(
+        _accountId,
+        _suppressedContacts,
+      ));
+    }
+    for (final entry in added) {
+      final hex = entry.hexKey.toLowerCase();
+      if (_suppressedContacts.remove(hex)) {
+        unawaited(SettingsRepository().saveSuppressedContacts(
+          _accountId,
+          _suppressedContacts,
+        ));
+      }
+      unawaited(_sendFriendRequestFor(entry));
+    }
+  }
+
+  Future<void> _removeFriendOnServer(String peerHex) async {
+    var client = _userDirClient;
+    if (client == null || !client.isConnected) {
+      await _initUserDir();
+      client = _userDirClient;
+    }
+    if (client == null || !client.isConnected) return;
+    try {
+      final ok = await client.sendFriendDelete(
+        myPubkey: _config.myPublicKey,
+        peerPubkey: _hexToBytes32(peerHex),
+        identityKeyPair: _config.identityKeyPair,
+      );
+      AppLogger.i(
+        'FRIEND_DELETE ${ok ? 'sent' : 'failed'} peer=${peerHex.substring(0, 8)}',
+        tag: 'UDIR',
+      );
+      if (ok) await _syncFriendStates(client);
+    } catch (_) {}
   }
 
   Map<String, Uint8List> _buildContactAvatarsByPubkey() {
@@ -177,21 +248,75 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Returns `@username` if the user has set one, otherwise null.
   String? _buildUsername() {
-    if (_username.isNotEmpty) return '@$_username';
+    final normalized = _normalizeUsername(_username);
+    if (normalized != null && normalized.isNotEmpty) return '@$normalized';
     return null;
   }
 
-  Future<String?> _registerSelf() async {
-    final client = _userDirClient;
-    if (client == null) return null;
-    final result = await client.registerWithResult(
-      username: _buildUsername(),
-      fullname: _nickname,
-      pubkey: _config.myPublicKey,
-      avatarBytes: _userAvatar ?? Uint8List(0),
-      identityKeyPair: _config.identityKeyPair,
-    );
-    if (result.ok) return null;
+  String? _normalizeUsername(String? raw) {
+    if (raw == null) return null;
+    final stripped = raw.trim().replaceFirst(RegExp(r'^@+'), '');
+    final sanitized = stripped
+        .replaceAll(RegExp(r'[^A-Za-z0-9_]'), '')
+        .substring(
+          0,
+          stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
+        );
+    if (sanitized.isEmpty) return null;
+    return sanitized;
+  }
+
+  String _profileFingerprint() {
+    final user = _buildUsername() ?? '';
+    final avatarLen = _userAvatar?.length ?? 0;
+    final pubHex = _config.myPublicKey
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '$pubHex|$user|$_nickname|$avatarLen';
+  }
+
+  Future<String?> _registerSelf({bool force = false}) async {
+    final fp = _profileFingerprint();
+    if (!force && _lastRegisteredFingerprint == fp) return null;
+    Future<({bool ok, int? errorCode, String? errorMessage})> doRegister(
+        UserDirClient client) {
+      return client.registerWithResult(
+        username: _buildUsername(),
+        fullname: _nickname,
+        pubkey: _config.myPublicKey,
+        avatarBytes: _userAvatar ?? Uint8List(0),
+        identityKeyPair: _config.identityKeyPair,
+      );
+    }
+
+    var client = _userDirClient;
+    if (client == null || !client.isConnected) {
+      await _initUserDir();
+      client = _userDirClient;
+    }
+    if (client == null || !client.isConnected) {
+      // Do not show a hard validation error when the directory transport
+      // is temporarily unavailable.
+      return null;
+    }
+
+    var result = await doRegister(client);
+
+    // Retry once after reconnect when server gave no explicit error details.
+    if (!result.ok &&
+        result.errorCode == null &&
+        (result.errorMessage ?? '').trim().isEmpty) {
+      await _initUserDir();
+      final retry = _userDirClient;
+      if (retry != null && retry.isConnected) {
+        result = await doRegister(retry);
+      }
+    }
+
+    if (result.ok) {
+      _lastRegisteredFingerprint = fp;
+      return null;
+    }
 
     final code = result.errorCode;
     final msg = (result.errorMessage ?? '').trim();
@@ -205,6 +330,192 @@ class _HomeScreenState extends State<HomeScreen> {
     if (code != null)
       return 'Username update failed (code: 0x${code.toRadixString(16)})';
     return 'Username update failed';
+  }
+
+  Future<void> _sendFriendRequestFor(WhitelistEntry entry) async {
+    var client = _userDirClient;
+    if (client == null || !client.isConnected) {
+      await _initUserDir();
+      client = _userDirClient;
+    }
+    if (client == null || !client.isConnected) return;
+    final hex = entry.hexKey.toLowerCase();
+    final existing = _friendStates[hex];
+    if (existing != null &&
+        (existing.statusEnum == FriendStatus.pendingOutgoing ||
+            existing.statusEnum == FriendStatus.pendingIncoming)) {
+      return;
+    }
+    try {
+      final ok = await client.sendFriendRequest(
+        myPubkey: _config.myPublicKey,
+        peerPubkey: entry.bytes,
+        identityKeyPair: _config.identityKeyPair,
+      );
+      AppLogger.i(
+        'FRIEND_REQUEST ${ok ? 'sent' : 'failed'} peer=${hex.substring(0, 8)}',
+        tag: 'UDIR',
+      );
+      await _syncFriendStates(client);
+    } catch (_) {}
+  }
+
+  Uint8List _hexToBytes32(String hex) {
+    final clean = hex.trim().toLowerCase();
+    return Uint8List.fromList(List<int>.generate(
+      32,
+      (i) => int.parse(clean.substring(i * 2, i * 2 + 2), radix: 16),
+    ));
+  }
+
+  Future<void> _ensureContactForPeer(String peerHex) async {
+    final lower = peerHex.toLowerCase();
+    if (_suppressedContacts.contains(lower)) return;
+    if (_whitelist.any((e) => e.hexKey.toLowerCase() == lower)) return;
+
+    ContactProfile? profile = _contactProfiles[lower];
+    final client = _userDirClient;
+    if (profile == null && client != null && client.isConnected) {
+      try {
+        final meta = await client.getMeta(_hexToBytes32(lower));
+        if (meta != null) {
+          profile = ContactProfile(
+            pubkeyHex: lower,
+            username: meta.username,
+            fullname: meta.fullname,
+            avatarBytes: null,
+            avatarSha256Hex: meta.avatarSha256Hex,
+            updatedAt: meta.updatedAt,
+          );
+          _contactProfiles[lower] = profile;
+          await SettingsRepository().saveContactProfile(_accountId, profile);
+        }
+      } catch (_) {}
+    }
+
+    final fullName = (profile?.fullname ?? '').trim();
+    final username =
+        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+    final autoName = fullName.isNotEmpty
+        ? fullName
+        : (username.isNotEmpty ? username : 'peer_${lower.substring(0, 8)}');
+
+    _whitelist = [
+      ..._whitelist,
+      WhitelistEntry(bytes: _hexToBytes32(lower), name: autoName),
+    ];
+    _nicknames[lower] = autoName;
+    _config = _config.copyWith(
+      whitelist: _whitelist.map((e) => e.hexKey).toSet(),
+    );
+
+    final repo = SettingsRepository();
+    await repo.saveWhitelistEntriesForNode(_accountId, _whitelist);
+    _roomsBloc
+        .add(RoomsUpdateWhitelist(_whitelist.map((e) => e.hexKey).toSet()));
+    _roomsBloc.add(
+        RoomsUpdateNicknames({for (final e in _whitelist) e.hexKey: e.name}));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _syncFriendStates(UserDirClient client) async {
+    final snapshot = await client.friendSync(
+      myPubkey: _config.myPublicKey,
+      identityKeyPair: _config.identityKeyPair,
+    );
+    if (snapshot == null) {
+      AppLogger.w('FRIEND_SYNC skipped: no response', tag: 'UDIR');
+      return;
+    }
+
+    final next = <String, FriendStateRecord>{};
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    for (final item in snapshot) {
+      final peerHex = item.peerPubkeyHex.toLowerCase();
+      final status = switch (item.status) {
+        UserDirFriendStatus.pendingOutgoing =>
+          FriendStatus.pendingOutgoing.name,
+        UserDirFriendStatus.pendingIncoming =>
+          FriendStatus.pendingIncoming.name,
+        UserDirFriendStatus.friend => FriendStatus.friend.name,
+        UserDirFriendStatus.rejected => FriendStatus.rejected.name,
+        _ => FriendStatus.none.name,
+      };
+      next[peerHex] = FriendStateRecord(
+        peerPubkeyHex: peerHex,
+        status: status,
+        roomUUIDHex: item.roomUUIDHex,
+        updatedAt: now,
+      );
+
+      if (item.status == UserDirFriendStatus.pendingIncoming) {
+        final cached = _contactProfiles[peerHex];
+        UserDirMeta? meta;
+        try {
+          meta = await client.getMeta(item.peerPubkey);
+        } catch (_) {}
+        if (meta != null) {
+          _contactProfiles[peerHex] = ContactProfile(
+            pubkeyHex: peerHex,
+            username: meta.username,
+            fullname: meta.fullname,
+            avatarBytes: cached?.avatarBytes,
+            avatarSha256Hex: meta.avatarSha256Hex,
+            updatedAt: meta.updatedAt,
+          );
+          await SettingsRepository().saveContactProfile(
+            _accountId,
+            _contactProfiles[peerHex]!,
+          );
+        }
+      }
+
+      if (item.status == UserDirFriendStatus.friend) {
+        if (!_whitelist.any((e) => e.hexKey.toLowerCase() == peerHex)) {
+          await _ensureContactForPeer(peerHex);
+        }
+      }
+
+      if (item.status == UserDirFriendStatus.friend &&
+          item.roomUUIDHex != null) {
+        await _upsertDmChat(
+          roomUUIDHex: item.roomUUIDHex!,
+          peerHex: peerHex,
+        );
+      }
+    }
+
+    _friendStates = next;
+    final repo = SettingsRepository();
+    await repo.saveFriendStates(_accountId, _friendStates);
+    await repo.saveWhitelistEntriesForNode(_accountId, _whitelist);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _upsertDmChat({
+    required String roomUUIDHex,
+    required String peerHex,
+  }) async {
+    final room = roomUUIDHex.toLowerCase().replaceAll('-', '');
+    if (room.length != 32) return;
+    final profile = _contactProfiles[peerHex];
+    final nickname = _nicknames[peerHex] ?? 'Friend';
+    final nameCandidate = profile?.fullname?.trim() ?? '';
+    final displayName = nameCandidate.isNotEmpty ? nameCandidate : nickname;
+    final repo = ChatMetadataRepository(accountId: _accountId);
+    final existing = await repo.loadChat(room, serverAddress: _serverAddress);
+    final now = DateTime.now();
+    await repo.saveChat(ChatMetadata(
+      uuid: room,
+      name: displayName,
+      serverAddress: _serverAddress,
+      avatarBytes: profile?.avatarBytes ?? existing?.avatarBytes,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      windowWidth: existing?.windowWidth,
+      windowHeight: existing?.windowHeight,
+    ));
   }
 
   Future<void> _initUserDir() async {
@@ -243,6 +554,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await client.connect();
       _userDirClient?.close();
       _userDirSub?.cancel();
+      _friendDirSub?.cancel();
+      _friendSyncTimer?.cancel();
       _userDirClient = client;
 
       // Register/update our own profile on the server
@@ -250,14 +563,36 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (_whitelist.isNotEmpty) {
         await _syncContactsFromUserDir(client);
+      }
 
-        // Subscribe to all contacts for live NOTIFY
-        await client.subscribe(_whitelist.map((e) => e.bytes).toList());
-
-        // Queue NOTIFY handling serially to avoid concurrent GET_PROFILE calls
-        _userDirSub = client.notifyStream.listen((meta) {
-          _notifyQueue = _notifyQueue.then((_) => _handleNotify(meta, client));
-        });
+      // Subscribe to contacts + self so friend notifications arrive.
+      final keys = <Uint8List>[
+        ..._whitelist.map((e) => e.bytes),
+        _config.myPublicKey
+      ];
+      await client.subscribe(keys);
+      _userDirSub = client.notifyStream.listen((meta) {
+        _notifyQueue = _notifyQueue.then((_) => _handleNotify(meta, client));
+      });
+      _friendDirSub = client.friendNotifyStream.listen((_) {
+        _notifyQueue = _notifyQueue.then((_) => _syncFriendStates(client));
+      });
+      _friendSyncTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+        final c = _userDirClient;
+        if (c == null || !c.isConnected) return;
+        _notifyQueue = _notifyQueue.then((_) => _syncFriendStates(c));
+      });
+      _profileRegisterTimer?.cancel();
+      _profileRegisterTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        unawaited(_registerSelf());
+      });
+      await _syncFriendStates(client);
+      for (final entry in _whitelist) {
+        final st = _friendStates[entry.hexKey.toLowerCase()]?.statusEnum ??
+            FriendStatus.none;
+        if (st == FriendStatus.none) {
+          await _sendFriendRequestFor(entry);
+        }
       }
     } catch (e, st) {
       AppLogger.e('UDIR init failed: $e\n$st', tag: 'UDIR');
@@ -312,13 +647,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _refreshContactsFromServer() async {
-    if (_whitelist.isEmpty) return;
     final client = _userDirClient;
     if (client == null) {
       await _initUserDir();
       return;
     }
-    await _syncContactsFromUserDir(client);
+    if (_whitelist.isNotEmpty) {
+      await _syncContactsFromUserDir(client);
+    }
+    await _syncFriendStates(client);
   }
 
   Future<void> _handleNotify(UserDirMeta meta, UserDirClient client) async {
@@ -364,7 +701,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onUserAvatarChanged(Uint8List? avatar) {
     setState(() => _userAvatar = avatar);
     _roomsBloc.setUserAvatar(avatar);
-    unawaited(_registerSelf());
+    unawaited(_registerSelf(force: true));
   }
 
   void _onAllDataDeleted() {
@@ -397,6 +734,37 @@ class _HomeScreenState extends State<HomeScreen> {
               initialEntries: _whitelist,
               onEntriesChanged: _onWhitelistChanged,
               contactProfiles: _contactProfiles,
+              friendStates: _friendStates,
+              onFriendRespond: (peerHex, accept) async {
+                var client = _userDirClient;
+                if (client == null || !client.isConnected) {
+                  await _initUserDir();
+                  client = _userDirClient;
+                }
+                if (client == null || !client.isConnected) return false;
+                final ok = await client.sendFriendResponse(
+                  myPubkey: _config.myPublicKey,
+                  requesterPubkey: _hexToBytes32(peerHex),
+                  accept: accept,
+                  identityKeyPair: _config.identityKeyPair,
+                );
+                if (ok && accept) {
+                  _suppressedContacts.remove(peerHex.toLowerCase());
+                  await SettingsRepository().saveSuppressedContacts(
+                    _accountId,
+                    _suppressedContacts,
+                  );
+                  await _ensureContactForPeer(peerHex);
+                }
+                if (ok) await _syncFriendStates(client);
+                return ok;
+              },
+              onOpenDm: (roomUUIDHex) {
+                _roomsBloc.add(RoomsJoinRoom(
+                  roomUUIDHex,
+                  serverAddress: _serverAddress,
+                ));
+              },
             ),
             // 2 — Settings
             SettingsScreen(
