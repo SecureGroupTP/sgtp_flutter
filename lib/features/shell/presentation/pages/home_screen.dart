@@ -78,22 +78,23 @@ class _HomeScreenState extends State<HomeScreen> {
     _serverAddress = widget.serverAddress;
     _userAvatar = widget.userAvatar;
     _whitelist = List.from(widget.initialWhitelist);
-    _userDirCoordinator = context.read<AppDependencies>().homeUserDirCoordinatorFactory(
-      onDirectMessageReady: (
-        roomUUIDHex,
-        peerHex,
-        displayName,
-        avatarBytes,
-      ) {
-        return _upsertDmChat(
-          roomUUIDHex: roomUUIDHex,
-          peerHex: peerHex,
-          displayName: displayName,
-          avatarBytes: avatarBytes,
-        );
-      },
-      onStateChanged: _applyCoordinatorState,
-    );
+    _userDirCoordinator =
+        context.read<AppDependencies>().homeUserDirCoordinatorFactory(
+              onDirectMessageReady: (
+                roomUUIDHex,
+                peerHex,
+                displayName,
+                avatarBytes,
+              ) {
+                return _upsertDmChat(
+                  roomUUIDHex: roomUUIDHex,
+                  peerHex: peerHex,
+                  displayName: displayName,
+                  avatarBytes: avatarBytes,
+                );
+              },
+              onStateChanged: _applyCoordinatorState,
+            );
     _roomsBloc = RoomsBloc(
       accountId: _accountId,
       baseConfig: _config,
@@ -163,14 +164,16 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onNicknameChanged(String nickname) {
     if (_nickname == nickname) return;
     _nickname = nickname;
-    unawaited(_userDirCoordinator.registerSelf(_buildUserDirSession(), force: true));
+    unawaited(
+        _userDirCoordinator.registerSelf(_buildUserDirSession(), force: true));
   }
 
   Future<String?> _onUsernameChanged(String username) async {
     final next = _userDirSupport.normalizeUsername(username) ?? '';
     if (_username == next) return null;
     _username = next;
-    return _userDirCoordinator.registerSelf(_buildUserDirSession(), force: true);
+    return _userDirCoordinator.registerSelf(_buildUserDirSession(),
+        force: true);
   }
 
   void _onWhitelistChanged(List<WhitelistEntry> entries) {
@@ -246,7 +249,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final nextWhitelist = List<WhitelistEntry>.from(state.whitelist);
     final nextNicknames = Map<String, String>.from(state.nicknames);
     setState(() {
-      _contactProfiles = Map<String, ContactProfile>.from(state.contactProfiles);
+      _contactProfiles =
+          Map<String, ContactProfile>.from(state.contactProfiles);
       _friendStates = Map<String, FriendStateRecord>.from(state.friendStates);
       _whitelist = nextWhitelist;
       _nicknames = nextNicknames;
@@ -254,7 +258,8 @@ class _HomeScreenState extends State<HomeScreen> {
         whitelist: nextWhitelist.map((entry) => entry.hexKey).toSet(),
       );
     });
-    _roomsBloc.add(RoomsUpdateWhitelist(_whitelist.map((e) => e.hexKey).toSet()));
+    _roomsBloc
+        .add(RoomsUpdateWhitelist(_whitelist.map((e) => e.hexKey).toSet()));
     _roomsBloc.add(RoomsUpdateNicknames(_nicknames));
     _pushContactAvatarsToRooms();
   }
@@ -317,10 +322,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
               onOpenDm: (roomUUIDHex) {
-                _roomsBloc.add(RoomsJoinRoom(
-                  roomUUIDHex,
-                  serverAddress: _serverAddress,
-                ));
+                setState(() => _currentIndex = 0);
+                final roomsPage = _roomsPageKey.currentState;
+                if (roomsPage != null) {
+                  roomsPage.openRoomByUuid(
+                    roomUUIDHex,
+                    serverAddress: _serverAddress,
+                    openOffline: true,
+                  );
+                  return;
+                }
+                _roomsBloc.add(
+                  RoomsJoinRoom(
+                    roomUUIDHex,
+                    serverAddress: _serverAddress,
+                    openOffline: true,
+                  ),
+                );
               },
             ),
             // 2 — Settings

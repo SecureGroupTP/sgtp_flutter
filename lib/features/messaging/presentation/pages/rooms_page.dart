@@ -199,7 +199,11 @@ class RoomsPageState extends State<RoomsPage> {
 
   void _openStoredChatPreview(BuildContext context, ChatMetadata metadata) {
     final roomsBloc = context.read<RoomsBloc>();
-    final existing = _findRoomEntry(roomsBloc.state, metadata);
+    final existing = _findRoomEntryByIdentity(
+      roomsBloc.state,
+      roomUUID: metadata.uuid,
+      serverAddress: metadata.serverAddress,
+    );
     if (existing != null) {
       _openRoom(context, existing);
       return;
@@ -207,7 +211,11 @@ class RoomsPageState extends State<RoomsPage> {
 
     StreamSubscription<RoomsState>? sub;
     sub = roomsBloc.stream.listen((state) {
-      final created = _findRoomEntry(state, metadata);
+      final created = _findRoomEntryByIdentity(
+        state,
+        roomUUID: metadata.uuid,
+        serverAddress: metadata.serverAddress,
+      );
       if (created != null) {
         sub?.cancel();
         if (!mounted) return;
@@ -225,9 +233,56 @@ class RoomsPageState extends State<RoomsPage> {
     ));
   }
 
-  RoomEntry? _findRoomEntry(RoomsState state, ChatMetadata metadata) {
-    final targetUuid = metadata.uuid.trim().toLowerCase();
-    final targetServer = _serverKey(metadata.serverAddress);
+  void openRoomByUuid(
+    String roomUUIDHex, {
+    String? serverAddress,
+    bool openOffline = true,
+  }) {
+    final roomsBloc = context.read<RoomsBloc>();
+    final effectiveServer = (serverAddress ?? widget.serverAddress).trim();
+    final existing = _findRoomEntryByIdentity(
+      roomsBloc.state,
+      roomUUID: roomUUIDHex,
+      serverAddress: effectiveServer,
+    );
+    if (existing != null) {
+      _openRoom(context, existing);
+      return;
+    }
+
+    StreamSubscription<RoomsState>? sub;
+    sub = roomsBloc.stream.listen((state) {
+      final created = _findRoomEntryByIdentity(
+        state,
+        roomUUID: roomUUIDHex,
+        serverAddress: effectiveServer,
+      );
+      if (created != null) {
+        sub?.cancel();
+        if (!mounted) return;
+        _openRoom(context, created);
+      }
+    });
+    Future<void>.delayed(const Duration(seconds: 5), () {
+      sub?.cancel();
+    });
+
+    roomsBloc.add(
+      RoomsJoinRoom(
+        roomUUIDHex,
+        serverAddress: effectiveServer,
+        openOffline: openOffline,
+      ),
+    );
+  }
+
+  RoomEntry? _findRoomEntryByIdentity(
+    RoomsState state, {
+    required String roomUUID,
+    required String serverAddress,
+  }) {
+    final targetUuid = roomUUID.trim().toLowerCase();
+    final targetServer = _serverKey(serverAddress);
     for (final room in state.rooms) {
       if (room.roomUUID.trim().toLowerCase() == targetUuid &&
           _serverKey(room.serverAddress) == targetServer) {
@@ -247,7 +302,8 @@ class RoomsPageState extends State<RoomsPage> {
   }
 
   void showAddSheet() {
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (_) => _AddRoomSheet(
         roomsBloc: context.read<RoomsBloc>(),
         onSaveChat: _upsertChat,
@@ -504,8 +560,9 @@ class _ActiveRoomMoreButton extends StatelessWidget {
             child: PrettyQrSharePanel(
               data: qrData,
               title: 'Share Room',
-              description:
-                  chatState.chatName != 'Chat' ? chatState.chatName : entry.label,
+              description: chatState.chatName != 'Chat'
+                  ? chatState.chatName
+                  : entry.label,
               copyMessage: 'Room hex copied',
               exportName:
                   'room_${entry.roomUUID.substring(0, 8).toLowerCase()}.png',
@@ -1083,7 +1140,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   }
 }
 
-
 class _NodePicker extends StatelessWidget {
   final bool isLoading;
   final List<NodeConfig> nodes;
@@ -1239,4 +1295,3 @@ class _DarkTextField extends StatelessWidget {
     );
   }
 }
-
