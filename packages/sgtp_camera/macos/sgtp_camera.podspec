@@ -1,4 +1,13 @@
 Pod::Spec.new do |s|
+  gst_modules = 'gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0'
+  framework_pkgconfig = '/Library/Frameworks/GStreamer.framework/Versions/1.0/lib/pkgconfig'
+  env_pkgconfig = ENV.fetch('PKG_CONFIG_PATH', '')
+  pkgconfig_path = [framework_pkgconfig, env_pkgconfig].reject(&:empty?).join(':')
+  pkgconfig_prefix = pkgconfig_path.empty? ? '' : "PKG_CONFIG_PATH=#{pkgconfig_path} "
+
+  cflags = `#{pkgconfig_prefix}pkg-config --cflags #{gst_modules}`.strip
+  ldflags = `#{pkgconfig_prefix}pkg-config --libs #{gst_modules}`.strip
+
   s.name             = 'sgtp_camera'
   s.version          = '0.1.0'
   s.summary          = 'GStreamer-based camera plugin for SGTP'
@@ -15,8 +24,8 @@ Pod::Spec.new do |s|
   s.frameworks = []
   s.xcconfig = {
     'FRAMEWORK_SEARCH_PATHS' => '/Library/Frameworks',
-    'OTHER_LDFLAGS' => '$(shell PKG_CONFIG_PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/lib/pkgconfig pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0)',
-    'OTHER_CFLAGS'  => '$(shell PKG_CONFIG_PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/lib/pkgconfig pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-audio-1.0)',
+    'OTHER_LDFLAGS' => ldflags,
+    'OTHER_CFLAGS'  => cflags,
   }
 
   s.dependency 'FlutterMacOS'
