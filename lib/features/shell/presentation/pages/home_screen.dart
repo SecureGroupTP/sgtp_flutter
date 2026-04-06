@@ -302,6 +302,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ContactsScreen(
               accountId: _accountId,
               serverNodeId: _config.nodeId,
+              myPubkeyHex: _config.myPublicKey
+                  .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                  .join(),
               initialEntries: _whitelist,
               onEntriesChanged: _onWhitelistChanged,
               contactProfiles: _contactProfiles,

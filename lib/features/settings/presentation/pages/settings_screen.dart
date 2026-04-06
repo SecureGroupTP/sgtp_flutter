@@ -1167,6 +1167,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _selectAccountId(String accountId) async {
     final id = accountId.trim();
     if (id.isEmpty) return;
+    final previousId = _activeAccountId();
     final loadSeq = ++_accountLoadSeq;
     setState(() {
       _preferredAccountId = id;
@@ -1174,6 +1175,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     await _settings.setLastAccountId(id);
     await _loadAccountData(id, applyConfig: true, expectedLoadSeq: loadSeq);
+
+    // Prevent half-switched state: without a private key we cannot apply
+    // account config, and Home would continue showing previous account data.
+    if (_privateKeyBytes == null || _myPublicKey == null) {
+      final fallback = (previousId ?? '').trim();
+      if (fallback.isNotEmpty && fallback != id) {
+        final rollbackSeq = ++_accountLoadSeq;
+        if (!mounted) return;
+        setState(() {
+          _preferredAccountId = fallback;
+        });
+        await _settings.setLastAccountId(fallback);
+        await _loadAccountData(
+          fallback,
+          applyConfig: true,
+          expectedLoadSeq: rollbackSeq,
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This account has no private key yet. Import or generate one first.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _deleteAccount(String accountId) async {

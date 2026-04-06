@@ -163,8 +163,17 @@ class TcpSgtpTransport implements SgtpTransport {
   Future<void> send(Uint8List bytes) async {
     final s = _socket;
     if (s == null) throw StateError('Not connected');
-    s.add(bytes);
-    await s.flush();
+    try {
+      s.add(bytes);
+      await s.flush();
+    } on StateError {
+      // Socket sink became unusable (usually after remote close/race).
+      _socket = null;
+      rethrow;
+    } on SocketException {
+      _socket = null;
+      rethrow;
+    }
   }
 
   @override
@@ -185,4 +194,3 @@ class TcpSgtpTransport implements SgtpTransport {
     }
   }
 }
-

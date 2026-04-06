@@ -6,6 +6,7 @@ import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 import 'package:sgtp_flutter/features/shell/application/models/app_startup_result.dart';
 
 class AppStartupService {
@@ -79,8 +80,18 @@ class AppStartupService {
       final entries = accountId.trim().isEmpty
           ? await _settings.loadWhitelistEntries()
           : await _settings.loadWhitelistEntriesForNode(accountId);
-      final whitelist = entries.map((e) => e.hexKey).toSet();
-      final nicknames = {for (final e in entries) e.hexKey: e.name};
+      final selfHex =
+          parsed.publicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final seen = <String>{};
+      final sanitizedEntries = <WhitelistEntry>[];
+      for (final entry in entries) {
+        final hex = entry.hexKey.toLowerCase();
+        if (hex == selfHex) continue;
+        if (!seen.add(hex)) continue;
+        sanitizedEntries.add(entry);
+      }
+      final whitelist = sanitizedEntries.map((e) => e.hexKey).toSet();
+      final nicknames = {for (final e in sanitizedEntries) e.hexKey: e.name};
       final userAvatar = accountId.trim().isEmpty
           ? await _settings.loadUserAvatar()
           : await _settings.loadUserAvatarForNode(accountId);
@@ -103,7 +114,7 @@ class AppStartupService {
           nicknames: nicknames,
           serverAddress: chatServer,
           userAvatar: userAvatar,
-          initialWhitelist: entries,
+          initialWhitelist: sanitizedEntries,
         ),
       );
     } catch (_) {

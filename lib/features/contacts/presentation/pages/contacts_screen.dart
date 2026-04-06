@@ -18,6 +18,7 @@ import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_mo
 class ContactsScreen extends StatefulWidget {
   final String accountId;
   final String? serverNodeId;
+  final String? myPubkeyHex;
   final List<WhitelistEntry> initialEntries;
   final Map<String, ContactProfile> contactProfiles;
   final Map<String, FriendStateRecord> friendStates;
@@ -33,6 +34,7 @@ class ContactsScreen extends StatefulWidget {
     super.key,
     required this.accountId,
     this.serverNodeId,
+    this.myPubkeyHex,
     required this.initialEntries,
     required this.onEntriesChanged,
     this.contactProfiles = const {},
@@ -60,7 +62,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void initState() {
     super.initState();
     _directoryService = context.read<ContactsDirectoryService>();
-    _entries = List.from(widget.initialEntries);
+    _entries = _sanitizeEntries(widget.initialEntries);
   }
 
   @override
@@ -74,7 +76,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       _searchDebounce?.cancel();
       _searchRequestId++;
       setState(() {
-        _entries = List.from(widget.initialEntries);
+        _entries = _sanitizeEntries(widget.initialEntries);
         if (oldWidget.accountId != widget.accountId ||
             oldWidget.serverNodeId != widget.serverNodeId) {
           _search = '';
@@ -129,10 +131,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   List<FriendStateRecord> get _incomingRequests {
     final existing = _entries.map((e) => e.hexKey.toLowerCase()).toSet();
+    final selfHex = (widget.myPubkeyHex ?? '').trim().toLowerCase();
     final out = <FriendStateRecord>[];
     for (final fs in widget.friendStates.values) {
       if (fs.statusEnum != FriendStatus.pendingIncoming) continue;
       final key = fs.peerPubkeyHex.toLowerCase();
+      if (selfHex.isNotEmpty && key == selfHex) continue;
       if (existing.contains(key)) continue;
       out.add(fs);
     }
@@ -367,6 +371,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
       return;
     }
     final hex = data.publicKeyHex!;
+    if (_isSelfHex(hex)) {
+      _showSnack('You cannot add your own key as a contact');
+      return;
+    }
     if (_entries.any((e) => e.hexKey.toLowerCase() == hex.toLowerCase())) {
       _showSnack('This contact is already in your list');
       return;
@@ -439,6 +447,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   if (hex.length != 64 ||
                       !RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
                     setS(() => keyError = 'Must be exactly 64 hex characters');
+                    return;
+                  }
+                  if (_isSelfHex(hex)) {
+                    setS(() => keyError = 'You cannot add your own key');
                     return;
                   }
                   if (_entries.any(
@@ -577,6 +589,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   if (newHex.length != 64 ||
                       !RegExp(r'^[0-9a-fA-F]+$').hasMatch(newHex)) {
                     setS(() => keyError = 'Must be exactly 64 hex characters');
+                    return;
+                  }
+                  if (_isSelfHex(newHex)) {
+                    setS(() => keyError = 'You cannot use your own key');
                     return;
                   }
 
@@ -722,6 +738,25 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   String _shortKey(String hex) =>
       '${hex.substring(0, 8)}…${hex.substring(hex.length - 8)}';
+
+  List<WhitelistEntry> _sanitizeEntries(List<WhitelistEntry> entries) {
+    final selfHex = (widget.myPubkeyHex ?? '').trim().toLowerCase();
+    final seen = <String>{};
+    final out = <WhitelistEntry>[];
+    for (final e in entries) {
+      final hex = e.hexKey.toLowerCase();
+      if (selfHex.isNotEmpty && hex == selfHex) continue;
+      if (!seen.add(hex)) continue;
+      out.add(e);
+    }
+    return out;
+  }
+
+  bool _isSelfHex(String hex) {
+    final selfHex = (widget.myPubkeyHex ?? '').trim().toLowerCase();
+    if (selfHex.isEmpty) return false;
+    return hex.trim().toLowerCase() == selfHex;
+  }
 
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(

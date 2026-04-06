@@ -44,6 +44,7 @@ class HomeUserDirCoordinator {
   Timer? _profileRegisterTimer;
   Future<void> _notifyQueue = Future.value();
   String _lastRegisteredFingerprint = '';
+  String _activeAccountId = '';
 
   Map<String, ContactProfile> _contactProfiles = {};
   Map<String, FriendStateRecord> _friendStates = {};
@@ -60,17 +61,29 @@ class HomeUserDirCoordinator {
       );
 
   Future<HomeUserDirState> start(HomeUserDirSession session) async {
+    _activeAccountId = session.accountId.trim();
+    _notifyQueue = Future.value();
+    _lastRegisteredFingerprint = '';
     final accountState = await _persistence.loadAccountState(session.accountId);
+    final storedProfiles =
+        await _persistence.loadAllContactProfiles(session.accountId);
+    _contactProfiles = {
+      for (final e in storedProfiles.entries) e.key.toLowerCase(): e.value,
+    };
     _friendStates = Map<String, FriendStateRecord>.from(accountState.friendStates);
     _suppressedContacts = Set<String>.from(accountState.suppressedContacts);
-    _whitelist = List<WhitelistEntry>.from(session.whitelist);
-    _nicknames = Map<String, String>.from(session.nicknames);
+    _whitelist = _sanitizeWhitelist(session, session.whitelist);
+    _nicknames = {for (final e in _whitelist) e.hexKey.toLowerCase(): e.name};
+    if (_whitelist.length != session.whitelist.length) {
+      await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
+    }
     _emit();
     await _initUserDir(session);
     return currentState;
   }
 
   Future<HomeUserDirState> refresh(HomeUserDirSession session) async {
+    if (!_isCurrentSession(session)) return currentState;
     final client = _client;
     if (client == null || !client.isConnected) {
       await _initUserDir(session);
@@ -87,6 +100,7 @@ class HomeUserDirCoordinator {
     HomeUserDirSession session, {
     bool force = false,
   }) async {
+    if (!_isCurrentSession(session)) return null;
     final fp = _support.buildProfileFingerprint(
       publicKey: session.config.myPublicKey,
       nickname: session.nickname,
@@ -153,11 +167,12 @@ class HomeUserDirCoordinator {
     required List<WhitelistEntry> nextWhitelist,
     required Map<String, String> nextNicknames,
   }) async {
-    _whitelist = List<WhitelistEntry>.from(nextWhitelist);
-    _nicknames = Map<String, String>.from(nextNicknames);
+    if (!_isCurrentSession(session)) return currentState;
+    _whitelist = _sanitizeWhitelist(session, nextWhitelist);
+    _nicknames = {for (final e in _whitelist) e.hexKey.toLowerCase(): e.name};
 
     final oldSet = previousWhitelist.map((e) => e.hexKey.toLowerCase()).toSet();
-    final nextSet = nextWhitelist.map((e) => e.hexKey.toLowerCase()).toSet();
+    final nextSet = _whitelist.map((e) => e.hexKey.toLowerCase()).toSet();
     final removed = previousWhitelist
         .where((e) => !nextSet.contains(e.hexKey.toLowerCase()));
     final added =
@@ -192,6 +207,8 @@ class HomeUserDirCoordinator {
     required String peerHex,
     required bool accept,
   }) async {
+    if (!_isCurrentSession(session)) return false;
+    if (_isSelfHex(session, peerHex)) return false;
     var client = _client;
     if (client == null || !client.isConnected) {
       await _initUserDir(session);
@@ -220,18 +237,22 @@ class HomeUserDirCoordinator {
   }
 
   Future<void> dispose() async {
-    _userDirSub?.cancel();
-    _friendDirSub?.cancel();
+    await _userDirSub?.cancel();
+    await _friendDirSub?.cancel();
     _friendSyncTimer?.cancel();
     _profileRegisterTimer?.cancel();
     _client?.close();
     _client = null;
+    _activeAccountId = '';
+    _notifyQueue = Future.value();
   }
 
   Future<void> _removeFriendOnServer(
     HomeUserDirSession session,
     String peerHex,
   ) async {
+    if (!_isCurrentSession(session)) return;
+    if (_isSelfHex(session, peerHex)) return;
     var client = _client;
     if (client == null || !client.isConnected) {
       await _initUserDir(session);
@@ -258,6 +279,8 @@ class HomeUserDirCoordinator {
     HomeUserDirSession session,
     WhitelistEntry entry,
   ) async {
+    if (!_isCurrentSession(session)) return;
+    if (_isSelfHex(session, entry.hexKey)) return;
     var client = _client;
     if (client == null || !client.isConnected) {
       await _initUserDir(session);
@@ -289,7 +312,9 @@ class HomeUserDirCoordinator {
     HomeUserDirSession session,
     String peerHex,
   ) async {
+    if (!_isCurrentSession(session)) return;
     final lower = peerHex.toLowerCase();
+    if (_isSelfHex(session, lower)) return;
     if (_suppressedContacts.contains(lower)) return;
     if (_whitelist.any((e) => e.hexKey.toLowerCase() == lower)) return;
 
@@ -337,6 +362,7 @@ class HomeUserDirCoordinator {
     HomeUserDirSession session,
     IUserDirClient client,
   ) async {
+    if (!_isCurrentSession(session)) return;
     final snapshot = await client.friendSync(
       myPubkey: session.config.myPublicKey,
       identityKeyPair: session.config.identityKeyPair,
@@ -348,23 +374,41 @@ class HomeUserDirCoordinator {
 
     final next = <String, FriendStateRecord>{};
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final selfHex = _pubkeyHex(session.config.myPublicKey);
     for (final item in snapshot) {
       final peerHex = item.peerPubkeyHex.toLowerCase();
+      if (peerHex == selfHex) {
+        // Defensive: ignore server states that target our own identity.
+        continue;
+      }
       final status = switch (item.status) {
-        UserDirFriendStatus.pendingOutgoing =>
-          FriendStatus.pendingOutgoing.name,
-        UserDirFriendStatus.pendingIncoming =>
-          FriendStatus.pendingIncoming.name,
-        UserDirFriendStatus.friend => FriendStatus.friend.name,
-        UserDirFriendStatus.rejected => FriendStatus.rejected.name,
-        _ => FriendStatus.none.name,
+        UserDirFriendStatus.pendingOutgoing => FriendStatus.pendingOutgoing,
+        UserDirFriendStatus.pendingIncoming => FriendStatus.pendingIncoming,
+        UserDirFriendStatus.friend => FriendStatus.friend,
+        UserDirFriendStatus.rejected => FriendStatus.rejected,
+        _ => FriendStatus.none,
       };
-      next[peerHex] = FriendStateRecord(
+      if (status == FriendStatus.none) {
+        // Ignore unknown/empty statuses from transient snapshots.
+        continue;
+      }
+      final candidate = FriendStateRecord(
         peerPubkeyHex: peerHex,
-        status: status,
+        status: status.name,
         roomUUIDHex: item.roomUUIDHex,
         updatedAt: now,
       );
+      final previous = next[peerHex];
+      if (previous == null ||
+          _friendStatusPriority(status) >
+              _friendStatusPriority(previous.statusEnum)) {
+        next[peerHex] = candidate;
+      } else if (previous.roomUUIDHex == null && candidate.roomUUIDHex != null) {
+        next[peerHex] = previous.copyWith(
+          roomUUIDHex: candidate.roomUUIDHex,
+          updatedAt: now,
+        );
+      }
 
       if (item.status == UserDirFriendStatus.pendingIncoming) {
         final cached = _contactProfiles[peerHex];
@@ -409,13 +453,19 @@ class HomeUserDirCoordinator {
       }
     }
 
-    _friendStates = next;
+    _friendStates = _stabilizeFriendStates(
+      previous: _friendStates,
+      next: next,
+      nowSec: now,
+    );
+    if (!_isCurrentSession(session)) return;
     await _persistence.saveFriendStates(session.accountId, _friendStates);
     await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
     _emit();
   }
 
   Future<void> _initUserDir(HomeUserDirSession session) async {
+    if (!_isCurrentSession(session)) return;
     if (session.accountId.trim().isEmpty) {
       AppLogger.w('UDIR skip: no accountId', tag: 'UDIR');
       return;
@@ -429,6 +479,16 @@ class HomeUserDirCoordinator {
       AppLogger.w('UDIR skip: node not found (nodeId=$currentNodeId)', tag: 'UDIR');
       return;
     }
+    _friendSyncTimer?.cancel();
+    _profileRegisterTimer?.cancel();
+    await _userDirSub?.cancel();
+    await _friendDirSub?.cancel();
+    _userDirSub = null;
+    _friendDirSub = null;
+    final previousClient = _client;
+    _client = null;
+    previousClient?.close();
+
     final client = _clientFactory(resolved.node, resolved.options);
     if (client == null) {
       AppLogger.w(
@@ -441,10 +501,6 @@ class HomeUserDirCoordinator {
     AppLogger.i('UDIR connecting via ${client.label}', tag: 'UDIR');
     try {
       await client.connect();
-      _client?.close();
-      _userDirSub?.cancel();
-      _friendDirSub?.cancel();
-      _friendSyncTimer?.cancel();
       _client = client;
 
       await registerSelf(session, force: false);
@@ -474,13 +530,9 @@ class HomeUserDirCoordinator {
         unawaited(registerSelf(session, force: false));
       });
       await _syncFriendStates(session, client);
-      for (final entry in _whitelist) {
-        final st = _friendStates[entry.hexKey.toLowerCase()]?.statusEnum ??
-            FriendStatus.none;
-        if (st == FriendStatus.none) {
-          await _sendFriendRequestFor(session, entry);
-        }
-      }
+      // Do not auto-send friend requests on reconnect/refresh.
+      // Requests are sent explicitly when the user adds a contact
+      // (see applyWhitelistChanges -> _sendFriendRequestFor).
     } catch (e, st) {
       AppLogger.e('UDIR init failed: $e\n$st', tag: 'UDIR');
     }
@@ -490,6 +542,7 @@ class HomeUserDirCoordinator {
     HomeUserDirSession session,
     IUserDirClient client,
   ) async {
+    if (!_isCurrentSession(session)) return;
     final cached = await _persistence.loadAllContactProfiles(session.accountId);
     for (final contact in _whitelist) {
       final meta = await client.getMeta(contact.bytes);
@@ -535,6 +588,7 @@ class HomeUserDirCoordinator {
     UserDirMeta meta,
     IUserDirClient client,
   ) async {
+    if (!_isCurrentSession(session)) return;
     final cached = await _persistence.loadContactProfile(
       session.accountId,
       meta.pubkeyHex,
@@ -572,5 +626,61 @@ class HomeUserDirCoordinator {
 
   void _emit() {
     _onStateChanged(currentState);
+  }
+
+  int _friendStatusPriority(FriendStatus status) => switch (status) {
+        FriendStatus.none => 0,
+        FriendStatus.rejected => 1,
+        FriendStatus.pendingOutgoing => 2,
+        FriendStatus.pendingIncoming => 3,
+        FriendStatus.friend => 4,
+      };
+
+  List<WhitelistEntry> _sanitizeWhitelist(
+    HomeUserDirSession session,
+    List<WhitelistEntry> entries,
+  ) {
+    final selfHex = _pubkeyHex(session.config.myPublicKey);
+    final seen = <String>{};
+    final out = <WhitelistEntry>[];
+    for (final e in entries) {
+      final hex = e.hexKey.toLowerCase();
+      if (hex == selfHex) continue;
+      if (!seen.add(hex)) continue;
+      out.add(e);
+    }
+    return out;
+  }
+
+  bool _isSelfHex(HomeUserDirSession session, String hex) =>
+      hex.toLowerCase() == _pubkeyHex(session.config.myPublicKey);
+
+  bool _isCurrentSession(HomeUserDirSession session) =>
+      session.accountId.trim().isNotEmpty &&
+      session.accountId.trim() == _activeAccountId;
+
+  String _pubkeyHex(Uint8List key) =>
+      key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  Map<String, FriendStateRecord> _stabilizeFriendStates({
+    required Map<String, FriendStateRecord> previous,
+    required Map<String, FriendStateRecord> next,
+    required int nowSec,
+  }) {
+    // Friend snapshots can be briefly incomplete during reconnect/replication.
+    // Keep recent non-none states for a short grace window to avoid UI flicker.
+    const int graceSeconds = 20;
+    final merged = Map<String, FriendStateRecord>.from(next);
+    for (final entry in previous.entries) {
+      final key = entry.key;
+      if (merged.containsKey(key)) continue;
+      final old = entry.value;
+      if (old.statusEnum == FriendStatus.none) continue;
+      final age = nowSec - old.updatedAt;
+      if (age <= graceSeconds) {
+        merged[key] = old;
+      }
+    }
+    return merged;
   }
 }

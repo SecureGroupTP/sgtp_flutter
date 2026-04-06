@@ -639,7 +639,13 @@ class SettingsRepository {
 
   Future<void> saveUserNicknameForNode(String nodeId, String nickname) async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_scopedKey(_userNicknameKey, nodeId), nickname.trim());
+    final key = _scopedKey(_userNicknameKey, nodeId);
+    final value = nickname.trim();
+    if (value.isEmpty) {
+      await p.remove(key);
+      return;
+    }
+    await p.setString(key, value);
   }
 
   // ── User username ────────────────────────────────────────────────────────
@@ -651,7 +657,13 @@ class SettingsRepository {
 
   Future<void> saveUserUsernameForNode(String nodeId, String username) async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_scopedKey(_userUsernameKey, nodeId), username.trim());
+    final key = _scopedKey(_userUsernameKey, nodeId);
+    final value = username.trim();
+    if (value.isEmpty) {
+      await p.remove(key);
+      return;
+    }
+    await p.setString(key, value);
   }
 
   // ── Media transfer ───────────────────────────────────────────────────────
@@ -1065,4 +1077,3 @@ class QrStyleSettings {
     );
   }
 }
-

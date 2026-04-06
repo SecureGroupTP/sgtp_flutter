@@ -60,6 +60,7 @@ class UserDirClient implements IUserDirClient {
 
   final _buf = <int>[];
   final _pending = <Completer<Uint8List?>>[];
+  Future<void> _requestQueue = Future<void>.value();
   StreamController<UserDirMeta>? _notifyCtrl;
   StreamController<UserDirFriendNotify>? _friendNotifyCtrl;
   StreamSubscription<Uint8List>? _sub;
@@ -230,34 +231,54 @@ class UserDirClient implements IUserDirClient {
   }
 
   Future<Uint8List?> _send(int msgType, Uint8List payload) async {
-    if (_closed || !_transport.isConnected) return null;
+    // SGTP userdir protocol expects a strict request/response sequence.
+    // Serializing send operations avoids in-flight races and response mixups.
+    final done = Completer<Uint8List?>();
+    _requestQueue = _requestQueue.catchError((_) {}).then((_) async {
+      if (_closed || !_transport.isConnected) {
+        done.complete(null);
+        return;
+      }
 
-    final body = Uint8List(1 + payload.length);
-    body[0] = msgType;
-    body.setRange(1, body.length, payload);
+      final body = Uint8List(1 + payload.length);
+      body[0] = msgType;
+      body.setRange(1, body.length, payload);
 
-    final len = body.length;
-    final frame = Uint8List(4 + len);
-    frame[0] = (len >> 24) & 0xff;
-    frame[1] = (len >> 16) & 0xff;
-    frame[2] = (len >> 8) & 0xff;
-    frame[3] = len & 0xff;
-    frame.setRange(4, frame.length, body);
+      final len = body.length;
+      final frame = Uint8List(4 + len);
+      frame[0] = (len >> 24) & 0xff;
+      frame[1] = (len >> 16) & 0xff;
+      frame[2] = (len >> 8) & 0xff;
+      frame[3] = len & 0xff;
+      frame.setRange(4, frame.length, body);
 
-    AppLogger.d(
-      '→ OUTBOUND  ${_msgName(msgType).padRight(14)} ${payload.length}B',
-      tag: _tag,
-    );
+      AppLogger.d(
+        '→ OUTBOUND  ${_msgName(msgType).padRight(14)} ${payload.length}B',
+        tag: _tag,
+      );
 
-    final c = Completer<Uint8List?>();
-    _pending.add(c);
-    await _transport.send(frame);
+      final c = Completer<Uint8List?>();
+      _pending.add(c);
+      try {
+        await _transport.send(frame);
+      } catch (e) {
+        _pending.remove(c);
+        AppLogger.w('Send failed for ${_msgName(msgType)}: $e', tag: _tag);
+        done.complete(null);
+        return;
+      }
 
-    return c.future.timeout(const Duration(seconds: 15), onTimeout: () {
-      AppLogger.w('${_msgName(msgType)} timed out', tag: _tag);
-      _pending.remove(c);
-      return null;
+      final resp = await c.future.timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          AppLogger.w('${_msgName(msgType)} timed out', tag: _tag);
+          _pending.remove(c);
+          return null;
+        },
+      );
+      done.complete(resp);
     });
+    return done.future;
   }
 
   /// Registers (or updates) the caller's own profile on the server.
