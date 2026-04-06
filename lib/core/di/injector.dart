@@ -53,6 +53,7 @@ class AppInjector {
     final settingsManagementService = SettingsManagementService(
       settingsRepository: settingsRepository,
       appBackupRepository: appBackupRepository,
+      userDirClientFactory: UserDirClient.forNode,
     );
     const chatStorageGateway = DefaultChatStorageGateway();
     final homePersistenceService = HomePersistenceService(

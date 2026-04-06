@@ -10,6 +10,7 @@ import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
+import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/setup/data/repositories/app_backup_repository.dart';
@@ -22,11 +23,14 @@ class SettingsManagementService {
   SettingsManagementService({
     required SettingsRepository settingsRepository,
     required AppBackupRepository appBackupRepository,
+    required UserDirClientFactory userDirClientFactory,
   })  : _settings = settingsRepository,
-        _backups = appBackupRepository;
+        _backups = appBackupRepository,
+        _userDirClientFactory = userDirClientFactory;
 
   final SettingsRepository _settings;
   final AppBackupRepository _backups;
+  final UserDirClientFactory _userDirClientFactory;
 
   Future<List<NodeConfig>> loadNodes() => _settings.loadNodes();
   Future<List<String>> loadAccountIds() => _settings.loadAccountIds();
@@ -254,6 +258,69 @@ class SettingsManagementService {
     await _settings.upsertAccountId(accountId);
     await _settings.saveUserNicknameForNode(accountId, 'Account');
     await _settings.setLastAccountId(accountId);
+  }
+
+  Future<String?> registerProfileOnUserDir({
+    required NodeConfig node,
+    required SgtpServerOptions options,
+    required Uint8List privateKeyBytes,
+    required String nickname,
+    required String username,
+    Uint8List? avatarBytes,
+  }) async {
+    try {
+      final parsed = parseOpenSshPrivateKey(privateKeyBytes);
+      final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
+      final normalizedUsername = _normalizeUsername(username);
+      final wireUsername =
+          normalizedUsername == null ? '' : '@$normalizedUsername';
+
+      final client = _userDirClientFactory(node, options);
+      if (client == null) {
+        return 'User directory is not available on this server';
+      }
+      try {
+        await client.connect();
+        final result = await client.registerWithResult(
+          username: wireUsername,
+          fullname: nickname.trim(),
+          pubkey: parsed.publicKey,
+          avatarBytes: avatarBytes ?? Uint8List(0),
+          identityKeyPair: keyPair,
+        );
+        if (result.ok) return null;
+        final msg = (result.errorMessage ?? '').trim();
+        final lower = msg.toLowerCase();
+        if (lower.contains('taken') ||
+            lower.contains('exists') ||
+            lower.contains('occupied') ||
+            lower.contains('already')) {
+          return 'Username already taken';
+        }
+        if (msg.isNotEmpty) return msg;
+        final code = result.errorCode;
+        if (code != null) {
+          return 'Username update failed (code: 0x${code.toRadixString(16)})';
+        }
+        return 'Profile registration failed';
+      } finally {
+        client.close();
+      }
+    } catch (e) {
+      return 'Profile registration failed: $e';
+    }
+  }
+
+  String? _normalizeUsername(String raw) {
+    final stripped = raw.trim().replaceFirst(RegExp(r'^@+'), '');
+    final sanitized = stripped
+        .replaceAll(RegExp(r'[^A-Za-z0-9_]'), '')
+        .substring(
+          0,
+          stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
+        );
+    if (sanitized.isEmpty) return null;
+    return sanitized;
   }
 
   Future<void> saveDetachedNode(NodeConfig node) {

@@ -251,9 +251,29 @@ class _OnboardingPageState extends State<OnboardingPage> {
       savedKey ??= await _settings.loadPrivateKey();
       if (savedKey == null) {
         await _settings.generatePrivateKey(accountId: accountId);
+        savedKey = await _settings.loadPrivateKeyForNode(accountId);
       } else {
         // validate key once to ensure the startup screen won't fail loop
         parseOpenSshPrivateKey(savedKey.bytes);
+      }
+      if (savedKey == null) {
+        throw const FormatException('No private key for account');
+      }
+
+      final options = _resolvedOptions;
+      if (options == null) {
+        throw const FormatException('Server options are not resolved');
+      }
+      final registerError = await _settings.registerProfileOnUserDir(
+        node: node,
+        options: options,
+        privateKeyBytes: savedKey.bytes,
+        nickname: nick,
+        username: username,
+        avatarBytes: _avatarBytes,
+      );
+      if (registerError != null && registerError.trim().isNotEmpty) {
+        throw FormatException(registerError);
       }
 
       if (!mounted) return;
