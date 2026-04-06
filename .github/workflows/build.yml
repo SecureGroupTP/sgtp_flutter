@@ -107,6 +107,70 @@ jobs:
         if: matrix.platform == 'macos'
         run: flutter build macos --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
 
+      - name: Bundle Homebrew dylibs (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(ls -d build/macos/Build/Products/Release/*.app | head -n 1)"
+          APP_NAME="$(basename "$APP_PATH" .app)"
+          APP_BIN="$APP_PATH/Contents/MacOS/$APP_NAME"
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+
+          mkdir -p "$FRAMEWORKS_DIR"
+
+          QUEUE_FILE="$(mktemp)"
+          SEEN_FILE="$(mktemp)"
+          trap 'rm -f "$QUEUE_FILE" "$SEEN_FILE"' EXIT
+
+          echo "$APP_BIN" >> "$QUEUE_FILE"
+
+          bundle_deps() {
+            local bin="$1"
+            [ -f "$bin" ] || return 0
+
+            otool -L "$bin" | tail -n +2 | awk '{print $1}' | while read -r dep; do
+              case "$dep" in
+                /opt/homebrew/*)
+                  if [ ! -f "$dep" ]; then
+                    continue
+                  fi
+
+                  local base dst
+                  base="$(basename "$dep")"
+                  dst="$FRAMEWORKS_DIR/$base"
+
+                  if [ ! -f "$dst" ]; then
+                    cp -f "$dep" "$dst"
+                    chmod u+w "$dst"
+                    install_name_tool -id "@rpath/$base" "$dst"
+                    echo "$dst" >> "$QUEUE_FILE"
+                  fi
+
+                  install_name_tool -change "$dep" "@rpath/$base" "$bin" || true
+                  ;;
+              esac
+            done
+          }
+
+          line_no=1
+          while true; do
+            current="$(sed -n "${line_no}p" "$QUEUE_FILE")"
+            [ -n "$current" ] || break
+            line_no=$((line_no + 1))
+
+            [ -f "$current" ] || continue
+            if grep -Fxq "$current" "$SEEN_FILE"; then
+              continue
+            fi
+            echo "$current" >> "$SEEN_FILE"
+            bundle_deps "$current"
+          done
+
+          echo "Bundled dylibs:"
+          find "$FRAMEWORKS_DIR" -maxdepth 1 -type f -name "*.dylib" -print | sort
+
       - name: Build (Android arm64)
         if: matrix.platform == 'android' && matrix.arch == 'arm64'
         run: flutter build apk --release --target-platform android-arm64 --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
