@@ -37,41 +37,51 @@ class UserAvatar extends StatelessWidget {
     return _gradients[h.abs() % _gradients.length];
   }
 
+  bool get _hasAvatarBytes => bytes != null && bytes!.isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
     final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
     final gradient = gradientForName(name);
     final fontSize = (size * 0.38).clamp(11.0, 22.0);
+    final placeholder = Center(
+      child: Text(
+        initial,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+    );
 
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: bytes == null
-            ? LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: gradient,
-              )
-            : null,
-        image: bytes != null
-            ? DecorationImage(image: MemoryImage(bytes!), fit: BoxFit.cover)
-            : null,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: gradient,
+        ),
         border: border,
       ),
-      child: bytes == null
-          ? Center(
-              child: Text(
-                initial,
-                style: TextStyle(
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
+      child: _hasAvatarBytes
+          ? ClipOval(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  placeholder,
+                  Image.memory(
+                    bytes!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+                ],
               ),
             )
-          : null,
+          : placeholder,
     );
   }
 }

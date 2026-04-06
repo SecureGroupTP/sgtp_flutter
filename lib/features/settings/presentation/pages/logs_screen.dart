@@ -25,8 +25,8 @@ class _LogsScreenState extends State<LogsScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final TextEditingController _searchCtrl = TextEditingController();
 
-  LogLevel? _filterLevel;   // null = show all
-  String    _searchText = '';
+  LogLevel? _filterLevel; // null = show all
+  String _searchText = '';
 
   @override
   void initState() {
@@ -78,11 +78,11 @@ class _LogsScreenState extends State<LogsScreen> {
   }
 
   Color _levelColor(LogLevel l) => switch (l) {
-    LogLevel.debug => const Color(0xFF636366),
-    LogLevel.info  => const Color(0xFF0A84FF),
-    LogLevel.warn  => const Color(0xFFFF9F0A),
-    LogLevel.error => const Color(0xFFFF3B30),
-  };
+        LogLevel.debug => const Color(0xFF636366),
+        LogLevel.info => const Color(0xFF0A84FF),
+        LogLevel.warn => const Color(0xFFFF9F0A),
+        LogLevel.error => const Color(0xFFFF3B30),
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -102,8 +102,7 @@ class _LogsScreenState extends State<LogsScreen> {
     );
   }
 
-  PreferredSizeWidget _buildAppBar(
-      BuildContext context, int total, int shown) {
+  PreferredSizeWidget _buildAppBar(BuildContext context, int total, int shown) {
     return PreferredSize(
       preferredSize: const Size.fromHeight(64),
       child: Container(
@@ -139,8 +138,7 @@ class _LogsScreenState extends State<LogsScreen> {
                             ? '$total entries'
                             : '$shown / $total shown',
                         style: const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textSecondary),
+                            fontSize: 12, color: AppColors.textSecondary),
                       ),
                     ],
                   ),
@@ -216,9 +214,8 @@ class _LogsScreenState extends State<LogsScreen> {
             padding: const EdgeInsets.only(right: 6),
             child: _LevelChip(
               label: level == null ? 'All' : level.name.toUpperCase(),
-              color: level == null
-                  ? const Color(0xFF8E8E93)
-                  : _levelColor(level),
+              color:
+                  level == null ? const Color(0xFF8E8E93) : _levelColor(level),
               selected: _filterLevel == level,
               onTap: () => setState(() => _filterLevel = level),
             ),
@@ -235,16 +232,16 @@ class _LogsScreenState extends State<LogsScreen> {
             ),
             child: TextField(
               controller: _searchCtrl,
-              style: const TextStyle(
-                  fontSize: 13, color: AppColors.textPrimary),
+              style:
+                  const TextStyle(fontSize: 13, color: AppColors.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Search…',
                 hintStyle: const TextStyle(
                     fontSize: 13, color: AppColors.textSecondary),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 7),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 suffixIcon: _searchText.isNotEmpty
                     ? GestureDetector(
                         onTap: () {
@@ -274,8 +271,8 @@ class _LogsScreenState extends State<LogsScreen> {
             AppLogger.entries.isEmpty
                 ? 'No log entries yet'
                 : 'No entries match the filter',
-            style: const TextStyle(
-                fontSize: 15, color: AppColors.textSecondary),
+            style:
+                const TextStyle(fontSize: 15, color: AppColors.textSecondary),
           ),
         ]),
       );
@@ -285,7 +282,12 @@ class _LogsScreenState extends State<LogsScreen> {
       controller: _scrollCtrl,
       padding: const EdgeInsets.only(bottom: 16),
       itemCount: entries.length,
-      itemBuilder: (_, i) => _LogRow(entry: entries[i]),
+      itemBuilder: (_, i) => _LogRow(
+        key: ValueKey(
+          '${entries[i].time.microsecondsSinceEpoch}-${entries[i].level.index}-${entries[i].tag}-${entries[i].message.hashCode}',
+        ),
+        entry: entries[i],
+      ),
     );
   }
 }
@@ -335,26 +337,51 @@ class _LevelChip extends StatelessWidget {
 
 // ─── Single log entry row ─────────────────────────────────────────────────────
 
-class _LogRow extends StatelessWidget {
+class _LogRow extends StatefulWidget {
   final LogEntry entry;
-  const _LogRow({required this.entry});
+  const _LogRow({super.key, required this.entry});
+
+  @override
+  State<_LogRow> createState() => _LogRowState();
+}
+
+class _LogRowState extends State<_LogRow> {
+  static const int _previewLength = 100;
+
+  bool _expanded = false;
+
+  LogEntry get entry => widget.entry;
 
   Color get _levelColor => switch (entry.level) {
-    LogLevel.debug => const Color(0xFF636366),
-    LogLevel.info  => const Color(0xFF0A84FF),
-    LogLevel.warn  => const Color(0xFFFF9F0A),
-    LogLevel.error => const Color(0xFFFF3B30),
-  };
+        LogLevel.debug => const Color(0xFF636366),
+        LogLevel.info => const Color(0xFF0A84FF),
+        LogLevel.warn => const Color(0xFFFF9F0A),
+        LogLevel.error => const Color(0xFFFF3B30),
+      };
 
   Color get _rowBg => switch (entry.level) {
-    LogLevel.error => const Color(0x12FF3B30),
-    LogLevel.warn  => const Color(0x10FF9F0A),
-    _              => Colors.transparent,
-  };
+        LogLevel.error => const Color(0x12FF3B30),
+        LogLevel.warn => const Color(0x10FF9F0A),
+        _ => Colors.transparent,
+      };
+
+  bool get _canExpand {
+    final compact = entry.message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return compact.length > _previewLength || entry.message.contains('\n');
+  }
+
+  String get _collapsedMessage {
+    final compact = entry.message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (compact.length <= _previewLength) {
+      return compact;
+    }
+    return '${compact.substring(0, _previewLength)}…';
+  }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      onTap: _canExpand ? () => setState(() => _expanded = !_expanded) : null,
       onLongPress: () {
         Clipboard.setData(ClipboardData(text: entry.toString()));
         ScaffoldMessenger.of(context).showSnackBar(
@@ -368,60 +395,78 @@ class _LogRow extends StatelessWidget {
       child: Container(
         color: _rowBg,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Timestamp
-            Text(
-              entry.timeLabel,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
-                color: Color(0xFF636366),
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Level badge
-            Container(
-              width: 40,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 3, vertical: 1),
-              decoration: BoxDecoration(
-                color: _levelColor.withAlpha(30),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                entry.level.name.toUpperCase(),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: _levelColor,
-                  letterSpacing: 0.3,
+        child: AnimatedSize(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Timestamp
+              Text(
+                entry.timeLabel,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: Color(0xFF636366),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            // Message
-            Expanded(
-              child: Text(
-                entry.message,
-                style: TextStyle(
-                  fontFamily: entry.level == LogLevel.error ||
-                          entry.level == LogLevel.warn
-                      ? null
-                      : 'monospace',
-                  fontSize: 12,
-                  color: entry.level == LogLevel.error
-                      ? const Color(0xFFFF6B63)
-                      : entry.level == LogLevel.warn
-                          ? const Color(0xFFFFBF3B)
-                          : const Color(0xFFF5F5F5),
-                  height: 1.4,
+              const SizedBox(width: 8),
+              // Level badge
+              Container(
+                width: 40,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 3,
+                  vertical: 1,
+                ),
+                decoration: BoxDecoration(
+                  color: _levelColor.withAlpha(30),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  entry.level.name.toUpperCase(),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: _levelColor,
+                    letterSpacing: 0.3,
+                  ),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              // Message
+              Expanded(
+                child: Text(
+                  _expanded ? entry.message : _collapsedMessage,
+                  maxLines: _expanded ? null : 1,
+                  style: TextStyle(
+                    fontFamily: entry.level == LogLevel.error ||
+                            entry.level == LogLevel.warn
+                        ? null
+                        : 'monospace',
+                    fontSize: 12,
+                    color: entry.level == LogLevel.error
+                        ? const Color(0xFFFF6B63)
+                        : entry.level == LogLevel.warn
+                            ? const Color(0xFFFFBF3B)
+                            : const Color(0xFFF5F5F5),
+                    height: 1.4,
+                  ),
+                ),
+              ),
+              if (_canExpand) ...[
+                const SizedBox(width: 6),
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 16,
+                    color: const Color(0xFF636366),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
