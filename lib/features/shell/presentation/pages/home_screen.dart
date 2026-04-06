@@ -9,7 +9,7 @@ import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_bl
 import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/shell/presentation/widgets/app_nav_bar.dart';
-import 'package:sgtp_flutter/features/contacts/presentation/pages/contacts_screen.dart';
+import 'package:sgtp_flutter/features/contacts/presentation/pages/contacts_page.dart';
 import 'package:sgtp_flutter/features/setup/presentation/pages/onboarding_page.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/pages/rooms_page.dart';
 import 'package:sgtp_flutter/features/settings/presentation/pages/settings_screen.dart';
@@ -299,7 +299,7 @@ class _HomeScreenState extends State<HomeScreen> {
               serverAddress: _serverAddress,
             ),
             // 1 — Contacts
-            ContactsScreen(
+            ContactsPage(
               accountId: _accountId,
               serverNodeId: _config.nodeId,
               myPubkeyHex: _config.myPublicKey

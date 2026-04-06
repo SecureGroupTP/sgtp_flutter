@@ -1,44 +1,24 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
-import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
+import 'package:sgtp_flutter/features/contacts/application/models/contacts_models.dart';
+import 'package:sgtp_flutter/features/contacts/application/viewmodels/contacts_cubit.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_scanner_dialog.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
-import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 /// Contacts screen — shows the trusted-peer whitelist.
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
 class ContactsScreen extends StatefulWidget {
-  final String accountId;
-  final String? serverNodeId;
-  final String? myPubkeyHex;
-  final List<WhitelistEntry> initialEntries;
-  final Map<String, ContactProfile> contactProfiles;
-  final Map<String, FriendStateRecord> friendStates;
-
-  /// Called whenever the whitelist changes so HomeScreen can propagate
-  /// updated nicknames to RoomsBloc.
-  final void Function(List<WhitelistEntry> entries) onEntriesChanged;
   final Future<bool> Function(String peerPubkeyHex, bool accept)?
       onFriendRespond;
   final void Function(String roomUUIDHex)? onOpenDm;
 
   const ContactsScreen({
     super.key,
-    required this.accountId,
-    this.serverNodeId,
-    this.myPubkeyHex,
-    required this.initialEntries,
-    required this.onEntriesChanged,
-    this.contactProfiles = const {},
-    this.friendStates = const {},
     this.onFriendRespond,
     this.onOpenDm,
   });
@@ -48,180 +28,28 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
-  late final ContactsDirectoryService _directoryService;
-  late List<WhitelistEntry> _entries;
   final _searchCtrl = TextEditingController();
-  Timer? _searchDebounce;
-  String _search = '';
-  _ServerSearchHit? _serverSearchHit;
-  String? _recentlyAddedUsername;
-  Timer? _recentlyAddedTimer;
-  int _searchRequestId = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _directoryService = context.read<ContactsDirectoryService>();
-    _entries = _sanitizeEntries(widget.initialEntries);
-  }
-
-  @override
-  void didUpdateWidget(covariant ContactsScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final entriesChanged =
-        !_sameEntries(oldWidget.initialEntries, widget.initialEntries);
-    if (oldWidget.accountId != widget.accountId ||
-        oldWidget.serverNodeId != widget.serverNodeId ||
-        entriesChanged) {
-      _searchDebounce?.cancel();
-      _searchRequestId++;
-      setState(() {
-        _entries = _sanitizeEntries(widget.initialEntries);
-        if (oldWidget.accountId != widget.accountId ||
-            oldWidget.serverNodeId != widget.serverNodeId) {
-          _search = '';
-          _searchCtrl.clear();
-          _serverSearchHit = null;
-          _recentlyAddedUsername = null;
-        }
-      });
-    }
-  }
-
-  bool _sameEntries(List<WhitelistEntry> a, List<WhitelistEntry> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].hexKey.toLowerCase() != b[i].hexKey.toLowerCase()) return false;
-      if (a[i].name != b[i].name) return false;
-    }
-    return true;
-  }
+  ContactsCubit get _cubit => context.read<ContactsCubit>();
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
-    _recentlyAddedTimer?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
 
-  // ── Smart search with ranking ────────────────────────────────────────────
-
-  List<WhitelistEntry> get _filtered {
-    final q = _search.toLowerCase().trim();
-    if (q.isEmpty) return _entries;
-
-    final scored = <({WhitelistEntry entry, int score})>[];
-    for (final e in _entries) {
-      final name = e.name.toLowerCase();
-      final key = e.hexKey.toLowerCase();
-      int score = -1;
-
-      if (name.startsWith(q) || key.startsWith(q)) {
-        score = 0; // prefix match — highest rank
-      } else if (name.contains(q) || key.contains(q)) {
-        score = 1; // substring match
-      }
-
-      if (score >= 0) scored.add((entry: e, score: score));
-    }
-    scored.sort((a, b) => a.score.compareTo(b.score));
-    return scored.map((s) => s.entry).toList();
-  }
-
-  List<FriendStateRecord> get _incomingRequests {
-    final existing = _entries.map((e) => e.hexKey.toLowerCase()).toSet();
-    final selfHex = (widget.myPubkeyHex ?? '').trim().toLowerCase();
-    final out = <FriendStateRecord>[];
-    for (final fs in widget.friendStates.values) {
-      if (fs.statusEnum != FriendStatus.pendingIncoming) continue;
-      final key = fs.peerPubkeyHex.toLowerCase();
-      if (selfHex.isNotEmpty && key == selfHex) continue;
-      if (existing.contains(key)) continue;
-      out.add(fs);
-    }
-    out.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return out;
-  }
-
-  String? _normalizeSearchUsername(String raw) {
-    final t = raw.trim();
-    if (t.isEmpty) return null;
-    final base = t.startsWith('@') ? t.substring(1) : t;
-    if (!RegExp(r'^[A-Za-z0-9_]{1,32}$').hasMatch(base)) return null;
-    return '@$base';
-  }
-
-  void _onSearchChanged(String value) {
-    setState(() => _search = value);
-    _searchDebounce?.cancel();
-    final normalized = _normalizeSearchUsername(value);
-    if (normalized == null) {
-      _searchRequestId++;
-      setState(() {
-        _serverSearchHit = null;
-      });
-      return;
-    }
-    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
-      unawaited(_searchOnServer(normalized));
-    });
-  }
-
-  void _showAddedUsernameBanner(String username) {
-    _recentlyAddedTimer?.cancel();
-    if (!mounted) return;
-    setState(() {
-      _recentlyAddedUsername = username;
-    });
-    _recentlyAddedTimer = Timer(const Duration(seconds: 4), () {
-      if (!mounted) return;
-      setState(() => _recentlyAddedUsername = null);
-    });
-  }
-
-  Future<void> _searchOnServer(String normalizedUsername) async {
-    final reqId = ++_searchRequestId;
-    if (mounted) setState(() => _serverSearchHit = null);
-
-    try {
-      final hit = await _directoryService.searchExactUser(
-        serverNodeId: widget.serverNodeId,
-        normalizedUsername: normalizedUsername,
-        existingEntries: _entries,
-      );
-      if (!mounted || reqId != _searchRequestId) return;
-      setState(() {
-        _serverSearchHit = hit == null
-            ? null
-            : _ServerSearchHit(
-                username: hit.username,
-                pubkeyHex: hit.pubkeyHex,
-                fullname: hit.fullname,
-              );
-      });
-    } catch (_) {
-      if (!mounted || reqId != _searchRequestId) return;
-      setState(() {
-        _serverSearchHit = null;
-      });
-    }
-  }
-
-  // ── Persistence ───────────────────────────────────────────────────────────
-
-  Future<void> _save() async {
-    await _directoryService.saveWhitelistEntries(
-      accountId: widget.accountId,
-      entries: _entries,
+  void _syncSearchController(String value) {
+    if (_searchCtrl.text == value) return;
+    _searchCtrl.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
     );
-    widget.onEntriesChanged(_entries);
   }
 
   // ── Import (QR or hex paste) ──────────────────────────────────────────────
 
   void _openImport() {
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
@@ -281,7 +109,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
   }
 
-  void _openQrScanner() async {
+  Future<void> _openQrScanner() async {
     final data = await Navigator.of(context).push<QrShareData>(
       MaterialPageRoute(builder: (_) => const QrScannerDialog()),
     );
@@ -291,10 +119,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   void _showBase64ImportSheet() {
+    final cubit = _cubit;
     final inputCtrl = TextEditingController();
     String? errorMsg;
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => Padding(
           padding: EdgeInsets.fromLTRB(
@@ -339,23 +169,21 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 label: 'Import',
                 onTap: () {
                   final raw = inputCtrl.text.trim();
-                  // Try as structured share payload first.
                   final qrData = QrShareData.parse(raw);
                   if (qrData != null) {
                     Navigator.pop(ctx);
                     _handleImportData(qrData);
                     return;
                   }
-                  // Try as raw hex
+
                   final hex = raw.replaceAll(RegExp(r'\s+'), '');
-                  if (hex.length == 64 &&
-                      RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
+                  final validationError = cubit.validateNewContactHex(hex);
+                  if (validationError == null) {
                     Navigator.pop(ctx);
                     _showAddSheetWithKey(hex);
                     return;
                   }
-                  setS(() => errorMsg =
-                      'Invalid format: expected contact hex or 64-char public key');
+                  setS(() => errorMsg = validationError);
                 },
               ),
             ],
@@ -366,20 +194,15 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   void _handleImportData(QrShareData data) {
-    if (data.publicKeyHex == null) {
-      _showSnack('QR code has no public key');
+    final error = _cubit.validateImportedQrData(data);
+    if (error != null) {
+      _showSnack(error);
       return;
     }
-    final hex = data.publicKeyHex!;
-    if (_isSelfHex(hex)) {
-      _showSnack('You cannot add your own key as a contact');
-      return;
-    }
-    if (_entries.any((e) => e.hexKey.toLowerCase() == hex.toLowerCase())) {
-      _showSnack('This contact is already in your list');
-      return;
-    }
-    _showAddSheetWithKey(hex, suggestedName: data.nickname);
+    _showAddSheetWithKey(
+      data.publicKeyHex!,
+      suggestedName: data.nickname,
+    );
   }
 
   // ── Add Contact ───────────────────────────────────────────────────────────
@@ -389,13 +212,15 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void _showAddSheetWithKey(
     String prefilledKey, {
     String? suggestedName,
-    VoidCallback? onAdded,
+    String? recentlyAddedUsername,
   }) {
+    final cubit = _cubit;
     final nameCtrl = TextEditingController(text: suggestedName ?? '');
     final keyCtrl = TextEditingController(text: prefilledKey);
     String? keyError;
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => Padding(
           padding: EdgeInsets.fromLTRB(
@@ -439,40 +264,17 @@ class _ContactsScreenState extends State<ContactsScreen> {
               AppSheetButton(
                 icon: Icons.person_add_outlined,
                 label: 'Add to Whitelist',
-                onTap: () {
-                  final name = nameCtrl.text.trim();
-                  final hex =
-                      keyCtrl.text.trim().replaceAll(RegExp(r'\s+'), '');
-
-                  if (hex.length != 64 ||
-                      !RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
-                    setS(() => keyError = 'Must be exactly 64 hex characters');
+                onTap: () async {
+                  final error = await cubit.addContact(
+                    name: nameCtrl.text,
+                    rawHex: keyCtrl.text,
+                    recentlyAddedUsername: recentlyAddedUsername,
+                  );
+                  if (error != null) {
+                    setS(() => keyError = error);
                     return;
                   }
-                  if (_isSelfHex(hex)) {
-                    setS(() => keyError = 'You cannot add your own key');
-                    return;
-                  }
-                  if (_entries.any(
-                      (e) => e.hexKey.toLowerCase() == hex.toLowerCase())) {
-                    setS(() => keyError = 'Key already in contacts');
-                    return;
-                  }
-
-                  final bytes = Uint8List.fromList(List.generate(
-                    32,
-                    (i) =>
-                        int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16),
-                  ));
-                  setState(() {
-                    _entries.add(WhitelistEntry(
-                      bytes: bytes,
-                      name: name.isEmpty ? 'peer_${_entries.length + 1}' : name,
-                    ));
-                  });
-                  _save();
-                  onAdded?.call();
-                  Navigator.pop(ctx);
+                  if (ctx.mounted) Navigator.pop(ctx);
                 },
               ),
             ],
@@ -487,15 +289,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   // ── Edit Contact ──────────────────────────────────────────────────────────
 
-  void _editContact(WhitelistEntry entry) {
-    final nameCtrl = TextEditingController(text: entry.name);
-    final keyCtrl = TextEditingController(text: entry.hexKey);
-    final profile = widget.contactProfiles[entry.hexKey];
-    final username = profile?.username?.trim() ?? '';
+  void _editContact(ContactsContactUiModel contact) {
+    final cubit = _cubit;
+    final nameCtrl = TextEditingController(text: contact.displayName);
+    final keyCtrl = TextEditingController(text: contact.hexKey);
+    final username = contact.username?.trim() ?? '';
     final hasUsername = username.isNotEmpty;
     String? keyError;
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => Padding(
           padding: EdgeInsets.fromLTRB(
@@ -580,56 +383,17 @@ class _ContactsScreenState extends State<ContactsScreen> {
               AppSheetButton(
                 icon: Icons.check,
                 label: 'Save Changes',
-                onTap: () {
-                  final name = nameCtrl.text.trim();
-                  final newHex =
-                      keyCtrl.text.trim().replaceAll(RegExp(r'\s+'), '');
-
-                  // Validate new key
-                  if (newHex.length != 64 ||
-                      !RegExp(r'^[0-9a-fA-F]+$').hasMatch(newHex)) {
-                    setS(() => keyError = 'Must be exactly 64 hex characters');
+                onTap: () async {
+                  final error = await cubit.editContact(
+                    originalHex: contact.hexKey,
+                    name: nameCtrl.text,
+                    rawHex: keyCtrl.text,
+                  );
+                  if (error != null) {
+                    setS(() => keyError = error);
                     return;
                   }
-                  if (_isSelfHex(newHex)) {
-                    setS(() => keyError = 'You cannot use your own key');
-                    return;
-                  }
-
-                  // If key changed, check for duplicates against OTHER entries
-                  final keyChanged =
-                      newHex.toLowerCase() != entry.hexKey.toLowerCase();
-                  if (keyChanged &&
-                      _entries.any((e) =>
-                          e.hexKey.toLowerCase() == newHex.toLowerCase())) {
-                    setS(
-                        () => keyError = 'This key already exists in contacts');
-                    return;
-                  }
-
-                  final idx =
-                      _entries.indexWhere((e) => e.hexKey == entry.hexKey);
-                  if (idx != -1) {
-                    final finalName = name.isEmpty ? entry.name : name;
-                    if (keyChanged) {
-                      // Rebuild entry with new key bytes
-                      final bytes = Uint8List.fromList(List.generate(
-                        32,
-                        (i) => int.parse(newHex.substring(i * 2, i * 2 + 2),
-                            radix: 16),
-                      ));
-                      setState(() {
-                        _entries[idx] =
-                            WhitelistEntry(bytes: bytes, name: finalName);
-                      });
-                    } else {
-                      setState(() {
-                        _entries[idx] = entry.copyWithName(finalName);
-                      });
-                    }
-                    _save();
-                  }
-                  Navigator.pop(ctx);
+                  if (ctx.mounted) Navigator.pop(ctx);
                 },
               ),
             ],
@@ -644,8 +408,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   // ── Delete Contact ────────────────────────────────────────────────────────
 
-  void _deleteContact(WhitelistEntry entry) {
-    showAppBottomSheet<void>(context,
+  void _deleteContact(ContactsContactUiModel contact) {
+    final cubit = _cubit;
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
@@ -668,7 +434,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   children: [
                     const TextSpan(text: 'Remove '),
                     TextSpan(
-                        text: entry.name,
+                        text: contact.displayName,
                         style: const TextStyle(
                             color: AppColors.textPrimary,
                             fontWeight: FontWeight.w600)),
@@ -693,11 +459,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     child: AppSheetButton(
                       label: 'Remove',
                       danger: true,
-                      onTap: () {
-                        setState(() => _entries
-                            .removeWhere((e) => e.hexKey == entry.hexKey));
-                        _save();
-                        Navigator.pop(ctx);
+                      onTap: () async {
+                        final error = await cubit.deleteContact(contact.hexKey);
+                        if (error != null) {
+                          _showSnack(error);
+                          return;
+                        }
+                        if (ctx.mounted) Navigator.pop(ctx);
                       },
                     ),
                   ),
@@ -712,23 +480,24 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   // ── Share / Copy Contact ──────────────────────────────────────────────────
 
-  void _shareContact(WhitelistEntry entry) {
+  void _shareContact(ContactsContactUiModel contact) {
     final shareData = QrShareData(
       type: 'profile',
-      publicKeyHex: entry.hexKey,
-      nickname: entry.name,
+      publicKeyHex: contact.hexKey,
+      nickname: contact.displayName,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
-          title: entry.name,
-          subtitle: _shortKey(entry.hexKey),
+          title: contact.displayName,
+          subtitle: contact.shortKey,
           copyMessage: 'Contact hex copied',
           exportName:
-              'contact-${entry.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
+              'contact-${contact.displayName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
         ),
       ),
     );
@@ -736,42 +505,22 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  String _shortKey(String hex) =>
-      '${hex.substring(0, 8)}…${hex.substring(hex.length - 8)}';
-
-  List<WhitelistEntry> _sanitizeEntries(List<WhitelistEntry> entries) {
-    final selfHex = (widget.myPubkeyHex ?? '').trim().toLowerCase();
-    final seen = <String>{};
-    final out = <WhitelistEntry>[];
-    for (final e in entries) {
-      final hex = e.hexKey.toLowerCase();
-      if (selfHex.isNotEmpty && hex == selfHex) continue;
-      if (!seen.add(hex)) continue;
-      out.add(e);
-    }
-    return out;
-  }
-
-  bool _isSelfHex(String hex) {
-    final selfHex = (widget.myPubkeyHex ?? '').trim().toLowerCase();
-    if (selfHex.isEmpty) return false;
-    return hex.trim().toLowerCase() == selfHex;
-  }
-
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      behavior: SnackBarBehavior.floating,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+      ),
+    );
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
-    final incoming = _incomingRequests;
+    final state = context.watch<ContactsCubit>().state;
+    _syncSearchController(state.searchQuery);
 
     return Scaffold(
       backgroundColor: AppColors.bgMain,
@@ -834,11 +583,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
-                            onChanged: _onSearchChanged,
+                            onChanged: _cubit.onSearchChanged,
                             style: const TextStyle(
                                 color: AppColors.textPrimary, fontSize: 14),
                             decoration: const InputDecoration(
-                              hintText: 'Search contacts…',
+                              hintText: 'Search contacts...',
                               hintStyle: TextStyle(
                                   color: AppColors.textSecondary, fontSize: 14),
                               border: InputBorder.none,
@@ -850,17 +599,21 @@ class _ContactsScreenState extends State<ContactsScreen> {
                             ),
                           ),
                         ),
-                        if (_search.isNotEmpty)
+                        if (state.isSearchingServer)
+                          const Padding(
+                            padding: EdgeInsets.only(right: 8),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ),
+                        if (state.searchQuery.isNotEmpty)
                           GestureDetector(
-                            onTap: () {
-                              _searchDebounce?.cancel();
-                              _searchRequestId++;
-                              _searchCtrl.clear();
-                              setState(() {
-                                _search = '';
-                                _serverSearchHit = null;
-                              });
-                            },
+                            onTap: _cubit.clearSearch,
                             child: const Padding(
                               padding: EdgeInsets.symmetric(horizontal: 8),
                               child: Icon(Icons.cancel,
@@ -903,70 +656,55 @@ class _ContactsScreenState extends State<ContactsScreen> {
               ),
             ),
 
-            if (_recentlyAddedUsername != null)
+            if (state.recentlyAddedUsername != null)
               _AddedUsernameBanner(
-                username: _recentlyAddedUsername!,
-                onClose: () => setState(() => _recentlyAddedUsername = null),
+                username: state.recentlyAddedUsername!,
+                onClose: _cubit.dismissRecentlyAddedUsername,
               ),
 
-            if (_serverSearchHit != null) ...[
+            if (state.serverSearchHit != null) ...[
               const _SectionTitle(label: 'Search Results'),
               _ServerAddTile(
-                username: _serverSearchHit!.username,
+                username: state.serverSearchHit!.username,
                 onTap: () {
-                  final hit = _serverSearchHit!;
-                  final suggested = hit.fullname.trim().isNotEmpty
-                      ? hit.fullname.trim()
-                      : hit.username.replaceFirst('@', '');
+                  final hit = state.serverSearchHit!;
                   _showAddSheetWithKey(
                     hit.pubkeyHex,
-                    suggestedName: suggested,
-                    onAdded: () {
-                      _searchDebounce?.cancel();
-                      _searchRequestId++;
-                      _searchCtrl.clear();
-                      setState(() {
-                        _search = '';
-                        _serverSearchHit = null;
-                      });
-                      _showAddedUsernameBanner(hit.username);
-                    },
+                    suggestedName: hit.suggestedName,
+                    recentlyAddedUsername: hit.username,
                   );
                 },
               ),
             ],
 
-            if (incoming.isNotEmpty) ...[
-              _SectionDivider(label: 'Friend Requests', count: incoming.length),
-              ...incoming.map((fs) => _IncomingFriendTile(
-                    peerHex: fs.peerPubkeyHex,
-                    profile:
-                        widget.contactProfiles[fs.peerPubkeyHex.toLowerCase()],
+            if (state.incomingRequests.isNotEmpty) ...[
+              _SectionDivider(
+                label: 'Friend Requests',
+                count: state.incomingRequests.length,
+              ),
+              ...state.incomingRequests.map((request) => _IncomingFriendTile(
+                    request: request,
                     onRespond: widget.onFriendRespond,
                   )),
             ],
 
             // ── Section Divider ──────────────────────────────────────────
-            _SectionDivider(label: 'Trusted Peers', count: _entries.length),
+            _SectionDivider(label: 'Trusted Peers', count: state.totalContacts),
 
             // ── List ─────────────────────────────────────────────────────
             Expanded(
-              child: filtered.isEmpty
-                  ? _EmptyState(hasAny: _entries.isNotEmpty)
+              child: state.contacts.isEmpty
+                  ? _EmptyState(hasAny: state.hasAnyContacts)
                   : ListView.builder(
                       padding: const EdgeInsets.only(bottom: 120),
-                      itemCount: filtered.length,
+                      itemCount: state.contacts.length,
                       itemBuilder: (ctx, i) {
-                        final e = filtered[i];
-                        final fs = widget.friendStates[e.hexKey.toLowerCase()];
+                        final contact = state.contacts[i];
                         return _ContactTile(
-                          entry: e,
-                          profile: widget.contactProfiles[e.hexKey],
-                          friendState: fs,
-                          shortKey: _shortKey(e.hexKey),
-                          onTap: () => _editContact(e),
-                          onShare: () => _shareContact(e),
-                          onDelete: () => _deleteContact(e),
+                          contact: contact,
+                          onTap: () => _editContact(contact),
+                          onShare: () => _shareContact(contact),
+                          onDelete: () => _deleteContact(contact),
                           onFriendRespond: widget.onFriendRespond,
                           onOpenDm: widget.onOpenDm,
                         );
@@ -1027,18 +765,6 @@ class _AddedUsernameBanner extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ServerSearchHit {
-  final String username;
-  final String pubkeyHex;
-  final String fullname;
-
-  const _ServerSearchHit({
-    required this.username,
-    required this.pubkeyHex,
-    required this.fullname,
-  });
 }
 
 class _SectionTitle extends StatelessWidget {
@@ -1144,10 +870,7 @@ class _ServerAddTile extends StatelessWidget {
 // ─── Contact Tile ─────────────────────────────────────────────────────────────
 
 class _ContactTile extends StatelessWidget {
-  final WhitelistEntry entry;
-  final ContactProfile? profile;
-  final FriendStateRecord? friendState;
-  final String shortKey;
+  final ContactsContactUiModel contact;
   final VoidCallback onTap;
   final VoidCallback onShare;
   final VoidCallback onDelete;
@@ -1156,21 +879,18 @@ class _ContactTile extends StatelessWidget {
   final void Function(String roomUUIDHex)? onOpenDm;
 
   const _ContactTile({
-    required this.entry,
-    required this.shortKey,
+    required this.contact,
     required this.onTap,
     required this.onShare,
     required this.onDelete,
-    this.profile,
-    this.friendState,
     this.onFriendRespond,
     this.onOpenDm,
   });
 
   @override
   Widget build(BuildContext context) {
-    final status = friendState?.statusEnum ?? FriendStatus.none;
-    final roomUUID = friendState?.roomUUIDHex;
+    final status = contact.friendStatus;
+    final roomUUID = contact.roomUUIDHex;
     return InkWell(
       onTap: onTap,
       splashColor: AppColors.bgSurfaceActive,
@@ -1182,7 +902,11 @@ class _ContactTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Row(
           children: [
-            UserAvatar(name: entry.name, bytes: profile?.avatarBytes, size: 46),
+            UserAvatar(
+              name: contact.displayName,
+              bytes: contact.avatarBytes,
+              size: 46,
+            ),
             const SizedBox(width: 14),
 
             // Name + key
@@ -1190,16 +914,16 @@ class _ContactTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(entry.name,
+                  Text(contact.displayName,
                       style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
                           color: AppColors.textPrimary),
                       overflow: TextOverflow.ellipsis),
-                  if ((profile?.username?.trim().isNotEmpty ?? false)) ...[
+                  if ((contact.username?.trim().isNotEmpty ?? false)) ...[
                     const SizedBox(height: 1),
                     Text(
-                      profile!.username!,
+                      contact.username!,
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppColors.textSecondary,
@@ -1208,7 +932,7 @@ class _ContactTile extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(height: 2),
-                  Text(shortKey,
+                  Text(contact.shortKey,
                       style: const TextStyle(
                           fontSize: 11,
                           fontFamily: 'monospace',
@@ -1223,24 +947,24 @@ class _ContactTile extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (status == FriendStatus.pendingIncoming &&
+                if (status == ContactsFriendStatus.pendingIncoming &&
                     onFriendRespond != null)
                   _MiniTextBtn(
                     label: 'NO',
                     color: AppColors.statusRed,
-                    onTap: () => onFriendRespond!(entry.hexKey, false),
+                    onTap: () => onFriendRespond!(contact.hexKey, false),
                   ),
-                if (status == FriendStatus.pendingIncoming &&
+                if (status == ContactsFriendStatus.pendingIncoming &&
                     onFriendRespond != null)
                   const SizedBox(width: 4),
-                if (status == FriendStatus.pendingIncoming &&
+                if (status == ContactsFriendStatus.pendingIncoming &&
                     onFriendRespond != null)
                   _MiniTextBtn(
                     label: 'YES',
                     color: const Color(0xFF2E7D32),
-                    onTap: () => onFriendRespond!(entry.hexKey, true),
+                    onTap: () => onFriendRespond!(contact.hexKey, true),
                   ),
-                if (status == FriendStatus.friend &&
+                if (status == ContactsFriendStatus.friend &&
                     roomUUID != null &&
                     roomUUID.isNotEmpty &&
                     onOpenDm != null)
@@ -1271,27 +995,13 @@ class _ContactTile extends StatelessWidget {
 }
 
 class _IncomingFriendTile extends StatelessWidget {
-  final String peerHex;
-  final ContactProfile? profile;
+  final ContactsIncomingRequestUiModel request;
   final Future<bool> Function(String peerPubkeyHex, bool accept)? onRespond;
 
   const _IncomingFriendTile({
-    required this.peerHex,
-    required this.profile,
+    required this.request,
     required this.onRespond,
   });
-
-  String get _shortKey =>
-      '${peerHex.substring(0, 8)}…${peerHex.substring(peerHex.length - 8)}';
-
-  String get _displayName {
-    final full = (profile?.fullname ?? '').trim();
-    if (full.isNotEmpty) return full;
-    final user =
-        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
-    if (user.isNotEmpty) return user;
-    return 'Unknown sender';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1302,14 +1012,18 @@ class _IncomingFriendTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
         children: [
-          UserAvatar(name: _displayName, bytes: profile?.avatarBytes, size: 46),
+          UserAvatar(
+            name: request.displayName,
+            bytes: request.avatarBytes,
+            size: 46,
+          ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _displayName,
+                  request.displayName,
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
@@ -1317,10 +1031,10 @@ class _IncomingFriendTile extends StatelessWidget {
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
-                if ((profile?.username?.trim().isNotEmpty ?? false)) ...[
+                if ((request.username?.trim().isNotEmpty ?? false)) ...[
                   const SizedBox(height: 1),
                   Text(
-                    profile!.username!,
+                    request.username!,
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppColors.textSecondary,
@@ -1330,7 +1044,7 @@ class _IncomingFriendTile extends StatelessWidget {
                 ],
                 const SizedBox(height: 2),
                 Text(
-                  _shortKey,
+                  request.shortKey,
                   style: const TextStyle(
                     fontSize: 11,
                     fontFamily: 'monospace',
@@ -1338,7 +1052,8 @@ class _IncomingFriendTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 6),
-                const _FriendBadge(status: FriendStatus.pendingIncoming),
+                const _FriendBadge(
+                    status: ContactsFriendStatus.pendingIncoming),
               ],
             ),
           ),
@@ -1350,14 +1065,15 @@ class _IncomingFriendTile extends StatelessWidget {
                 color: AppColors.statusRed,
                 onTap: onRespond == null
                     ? () {}
-                    : () => onRespond!(peerHex, false),
+                    : () => onRespond!(request.peerHex, false),
               ),
               const SizedBox(width: 4),
               _MiniTextBtn(
                 label: 'YES',
                 color: const Color(0xFF2E7D32),
-                onTap:
-                    onRespond == null ? () {} : () => onRespond!(peerHex, true),
+                onTap: onRespond == null
+                    ? () {}
+                    : () => onRespond!(request.peerHex, true),
               ),
             ],
           ),
@@ -1368,33 +1084,33 @@ class _IncomingFriendTile extends StatelessWidget {
 }
 
 class _FriendBadge extends StatelessWidget {
-  final FriendStatus status;
+  final ContactsFriendStatus status;
   const _FriendBadge({required this.status});
 
   @override
   Widget build(BuildContext context) {
-    if (status == FriendStatus.none) return const SizedBox.shrink();
+    if (status == ContactsFriendStatus.none) return const SizedBox.shrink();
     Color bg;
     Color border;
     String text;
     switch (status) {
-      case FriendStatus.pendingOutgoing:
-      case FriendStatus.pendingIncoming:
+      case ContactsFriendStatus.pendingOutgoing:
+      case ContactsFriendStatus.pendingIncoming:
         bg = const Color(0x33FFB300);
         border = const Color(0xFFE6A100);
         text = 'Pending';
         break;
-      case FriendStatus.friend:
+      case ContactsFriendStatus.friend:
         bg = const Color(0x332E7D32);
         border = const Color(0xFF2E7D32);
         text = 'Friend';
         break;
-      case FriendStatus.rejected:
+      case ContactsFriendStatus.rejected:
         bg = const Color(0x33C62828);
         border = const Color(0xFFC62828);
         text = 'Rejected';
         break;
-      case FriendStatus.none:
+      case ContactsFriendStatus.none:
         return const SizedBox.shrink();
     }
     return Container(
@@ -1527,7 +1243,6 @@ class _PrimaryButton extends StatelessWidget {
     );
   }
 }
-
 
 class _StyledInput extends StatelessWidget {
   final TextEditingController controller;

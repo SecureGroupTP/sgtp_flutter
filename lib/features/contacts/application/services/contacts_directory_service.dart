@@ -32,8 +32,9 @@ class ContactsDirectoryService {
       await client.connect();
       final items = await client.search(normalizedUsername, limit: 20);
       final lower = normalizedUsername.toLowerCase();
-      final exact =
-          items.where((item) => item.username.toLowerCase() == lower).firstOrNull;
+      final exact = items
+          .where((item) => item.username.toLowerCase() == lower)
+          .firstOrNull;
       if (exact == null) return null;
 
       final alreadyTrusted = existingEntries.any(
