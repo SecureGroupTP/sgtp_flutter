@@ -31,6 +31,12 @@ class _ContactsScreenState extends State<ContactsScreen> {
   final _searchCtrl = TextEditingController();
   ContactsCubit get _cubit => context.read<ContactsCubit>();
 
+  void _disposeControllerNextFrame(TextEditingController controller) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+    });
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -190,7 +196,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
           ),
         ),
       ),
-    ).whenComplete(inputCtrl.dispose);
+    ).whenComplete(() => _disposeControllerNextFrame(inputCtrl));
   }
 
   void _handleImportData(QrShareData data) {
@@ -282,8 +288,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
         ),
       ),
     ).whenComplete(() {
-      nameCtrl.dispose();
-      keyCtrl.dispose();
+      _disposeControllerNextFrame(nameCtrl);
+      _disposeControllerNextFrame(keyCtrl);
     });
   }
 
@@ -401,8 +407,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
         ),
       ),
     ).whenComplete(() {
-      nameCtrl.dispose();
-      keyCtrl.dispose();
+      _disposeControllerNextFrame(nameCtrl);
+      _disposeControllerNextFrame(keyCtrl);
     });
   }
 
