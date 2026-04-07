@@ -17,7 +17,6 @@ import 'package:sgtp_camera/sgtp_camera.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
-import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
@@ -28,19 +27,13 @@ import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/styled_dropdown.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
-import 'package:sgtp_flutter/features/settings/presentation/pages/logs_screen.dart';
+import 'package:sgtp_flutter/features/settings/presentation/pages/logs_page.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_cubit.dart';
+import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
-import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
-
-typedef ConfigChangedCallback = void Function(
-    String accountId,
-    SgtpConfig config,
-    Map<String, String> nicknames,
-    String serverAddress,
-    List<WhitelistEntry> whitelistEntries);
 
 enum _SettingsSection {
   key,
@@ -50,64 +43,21 @@ enum _SettingsSection {
   help,
 }
 
-typedef UserAvatarChangedCallback = void Function(Uint8List? avatar);
-
 class SettingsScreen extends StatefulWidget {
-  final SgtpConfig? initialConfig;
-  final Map<String, String>? initialNicknames;
-  final ConfigChangedCallback? onConfigChanged;
-  final UserAvatarChangedCallback? onUserAvatarChanged;
-  final Uint8List? currentUserAvatar;
-  final void Function(String nickname)? onNicknameChanged;
-  final Future<String?> Function(String username)? onUsernameChanged;
-  final VoidCallback? onAllDataDeleted;
-
-  const SettingsScreen({
-    super.key,
-    this.initialConfig,
-    this.initialNicknames,
-    this.onConfigChanged,
-    this.onUserAvatarChanged,
-    this.currentUserAvatar,
-    this.onNicknameChanged,
-    this.onUsernameChanged,
-    this.onAllDataDeleted,
-  });
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final SettingsManagementService _settings;
+  late final SettingsCubit _cubit;
+  SettingsManagementService get _settings => _cubit.settings;
+
   final _logsCountNotifier = _LogsCountNotifier();
   final _nicknameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
-  String _standaloneServerAddress = '';
 
-  String? _privateKeyPath;
-  Uint8List? _privateKeyBytes;
-  Uint8List? _myPublicKey;
-
-  List<WhitelistEntry> _wlEntries = [];
-
-  Uint8List? _userAvatar;
-  String _nickname = '';
-  final Map<String, Uint8List?> _avatarsByNodeId = {};
-  final Map<String, String> _nicknamesByNodeId = {};
-
-  bool _isLoading = false;
-  bool _isGenerating = false;
-  bool _isCreatingBackup = false;
-  bool _isRestoringBackup = false;
-  String? _usernameError;
-
-  /// Ping interval in seconds. Saved via SettingsRepository.
-  int _pingIntervalSeconds = 30;
-  bool _compressFiles = false;
-  bool _compressPhotos = false;
-  bool _compressVideos = false;
-  int _mediaChunkSizeBytes = SgtpConstants.defaultMediaChunkSize;
   bool _captureDevicesLoading = false;
   List<InputDevice> _microphones = const [];
   String? _selectedMicrophoneId;
@@ -125,21 +75,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _cameraCheckError;
   int _cameraCheckToken = 0;
 
-  // Interaction preferences (Fix 7)
-  String _doubleTapDesktop = 'react'; // 'react' | 'reply'
-  bool _swipeToReply = true;
-  bool _longPressMenu = true;
-
-  // Accounts (formerly Nodes)
-  List<NodeConfig> _nodes = const [];
-  List<String> _accountIdsList = const [];
-  bool _nodesLoading = true;
   bool _accountsExpanded = false;
   _SettingsSection? _activeSection;
   bool _serversExpanded = false;
-  String? _preferredNodeId;
-  String? _preferredAccountId;
-  int _accountLoadSeq = 0;
+  String? _lastSyncedAccountId;
 
   bool get _isDesktop =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
@@ -147,88 +86,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _settings = context.read<SettingsManagementService>();
+    _cubit = context.read<SettingsCubit>();
     if (_isDesktop) {
       SgtpCamera.init();
     }
-    _userAvatar = widget.currentUserAvatar;
-    _loadFromConfig();
+    _syncControllersFromState(_cubit.state);
   }
 
-  void _loadFromConfig() {
-    final cfg = widget.initialConfig;
-    if (cfg != null) {
-      _standaloneServerAddress = cfg.serverAddr.trim();
-      _myPublicKey = cfg.myPublicKey;
+  /// Sync TextEditingControllers from cubit state (called once on init and
+  /// can be called from BlocListener when the active account changes).
+  void _syncControllersFromState(SettingsViewState s) {
+    if (_nicknameCtrl.text != s.nickname) {
+      _nicknameCtrl.text = s.nickname;
     }
-    _loadFromDisk();
-  }
-
-  Future<void> _loadFromDisk() async {
-    final bootstrap = await _settings.loadBootstrapData();
-    final nodes = bootstrap.nodes;
-    final accountIds = bootstrap.accountIds;
-    unawaited(_logCachedDiscovery(nodes));
-    for (final node in nodes) {
-      unawaited(_runDiscoveryForNode(node));
+    if (_usernameCtrl.text != s.username) {
+      _usernameCtrl.text = s.username;
     }
-    if (mounted) {
-      setState(() {
-        _nodes = nodes;
-        _accountIdsList = accountIds;
-        _nodesLoading = false;
-        _preferredNodeId = bootstrap.preferredNodeId;
-        _preferredAccountId = bootstrap.preferredAccountId;
-      });
-    }
-
-    // Load account-scoped identity/profile/contacts for the active account.
-    if (bootstrap.preferredAccountId != null &&
-        bootstrap.preferredAccountId!.trim().isNotEmpty) {
-      final loadSeq = ++_accountLoadSeq;
-      await _loadAccountData(
-        bootstrap.preferredAccountId!,
-        applyConfig: false,
-        expectedLoadSeq: loadSeq,
-      );
-    } else {
-      await _setMicrophoneCheckEnabled(false);
-      await _setCameraCheckEnabled(false);
-      final lastAddr = bootstrap.lastAddress;
-      if (lastAddr != null && _standaloneServerAddress.isEmpty) {
-        setState(() => _standaloneServerAddress = lastAddr.trim());
-      }
-      if (mounted) {
-        setState(() {
-          _microphones = const [];
-          _selectedMicrophoneId = null;
-          _cameras = const [];
-          _selectedCameraName = null;
-        });
+    // Reload capture devices only when the active account changes.
+    final accountId = s.activeAccountId;
+    if (accountId != _lastSyncedAccountId) {
+      _lastSyncedAccountId = accountId;
+      if (accountId != null && accountId.isNotEmpty) {
+        unawaited(_loadCaptureDevicesForAccount(accountId));
       }
     }
-
-    final mediaSettings = bootstrap.mediaSettings;
-    final uiSettings = bootstrap.uiSettings;
-
-    // Load persisted prefs (nickname + interaction)
-    setState(() {
-      _pingIntervalSeconds = uiSettings.pingIntervalSeconds;
-      _compressFiles = mediaSettings.compressFiles;
-      _compressPhotos = mediaSettings.compressPhotos;
-      _compressVideos = mediaSettings.compressVideos;
-      _mediaChunkSizeBytes = mediaSettings.mediaChunkSizeBytes;
-      _doubleTapDesktop = uiSettings.doubleTapDesktop;
-      _swipeToReply = uiSettings.swipeToReply;
-      _longPressMenu = uiSettings.longPressMenu;
-    });
-    // Sync singleton
-    InteractionPrefs.doubleTapDesktop = _doubleTapDesktop;
-    InteractionPrefs.swipeToReply = _swipeToReply;
-    InteractionPrefs.longPressShowsMenu = _longPressMenu;
-
-    unawaited(_refreshProfilesCache(accountIds));
   }
+
+  String? _activeAccountId() => _cubit.state.activeAccountId;
 
   @override
   void dispose() {
@@ -249,50 +133,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _usernameCtrl.dispose();
     _logsCountNotifier.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadAccountData(String accountId,
-      {bool applyConfig = true, int? expectedLoadSeq}) async {
-    bool isStale() =>
-        expectedLoadSeq != null && expectedLoadSeq != _accountLoadSeq;
-    final snapshot = await _settings.loadAccountSnapshot(accountId);
-    if (isStale()) return;
-
-    if (!mounted) return;
-    setState(() {
-      _nickname = snapshot.nickname;
-      _nicknameCtrl.text = snapshot.nickname;
-      _usernameCtrl.text = snapshot.username;
-      _usernameError = null;
-      _userAvatar = snapshot.avatar;
-      _avatarsByNodeId[accountId] = snapshot.avatar;
-      _nicknamesByNodeId[accountId] = snapshot.nickname;
-
-      _privateKeyBytes = snapshot.privateKeyBytes;
-      _privateKeyPath = snapshot.privateKeyName;
-      _myPublicKey = snapshot.publicKey;
-
-      _wlEntries = snapshot.whitelistEntries;
-    });
-    if (isStale()) return;
-    await _loadCaptureDevicesForAccount(accountId);
-    if (isStale()) return;
-
-    widget.onUserAvatarChanged?.call(snapshot.avatar);
-    if (applyConfig) _tryApplyConfig();
-  }
-
-  Future<void> _refreshProfilesCache(List<String> accountIds) async {
-    final cache = await _settings.loadProfilesCache(accountIds);
-    if (!mounted) return;
-    setState(() {
-      _avatarsByNodeId
-        ..clear()
-        ..addAll(cache.avatarsByAccountId);
-      _nicknamesByNodeId
-        ..clear()
-        ..addAll(cache.nicknamesByAccountId);
-    });
   }
 
   Future<void> _loadCaptureDevicesForAccount(String accountId) async {
@@ -369,9 +209,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _selectMicrophone(String id) async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    await _settings.savePreferredMicrophoneForNode(accountId, id);
+    await _cubit.savePreferredMicrophone(id);
     if (!mounted) return;
     setState(() => _selectedMicrophoneId = id);
     if (_micCheckEnabled) {
@@ -380,9 +218,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _selectCamera(String name) async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    await _settings.savePreferredCameraForNode(accountId, name);
+    await _cubit.savePreferredCamera(name);
     if (!mounted) return;
     setState(() => _selectedCameraName = name);
     if (_cameraCheckEnabled) {
@@ -629,17 +465,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         return;
       }
-      final keyData = await _settings.importPrivateKey(
-        accountId: accountId,
-        bytes: bytes,
-        name: file.name,
-      );
-      setState(() {
-        _privateKeyBytes = keyData.bytes;
-        _privateKeyPath = keyData.name;
-        _myPublicKey = keyData.publicKey;
-      });
-      _tryApplyConfig();
+      await _cubit.importPrivateKey(accountId, bytes, name: file.name);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -650,7 +476,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showPrivateKeyExportSheet() {
-    final bytes = _privateKeyBytes;
+    final bytes = _cubit.state.privateKeyBytes;
     if (bytes == null || bytes.isEmpty) return;
     final keyText = String.fromCharCodes(bytes).trim();
 
@@ -770,18 +596,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     try {
-      final keyData = await _settings.importPrivateKeyFromText(
-        accountId: accountId,
-        text: text,
-        name: 'clipboard_identity',
-      );
+      await _cubit.importPrivateKeyFromText(accountId, text);
       if (!mounted) return;
-      setState(() {
-        _privateKeyBytes = keyData.bytes;
-        _privateKeyPath = keyData.name;
-        _myPublicKey = keyData.publicKey;
-      });
-      _tryApplyConfig();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Private key imported from clipboard')),
       );
@@ -801,11 +617,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final file = result.files.first;
       final bytes = file.bytes;
       if (bytes == null) return false;
-      await _settings.importPrivateKey(
-        accountId: accountId,
-        bytes: bytes,
-        name: file.name,
-      );
+      await _cubit.importPrivateKey(accountId, bytes, name: file.name);
       return true;
     } catch (_) {
       return false;
@@ -815,8 +627,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Private key: generate ────────────────────────────────────────────────
 
   Future<void> _generatePrivateKey() async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
     final confirm = await showAppConfirmSheet(
       context,
       title: 'Generate New Key?',
@@ -827,25 +637,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (!confirm) return;
 
-    setState(() => _isGenerating = true);
     try {
-      final keyData = await _settings.generatePrivateKey(accountId: accountId);
-
-      setState(() {
-        _privateKeyBytes = keyData.bytes;
-        _privateKeyPath = keyData.name;
-        _myPublicKey = keyData.publicKey;
-        _isGenerating = false;
-      });
-      _tryApplyConfig();
-
+      await _cubit.generatePrivateKey();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('New key generated and saved')),
         );
       }
     } catch (e) {
-      setState(() => _isGenerating = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Key generation failed: $e')),
@@ -856,7 +655,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<bool> _generatePrivateKeyForAccount(String accountId) async {
     try {
-      await _settings.generatePrivateKey(accountId: accountId);
+      await _cubit.generatePrivateKey();
       return true;
     } catch (_) {
       return false;
@@ -865,11 +664,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<bool> _pastePrivateKeyForAccount(String accountId, String text) async {
     try {
-      await _settings.importPrivateKeyFromText(
-        accountId: accountId,
-        text: text,
-        name: 'pasted_identity',
-      );
+      await _cubit.importPrivateKeyFromText(accountId, text);
       return true;
     } catch (_) {
       return false;
@@ -877,7 +672,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<bool> _promptPrivateKeyForAccount(String accountId) async {
-    if (await _settings.hasPrivateKey(accountId)) return true;
+    if (await _cubit.hasPrivateKey(accountId)) return true;
 
     bool saved = false;
     String? error;
@@ -1044,8 +839,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── User avatar ───────────────────────────────────────────────────────────
 
   Future<void> _pickUserAvatar() async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
     Uint8List? bytes;
 
     final picker = ImagePicker();
@@ -1073,12 +866,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     if (bytes == null || bytes.isEmpty) return;
-    await _settings.saveUserAvatar(accountId: accountId, bytes: bytes);
-    setState(() {
-      _userAvatar = bytes;
-    });
-    widget.onUserAvatarChanged?.call(bytes);
-    _avatarsByNodeId[accountId] = bytes;
+    await _cubit.setUserAvatar(bytes);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Avatar saved')),
@@ -1087,116 +875,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _removeUserAvatar() async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    await _settings.clearUserAvatar(accountId);
-    setState(() => _userAvatar = null);
-    widget.onUserAvatarChanged?.call(null);
-    _avatarsByNodeId[accountId] = null;
+    await _cubit.setUserAvatar(null);
   }
 
-  // ── Config apply ──────────────────────────────────────────────────────────
+  // ── Helpers that read cubit state ──────────────────────────────────────────
 
-  void _tryApplyConfig() {
-    if (_privateKeyBytes == null || _myPublicKey == null) return;
-    try {
-      final accountId = _activeAccountId();
-      if (accountId == null) return;
-      if (accountId.trim().isEmpty) return;
-      final applied = _settings.buildAppliedConfig(
-        accountId: accountId,
-        privateKeyBytes: _privateKeyBytes!,
-        nodes: _nodes,
-        preferredNodeId: _preferredNodeId,
-        standaloneServerAddress: _standaloneServerAddress,
-        whitelistEntries: _wlEntries,
-        pingIntervalSeconds: _pingIntervalSeconds,
-        mediaChunkSizeBytes: _mediaChunkSizeBytes,
-      );
-      widget.onConfigChanged?.call(
-        applied.accountId,
-        applied.config,
-        applied.nicknames,
-        applied.serverAddress,
-        applied.whitelistEntries,
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Config error: $e')),
-        );
-      }
-    }
+  List<String> _accountIds(SettingsViewState s) {
+    return List<String>.from(s.accountIdsList);
   }
 
-  List<String> _accountIds() {
-    return List<String>.from(_accountIdsList);
-  }
-
-  NodeConfig? _representativeNodeForAccount(String accountId) {
+  NodeConfig? _representativeNodeForAccount(String accountId, SettingsViewState s) {
     final id = accountId.trim();
     if (id.isEmpty) return null;
-    for (final n in _nodes) {
+    for (final n in s.nodes) {
       if (n.effectiveAccountId == id) return n;
     }
     return null;
   }
 
-  String _accountName(String accountId) {
-    final rep = _representativeNodeForAccount(accountId);
-    final nick = (_nicknamesByNodeId[accountId] ?? '').trim();
+  String _accountName(String accountId, SettingsViewState s) {
+    final rep = _representativeNodeForAccount(accountId, s);
+    final nick = (s.nicknamesByNodeId[accountId] ?? '').trim();
     if (nick.isNotEmpty) return nick;
     if (rep != null) return rep.name;
     if (accountId.length >= 8) return 'Account ${accountId.substring(0, 8)}';
     return 'Account';
   }
 
-  Uint8List? _accountAvatar(String accountId) {
-    return _avatarsByNodeId[accountId];
-  }
-
-  String? _activeAccountId() {
-    final id = (_preferredAccountId ?? '').trim();
-    return id.isEmpty ? null : id;
+  Uint8List? _accountAvatar(String accountId, SettingsViewState s) {
+    return s.avatarsByNodeId[accountId];
   }
 
   Future<void> _selectServer(NodeConfig node) async {
-    setState(() {
-      _preferredNodeId = node.id;
-      _serversExpanded = false;
-    });
-    await _settings.setLastNodeId(node.id);
-    _tryApplyConfig();
+    setState(() => _serversExpanded = false);
+    await _cubit.selectServer(node.id);
   }
 
   Future<void> _selectAccountId(String accountId) async {
     final id = accountId.trim();
     if (id.isEmpty) return;
     final previousId = _activeAccountId();
-    final loadSeq = ++_accountLoadSeq;
-    setState(() {
-      _preferredAccountId = id;
-      _accountsExpanded = false;
-    });
-    await _settings.setLastAccountId(id);
-    await _loadAccountData(id, applyConfig: true, expectedLoadSeq: loadSeq);
+    setState(() => _accountsExpanded = false);
+    await _cubit.selectAccountId(id);
 
     // Prevent half-switched state: without a private key we cannot apply
     // account config, and Home would continue showing previous account data.
-    if (_privateKeyBytes == null || _myPublicKey == null) {
-      final fallback = (previousId ?? '').trim();
-      if (fallback.isNotEmpty && fallback != id) {
-        final rollbackSeq = ++_accountLoadSeq;
-        if (!mounted) return;
-        setState(() {
-          _preferredAccountId = fallback;
-        });
-        await _settings.setLastAccountId(fallback);
-        await _loadAccountData(
-          fallback,
-          applyConfig: true,
-          expectedLoadSeq: rollbackSeq,
-        );
+    final s = _cubit.state;
+    if (s.privateKeyBytes == null || s.myPublicKey == null) {
+      if (previousId != null && previousId.isNotEmpty && previousId != id) {
+        await _cubit.selectAccountId(previousId);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1212,9 +939,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _deleteAccount(String accountId) async {
     final id = accountId.trim();
     if (id.isEmpty) return;
+    final s = _cubit.state;
     final linkedServers =
-        _nodes.where((n) => n.accountId.trim() == id).toList();
-    final label = _accountName(id);
+        s.nodes.where((n) => n.accountId.trim() == id).toList();
+    final label = _accountName(id, s);
     final confirmed = await showAppConfirmSheet(
       context,
       title: 'Delete Account?',
@@ -1225,68 +953,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
       danger: true,
     );
     if (!confirmed) return;
-    await _settings.deleteAccount(id);
-    await _reloadNodes();
-    final nextAccount = _activeAccountId();
-    if (nextAccount != null) {
-      final loadSeq = ++_accountLoadSeq;
-      await _loadAccountData(
-        nextAccount,
-        applyConfig: true,
-        expectedLoadSeq: loadSeq,
-      );
-    }
+    await _cubit.deleteAccount(id);
   }
 
   Future<void> _deleteServer(NodeConfig node) async {
     await _deleteNode(node);
   }
 
-  NodeConfig? _selectedServerNode() => _settings.selectPreferredServer(
-        nodes: _nodes,
-        preferredNodeId: _preferredNodeId,
+  NodeConfig? _selectedServerNode(SettingsViewState s) =>
+      _settings.selectPreferredServer(
+        nodes: s.nodes,
+        preferredNodeId: s.preferredNodeId,
       );
 
-  String _selectedServerLabel() {
-    final node = _selectedServerNode();
+  String _selectedServerLabel(SettingsViewState s) {
+    final node = _selectedServerNode(s);
     if (node == null) return 'No servers';
     return '${node.name} (${node.chatAddress})';
   }
 
-  String? _selectedServerId() {
-    final node = _selectedServerNode();
+  String? _selectedServerId(SettingsViewState s) {
+    final node = _selectedServerNode(s);
     if (node == null) return null;
     final id = node.id.trim();
     return id.isEmpty ? null : id;
   }
 
   // ── Nodes ────────────────────────────────────────────────────────────────
-
-  Future<void> _runDiscoveryForNode(NodeConfig node) async {
-    try {
-      await _settings.discoverNodeAndCache(node);
-    } catch (e) {
-      AppLogger.w('Discovery [${node.name}] ${node.host}: failed - $e',
-          tag: 'DISC');
-    }
-  }
-
-  Future<void> _logCachedDiscovery(List<NodeConfig> nodes) async {
-    await _settings.logCachedDiscovery(nodes);
-  }
-
-  Future<void> _reloadNodes() async {
-    final registry = await _settings.reloadRegistryState();
-    if (!mounted) return;
-    setState(() {
-      _nodes = registry.nodes;
-      _accountIdsList = registry.accountIds;
-      _nodesLoading = false;
-      _preferredNodeId = registry.preferredNodeId;
-      _preferredAccountId = registry.preferredAccountId;
-    });
-    unawaited(_refreshProfilesCache(registry.accountIds));
-  }
 
   Future<NodeConfig?> _openNodeEditor(
       {NodeConfig? existing, String? accountIdForNew}) async {
@@ -1311,16 +1004,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _addServerOnly() async {
     final node = await _openNodeEditor();
     if (node == null) return;
-    await _settings.saveDetachedNode(node);
-    unawaited(_runDiscoveryForNode(node));
-    await _reloadNodes();
-    _tryApplyConfig();
+    await _cubit.addServerOnly(node);
   }
 
   Future<void> _addAccountOnly() async {
     final accountId = uuidBytesToHex(generateUUIDv7());
-    await _settings.addEmptyAccount(accountId);
-    await _reloadNodes();
+    await _cubit.addEmptyAccount(accountId);
     if (!mounted) return;
     final ok = await _promptPrivateKeyForAccount(accountId);
     if (!mounted) return;
@@ -1336,11 +1025,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _editNode(NodeConfig node) async {
     final updated = await _openNodeEditor(existing: node);
     if (updated == null) return;
-    await _settings.saveDetachedNode(updated);
     await _migrateEditedServerChats(previous: node, updated: updated);
-    unawaited(_runDiscoveryForNode(updated));
-    await _reloadNodes();
-    _tryApplyConfig();
+    await _cubit.editNode(updated);
   }
 
   String _normalizeServerKey(String raw) {
@@ -1447,70 +1133,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (!confirmed) return;
-    await _settings.deleteNode(node.id);
-    await _reloadNodes();
+    await _cubit.deleteNode(node.id);
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final activeSection = _activeSection;
-    final subHeader = switch (activeSection) {
-      _SettingsSection.chats => (
-          backColor: AppColors.textPrimary,
-          title: 'Chats & Media',
-          titleSize: 18.0
-        ),
-      _SettingsSection.help => (
-          backColor: const Color(0xFF0A84FF),
-          title: 'Information',
-          titleSize: 18.0
-        ),
-      _SettingsSection.key => (
-          backColor: AppColors.textSecondary,
-          title: 'Key Settings',
-          titleSize: 20.0
-        ),
-      _SettingsSection.system => (
-          backColor: AppColors.textSecondary,
-          title: 'Logs & Debug',
-          titleSize: 20.0
-        ),
-      _SettingsSection.data => (
-          backColor: AppColors.textSecondary,
-          title: 'Data',
-          titleSize: 20.0
-        ),
-      null => null,
-    };
-    return Scaffold(
-      backgroundColor: AppColors.bgMain,
-      appBar: activeSection == null
-          ? const _SettingsAppBar()
-          : _InlineSubSettingsAppBar(
-              title: subHeader!.title,
-              backColor: subHeader.backColor,
-              titleSize: subHeader.titleSize,
-              onBack: () => setState(() => _activeSection = null),
+    return BlocConsumer<SettingsCubit, SettingsViewState>(
+      listener: (context, state) {
+        _syncControllersFromState(state);
+      },
+      builder: (context, state) {
+        final activeSection = _activeSection;
+        final subHeader = switch (activeSection) {
+          _SettingsSection.chats => (
+              backColor: AppColors.textPrimary,
+              title: 'Chats & Media',
+              titleSize: 18.0
             ),
-      body: ListView(
-        padding:
-            EdgeInsets.only(top: activeSection == null ? 0 : 20, bottom: 100),
-        children: activeSection == null
-            ? [
-                _buildAccountSwitcher(),
-                _buildProfileSection(),
-                _SettingsGroup(
-                    title: 'Server Connection', child: _buildNetworkCard()),
-                _buildSettingsHub(),
-                const SizedBox(height: 16),
-              ]
-            : [
-                ..._sectionChildren(activeSection),
-                const SizedBox(height: 16),
-              ],
-      ),
+          _SettingsSection.help => (
+              backColor: const Color(0xFF0A84FF),
+              title: 'Information',
+              titleSize: 18.0
+            ),
+          _SettingsSection.key => (
+              backColor: AppColors.textSecondary,
+              title: 'Key Settings',
+              titleSize: 20.0
+            ),
+          _SettingsSection.system => (
+              backColor: AppColors.textSecondary,
+              title: 'Logs & Debug',
+              titleSize: 20.0
+            ),
+          _SettingsSection.data => (
+              backColor: AppColors.textSecondary,
+              title: 'Data',
+              titleSize: 20.0
+            ),
+          null => null,
+        };
+        return Scaffold(
+          backgroundColor: AppColors.bgMain,
+          appBar: activeSection == null
+              ? const _SettingsAppBar()
+              : _InlineSubSettingsAppBar(
+                  title: subHeader!.title,
+                  backColor: subHeader.backColor,
+                  titleSize: subHeader.titleSize,
+                  onBack: () => setState(() => _activeSection = null),
+                ),
+          body: ListView(
+            padding:
+                EdgeInsets.only(top: activeSection == null ? 0 : 20, bottom: 100),
+            children: activeSection == null
+                ? [
+                    _buildAccountSwitcher(state),
+                    _buildProfileSection(state),
+                    _SettingsGroup(
+                        title: 'Server Connection', child: _buildNetworkCard(state)),
+                    _buildSettingsHub(),
+                    const SizedBox(height: 16),
+                  ]
+                : [
+                    ..._sectionChildren(activeSection, state),
+                    const SizedBox(height: 16),
+                  ],
+          ),
+        );
+      },
     );
   }
 
@@ -1586,28 +1278,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  List<Widget> _sectionChildren(_SettingsSection section) => switch (section) {
+  List<Widget> _sectionChildren(_SettingsSection section, SettingsViewState state) => switch (section) {
         _SettingsSection.key => [
             _SettingsGroup(
               title: 'Private Key (Ed25519)',
-              child: _buildPrivateKeyCard(),
+              child: _buildPrivateKeyCard(state),
             ),
           ],
         _SettingsSection.chats => [
             _RoundedSettingsSection(
               title: 'Interaction',
-              child: _buildInteractionCard(),
+              child: _buildInteractionCard(state),
             ),
             _RoundedSettingsSection(
               title: 'Media & Devices',
-              child: _buildMediaCard(),
+              child: _buildMediaCard(state),
             ),
           ],
         _SettingsSection.system => [
             _SettingsGroup(title: 'Logs', child: _buildLogsCard()),
           ],
         _SettingsSection.data => [
-            _SettingsGroup(title: 'Data', child: _buildDataCard()),
+            _SettingsGroup(title: 'Data', child: _buildDataCard(state)),
           ],
         _SettingsSection.help => [
             _buildInfoHero(),
@@ -1637,19 +1329,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Profile section ───────────────────────────────────────────────────────
 
   Future<void> _saveNickname(String value) async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
-    final next = value.trim();
-    await _settings.saveUserNicknameForNode(accountId, next);
-    if (!mounted) return;
-    setState(() => _nickname = next);
-    _nicknamesByNodeId[accountId] = next;
-    widget.onNicknameChanged?.call(next);
+    await _cubit.saveNickname(value.trim());
   }
 
   Future<void> _saveUsername(String value) async {
-    final accountId = _activeAccountId();
-    if (accountId == null) return;
     // Strip leading @ if user typed it, sanitize
     final stripped = value.trim().replaceFirst(RegExp(r'^@'), '');
     final sanitized = stripped
@@ -1658,28 +1341,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
           0,
           stripped.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '').length.clamp(0, 32),
         );
-    await _settings.saveUserUsernameForNode(accountId, sanitized);
-    if (!mounted) return;
-    final remoteError = await widget.onUsernameChanged?.call(sanitized);
-    if (!mounted) return;
-    setState(() {
-      _usernameError = remoteError;
-    });
+    await _cubit.saveUsername(sanitized);
   }
 
   void _showMyProfileShare() {
-    if (_myPublicKey == null) {
+    final s = _cubit.state;
+    if (s.myPublicKey == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No public key loaded yet')),
       );
       return;
     }
     final hexKey =
-        _myPublicKey!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        s.myPublicKey!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final nickname = s.nickname;
     final shareData = QrShareData(
       type: 'profile',
       publicKeyHex: hexKey,
-      nickname: _nickname.isEmpty ? null : _nickname,
+      nickname: nickname.isEmpty ? null : nickname,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
@@ -1688,15 +1367,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
-          title: _nickname.isEmpty ? 'My Profile' : _nickname,
+          title: nickname.isEmpty ? 'My Profile' : nickname,
           subtitle:
               '${hexKey.substring(0, 8)}…${hexKey.substring(hexKey.length - 8)}',
           description:
               'Share this so others can add you as a contact without typing your key manually.',
           copyMessage: 'Profile hex copied',
-          exportName: _nickname.isEmpty
+          exportName: nickname.isEmpty
               ? 'my-profile'
-              : 'profile-${_nickname.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
+              : 'profile-${nickname.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}',
         ),
       ),
     );
@@ -1735,7 +1414,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildProfileSection() {
+  Widget _buildProfileSection(SettingsViewState state) {
+    final nickname = state.nickname;
+    final userAvatar = state.userAvatar;
+    final usernameError = state.usernameError;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 32, 20, 24),
       child: Column(
@@ -1748,8 +1430,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               clipBehavior: Clip.none,
               children: [
                 UserAvatar(
-                  name: _nickname.isNotEmpty ? _nickname : 'Me',
-                  bytes: _userAvatar,
+                  name: nickname.isNotEmpty ? nickname : 'Me',
+                  bytes: userAvatar,
                   size: 88,
                 ),
                 Positioned(
@@ -1841,33 +1523,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(
-                    color: _usernameError != null
+                    color: usernameError != null
                         ? AppColors.statusRed
                         : AppColors.border),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(
-                    color: _usernameError != null
+                    color: usernameError != null
                         ? AppColors.statusRed
                         : AppColors.border),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(
-                    color: _usernameError != null
+                    color: usernameError != null
                         ? AppColors.statusRed
                         : AppColors.textSecondary),
               ),
               contentPadding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
-          if (_usernameError != null) ...[
+          if (usernameError != null) ...[
             const SizedBox(height: 6),
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                _usernameError!,
+                usernameError,
                 style:
                     const TextStyle(fontSize: 12, color: AppColors.statusRed),
               ),
@@ -1902,7 +1584,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           // ── Remove avatar ────────────────────────────────────────────────
-          if (_userAvatar != null) ...[
+          if (userAvatar != null) ...[
             const SizedBox(height: 16),
             GestureDetector(
               onTap: _removeUserAvatar,
@@ -1922,13 +1604,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Account switcher ─────────────────────────────────────────────────────
 
-  Widget _buildAccountSwitcher() {
-    final accountIds = _accountIds();
-    final activeAccountId = _activeAccountId();
+  Widget _buildAccountSwitcher(SettingsViewState state) {
+    final accountIds = _accountIds(state);
+    final activeAccountId = state.activeAccountId;
     final activeName =
-        activeAccountId != null ? _accountName(activeAccountId) : 'No accounts';
+        activeAccountId != null ? _accountName(activeAccountId, state) : 'No accounts';
     final activeAvatar =
-        activeAccountId != null ? _accountAvatar(activeAccountId) : null;
+        activeAccountId != null ? _accountAvatar(activeAccountId, state) : null;
+    final nickname = state.nickname;
+    final userAvatar = state.userAvatar;
 
     return Container(
       decoration: const BoxDecoration(
@@ -1947,13 +1631,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   // Use profile avatar + nickname instead of node data
                   UserAvatar(
-                    bytes: _userAvatar ?? activeAvatar,
-                    name: _nickname.isNotEmpty ? _nickname : activeName,
+                    bytes: userAvatar ?? activeAvatar,
+                    name: nickname.isNotEmpty ? nickname : activeName,
                     size: 42,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _nodesLoading
+                    child: state.nodesLoading
                         ? const Text('Loading…',
                             style: TextStyle(
                                 fontSize: 15, color: AppColors.textSecondary))
@@ -1961,7 +1645,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _nickname.isNotEmpty ? _nickname : activeName,
+                                nickname.isNotEmpty ? nickname : activeName,
                                 style: const TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -1990,12 +1674,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Column(
               children: [
                 ...accountIds.map((id) {
-                  final rep = _representativeNodeForAccount(id);
+                  final rep = _representativeNodeForAccount(id, state);
                   final displayNode = rep ??
                       NodeConfig(
                         id: id,
                         accountId: id,
-                        name: _accountName(id),
+                        name: _accountName(id, state),
                         host: '',
                         chatPort: 443,
                         voicePort: 443,
@@ -2003,8 +1687,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   return _AccountDropdownItem(
                     node: displayNode,
                     isActive: id == activeAccountId,
-                    profileAvatar: _accountAvatar(id),
-                    profileName: _accountName(id),
+                    profileAvatar: _accountAvatar(id, state),
+                    profileName: _accountName(id, state),
                     onTap: () => unawaited(_selectAccountId(id)),
                     onShare: _showMyProfileShare,
                     onDelete: () => _deleteAccount(id),
@@ -2090,14 +1774,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Private key card ──────────────────────────────────────────────────────
 
-  Widget _buildPrivateKeyCard() {
+  Widget _buildPrivateKeyCard(SettingsViewState state) {
     final pubHex =
-        _myPublicKey?.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        state.myPublicKey?.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          _privateKeyPath ?? 'No key loaded',
+          state.privateKeyPath ?? 'No key loaded',
           style: const TextStyle(
             fontFamily: 'monospace',
             fontSize: 13,
@@ -2112,26 +1796,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _ActionButton(
               icon: Icons.folder_open_outlined,
               label: 'Browse',
-              onPressed: _isLoading ? null : _pickPrivateKey,
+              onPressed: state.isLoading ? null : _pickPrivateKey,
             ),
             _ActionButton(
               icon: Icons.key_outlined,
               label: 'Generate',
-              loading: _isGenerating,
+              loading: state.isGenerating,
               onPressed:
-                  (_isLoading || _isGenerating) ? null : _generatePrivateKey,
+                  (state.isLoading || state.isGenerating) ? null : _generatePrivateKey,
             ),
             _ActionButton(
               icon: Icons.content_paste_outlined,
               label: 'Import',
-              onPressed: (_isLoading || _activeAccountId() == null)
+              onPressed: (state.isLoading || _activeAccountId() == null)
                   ? null
                   : _importPrivateKeyFromClipboard,
             ),
             _ActionButton(
               icon: Icons.upload_outlined,
               label: 'Export',
-              onPressed: (_isLoading || _privateKeyBytes == null)
+              onPressed: (state.isLoading || state.privateKeyBytes == null)
                   ? null
                   : _showPrivateKeyExportSheet,
             ),
@@ -2201,8 +1885,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Network card ──────────────────────────────────────────────────────────
 
-  Widget _buildNetworkCard() {
-    final selectedServer = _selectedServerNode();
+  Widget _buildNetworkCard(SettingsViewState state) {
+    final selectedServer = _selectedServerNode(state);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2228,7 +1912,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    _selectedServerLabel(),
+                    _selectedServerLabel(state),
                     style: const TextStyle(
                       fontSize: 14,
                       color: AppColors.textPrimary,
@@ -2256,8 +1940,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             child: Column(
               children: [
-                ..._nodes.map((n) {
-                  final isSelected = n.id == _selectedServerId();
+                ...state.nodes.map((n) {
+                  final isSelected = n.id == _selectedServerId(state);
                   return ListTile(
                     dense: true,
                     contentPadding:
@@ -2443,23 +2127,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildMediaCard() {
+  Widget _buildMediaCard(SettingsViewState state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _SwitchRow(
           label: 'Compress files',
           subtitle: 'Reduce outgoing file size',
-          value: _compressFiles,
-          onChanged: (v) async {
-            final updated = MediaTransferSettings(
-              compressFiles: v,
-              compressPhotos: _compressPhotos,
-              compressVideos: _compressVideos,
-              mediaChunkSizeBytes: _mediaChunkSizeBytes,
-            );
-            await _settings.saveMediaTransferSettings(updated);
-            setState(() => _compressFiles = v);
+          value: state.compressFiles,
+          onChanged: (v) {
+            unawaited(_cubit.saveMediaSettings(compressFiles: v));
           },
         ),
         const SizedBox(height: 12),
@@ -2472,21 +2149,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           spacing: 8,
           runSpacing: 8,
           children: SgtpConstants.allowedMediaChunkSizes.map((size) {
-            final selected = _mediaChunkSizeBytes == size;
+            final selected = state.mediaChunkSizeBytes == size;
             final kb = size ~/ 1024;
             return _ChoiceChip(
               label: '$kb KB',
               selected: selected,
-              onTap: () async {
-                final updated = MediaTransferSettings(
-                  compressFiles: _compressFiles,
-                  compressPhotos: _compressPhotos,
-                  compressVideos: _compressVideos,
-                  mediaChunkSizeBytes: size,
-                );
-                await _settings.saveMediaTransferSettings(updated);
-                setState(() => _mediaChunkSizeBytes = size);
-                _tryApplyConfig();
+              onTap: () {
+                unawaited(_cubit.saveMediaSettings(mediaChunkSizeBytes: size));
               },
             );
           }).toList(),
@@ -2601,17 +2270,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── Interaction card ──────────────────────────────────────────────────────
 
-  Widget _buildInteractionCard() {
+  Widget _buildInteractionCard(SettingsViewState state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // ── Swipe to reply (mobile) ─────────────────────────────────────
         _SwitchRow(
           label: 'Swipe right to reply',
-          value: _swipeToReply,
+          value: state.swipeToReply,
           onChanged: (v) {
-            setState(() => _swipeToReply = v);
-            InteractionPrefs.setSwipeToReply(v);
+            _cubit.setSwipeToReply(v);
           },
         ),
         const SizedBox(height: 8),
@@ -2619,10 +2287,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _SwitchRow(
           label: 'Long-press menu',
           subtitle: 'Show reactions and reply options',
-          value: _longPressMenu,
+          value: state.longPressMenu,
           onChanged: (v) {
-            setState(() => _longPressMenu = v);
-            InteractionPrefs.setLongPressShowsMenu(v);
+            _cubit.setLongPressMenu(v);
           },
         ),
         const SizedBox(height: 12),
@@ -2638,18 +2305,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             _ChoiceChip(
               label: 'Open reactions',
-              selected: _doubleTapDesktop == 'react',
+              selected: state.doubleTapDesktop == 'react',
               onTap: () {
-                setState(() => _doubleTapDesktop = 'react');
-                InteractionPrefs.setDoubleTapDesktop('react');
+                _cubit.setDoubleTapDesktop('react');
               },
             ),
             _ChoiceChip(
               label: 'Set reply',
-              selected: _doubleTapDesktop == 'reply',
+              selected: state.doubleTapDesktop == 'reply',
               onTap: () {
-                setState(() => _doubleTapDesktop = 'reply');
-                InteractionPrefs.setDoubleTapDesktop('reply');
+                _cubit.setDoubleTapDesktop('reply');
               },
             ),
           ],
@@ -2684,22 +2349,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   overlayColor: Colors.white.withAlpha(30),
                 ),
                 child: Slider(
-                  value: _pingIntervalSeconds.toDouble(),
+                  value: state.pingIntervalSeconds.toDouble(),
                   min: 5,
                   max: 120,
                   onChanged: (v) {
-                    setState(() => _pingIntervalSeconds = v.round());
-                    unawaited(
-                      _settings.savePingIntervalSeconds(_pingIntervalSeconds),
-                    );
-                    _tryApplyConfig();
+                    unawaited(_cubit.savePingInterval(v.round()));
                   },
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Text(
-              '${_pingIntervalSeconds}s',
+              '${state.pingIntervalSeconds}s',
               style: const TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 13,
@@ -2749,7 +2410,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => const LogsScreen(),
+                    builder: (_) => const LogsPage(),
                   ),
                 );
               },
@@ -2890,7 +2551,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildDataCard() {
+  Widget _buildDataCard(SettingsViewState state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2902,9 +2563,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ActionButton(
           icon: Icons.archive_outlined,
           label: 'Create backup',
-          loading: _isCreatingBackup,
+          loading: state.isCreatingBackup,
           onPressed:
-              (_isCreatingBackup || _isRestoringBackup) ? null : _makeBackup,
+              (state.isCreatingBackup || state.isRestoringBackup) ? null : _makeBackup,
         ),
         const SizedBox(height: 16),
         const Text(
@@ -2915,8 +2576,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ActionButton(
           icon: Icons.restore,
           label: 'Restore from backup',
-          loading: _isRestoringBackup,
-          onPressed: (_isCreatingBackup || _isRestoringBackup)
+          loading: state.isRestoringBackup,
+          onPressed: (state.isCreatingBackup || state.isRestoringBackup)
               ? null
               : _restoreFromBackupMerge,
         ),
@@ -2936,9 +2597,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _makeBackup() async {
-    setState(() => _isCreatingBackup = true);
     try {
-      final backup = await _settings.createBackup();
+      final backup = await _cubit.createBackup();
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Save SGTP backup',
         fileName: backup.suggestedFileName,
@@ -2959,13 +2619,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to create backup: $e')),
       );
-    } finally {
-      if (mounted) setState(() => _isCreatingBackup = false);
     }
   }
 
   Future<void> _restoreFromBackupMerge() async {
-    setState(() => _isRestoringBackup = true);
     try {
       final picked = await FilePicker.platform.pickFiles(
         allowMultiple: false,
@@ -2979,25 +2636,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         throw const FormatException('Selected backup file is empty');
       }
 
-      final summary = await _settings.restoreFromBytes(bytes, merge: true);
-      await _loadFromDisk();
-      _tryApplyConfig();
+      await _cubit.restoreFromBackup(bytes);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Restore complete: +${summary.prefsImported} prefs, +${summary.filesImported} files',
-          ),
-        ),
+        const SnackBar(content: Text('Backup restored successfully')),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to restore backup: $e')),
       );
-    } finally {
-      if (mounted) setState(() => _isRestoringBackup = false);
     }
   }
 
@@ -3106,14 +2755,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!confirmed) return;
 
     try {
-      await _settings.clearAllLocalData();
+      await _cubit.deleteAllData();
       if (!mounted) return;
-      widget.onAllDataDeleted?.call();
-      if (widget.onAllDataDeleted == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('All local data deleted')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All local data deleted')),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -1,4 +1,5 @@
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 
 class RoomEntry {
   final String roomUUID; // hex, 32 chars
@@ -20,11 +21,13 @@ class RoomsState {
   final List<RoomEntry> rooms;
   final String serverAddress;
   final String? error;
+  final List<ChatMetadata> storedChats;
 
   const RoomsState({
     this.rooms = const [],
     this.serverAddress = '',
     this.error,
+    this.storedChats = const [],
   });
 
   RoomsState copyWith({
@@ -32,11 +35,13 @@ class RoomsState {
     String? serverAddress,
     String? error,
     bool clearError = false,
+    List<ChatMetadata>? storedChats,
   }) {
     return RoomsState(
       rooms:         rooms         ?? this.rooms,
       serverAddress: serverAddress ?? this.serverAddress,
       error:         clearError ? null : (error ?? this.error),
+      storedChats:   storedChats   ?? this.storedChats,
     );
   }
 }

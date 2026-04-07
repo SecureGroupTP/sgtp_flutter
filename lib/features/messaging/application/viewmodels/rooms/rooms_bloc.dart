@@ -5,10 +5,11 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_event.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_state.dart';
+import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_state.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -31,6 +32,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   Map<String, Uint8List> _contactAvatarsByPub = const {};
   Uint8List? _userAvatar;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
+  late final ChatMetadataStore _chatMetadataRepo;
 
   RoomsBloc({
     required String accountId,
@@ -49,12 +51,17 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         _sessionFactory = sessionFactory,
         _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
+    _chatMetadataRepo = chatStorage.metadataForAccount(accountId);
     on<RoomsCreateRoom>(_onCreate);
     on<RoomsJoinRoom>(_onJoin);
     on<RoomsRemoveRoom>(_onRemove);
     on<RoomsUpdateWhitelist>(_onUpdateWhitelist);
     on<RoomsUpdateNicknames>(_onUpdateNicknames);
     on<RoomsUpdateContactAvatars>(_onUpdateContactAvatars);
+    on<RoomsLoadStoredChats>(_onLoadStoredChats);
+    on<RoomsSyncStoredChats>(_onSyncStoredChats);
+    on<RoomsDeleteStoredChat>(_onDeleteStoredChat);
+    on<RoomsUpsertChat>(_onUpsertChat);
     on<_RoomsRefresh>(_onRefresh);
   }
 
@@ -184,6 +191,102 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       room.chatBloc.add(ChatUpdateContactAvatars(event.avatarsByPubkey));
     }
   }
+
+  // ── Stored chats ────────────────────────────────────────────────────────
+
+  Future<void> _onLoadStoredChats(
+      RoomsLoadStoredChats event, Emitter<RoomsState> emit) async {
+    final allMetadata = await _chatMetadataRepo.loadAllChats();
+    final targetServer = _normalizeAddress(state.serverAddress);
+    final filtered = allMetadata
+        .where((m) => _normalizeAddress(m.serverAddress) == targetServer)
+        .toList();
+    emit(state.copyWith(storedChats: filtered));
+  }
+
+  Future<void> _onSyncStoredChats(
+      RoomsSyncStoredChats event, Emitter<RoomsState> emit) async {
+    var changed = false;
+    for (final room in state.rooms) {
+      final chatState = room.chatBloc.state;
+      final existing = await _chatMetadataRepo.loadChat(
+        room.roomUUID,
+        serverAddress: room.serverAddress,
+      );
+      final nextName = chatState.chatName.trim();
+      final shouldSaveName = nextName.isNotEmpty && nextName != 'Chat';
+      final hasAvatar = chatState.chatAvatarBytes != null &&
+          chatState.chatAvatarBytes!.isNotEmpty;
+
+      final needsSave = existing == null ||
+          (shouldSaveName && existing.name != nextName) ||
+          (hasAvatar &&
+              (existing.avatarBytes == null ||
+                  existing.avatarBytes!.length !=
+                      chatState.chatAvatarBytes!.length));
+
+      if (!needsSave) continue;
+
+      final now = DateTime.now();
+      await _chatMetadataRepo.saveChat(ChatMetadata(
+        uuid: room.roomUUID,
+        serverAddress: room.serverAddress,
+        name:
+            shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
+        avatarBytes:
+            hasAvatar ? chatState.chatAvatarBytes : existing?.avatarBytes,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: existing?.updatedAt ?? now,
+        windowWidth: existing?.windowWidth,
+        windowHeight: existing?.windowHeight,
+      ));
+      changed = true;
+    }
+
+    if (changed) {
+      add(const RoomsLoadStoredChats());
+    }
+  }
+
+  Future<void> _onDeleteStoredChat(
+      RoomsDeleteStoredChat event, Emitter<RoomsState> emit) async {
+    await _chatStorage
+        .historyForChat(
+          accountId: _accountId,
+          serverAddress: event.serverAddress,
+          chatUUID: event.uuid,
+        )
+        .clear();
+    await _chatMetadataRepo.deleteChat(
+      event.uuid,
+      serverAddress: event.serverAddress,
+    );
+    add(const RoomsLoadStoredChats());
+  }
+
+  Future<void> _onUpsertChat(
+      RoomsUpsertChat event, Emitter<RoomsState> emit) async {
+    final server = (event.serverAddress ?? '').trim();
+    if (server.isEmpty) return;
+    final existing =
+        await _chatMetadataRepo.loadChat(event.uuid, serverAddress: server);
+    final now = DateTime.now();
+    await _chatMetadataRepo.saveChat(ChatMetadata(
+      uuid: event.uuid,
+      name: (event.name != null && event.name!.isNotEmpty)
+          ? event.name!
+          : (existing?.name ?? 'Chat'),
+      serverAddress: server,
+      avatarBytes: event.avatarBytes ?? existing?.avatarBytes,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      windowWidth: existing?.windowWidth,
+      windowHeight: existing?.windowHeight,
+    ));
+    add(const RoomsLoadStoredChats());
+  }
+
+  // ── Room management ─────────────────────────────────────────────────────
 
   void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
       {SgtpConfig? configOverride, bool openOffline = false}) {

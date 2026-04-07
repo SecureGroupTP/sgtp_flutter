@@ -74,3 +74,33 @@ class RoomsUpdateContactAvatars extends RoomsEvent {
   @override
   List<Object?> get props => [avatarsByPubkey];
 }
+
+/// Load stored chats from disk for the current account/server.
+class RoomsLoadStoredChats extends RoomsEvent {
+  const RoomsLoadStoredChats();
+}
+
+/// Sync stored chat metadata from active rooms (called after state changes).
+class RoomsSyncStoredChats extends RoomsEvent {
+  const RoomsSyncStoredChats();
+}
+
+/// Delete a stored chat and its history from disk.
+class RoomsDeleteStoredChat extends RoomsEvent {
+  final String uuid;
+  final String serverAddress;
+  const RoomsDeleteStoredChat(this.uuid, {required this.serverAddress});
+  @override
+  List<Object?> get props => [uuid, serverAddress];
+}
+
+/// Upsert (create or update) a stored chat entry.
+class RoomsUpsertChat extends RoomsEvent {
+  final String uuid;
+  final String? serverAddress;
+  final String? name;
+  final Uint8List? avatarBytes;
+  const RoomsUpsertChat(this.uuid, {this.serverAddress, this.name, this.avatarBytes});
+  @override
+  List<Object?> get props => [uuid, serverAddress, name, avatarBytes];
+}

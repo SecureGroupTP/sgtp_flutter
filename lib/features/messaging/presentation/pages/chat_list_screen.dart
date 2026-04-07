@@ -5,7 +5,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat_list/chat_list_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat_list/chat_list_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/chat_metadata_edit_dialog.dart' show ChatMetadataEditPanel;
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 

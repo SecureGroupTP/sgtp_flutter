@@ -9,19 +9,18 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_bloc.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_event.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/rooms/rooms_state.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_state.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_scanner_dialog.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_avatar.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_status_dot.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/pages/chat_page.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
-import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/setup/application/models/setup_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
@@ -47,16 +46,10 @@ class RoomsPage extends StatefulWidget {
 }
 
 class RoomsPageState extends State<RoomsPage> {
-  late final ChatStorageGateway _chatStorage;
-  late ChatMetadataStore _chatMetadataRepo;
-  List<ChatMetadata> _storedChats = const [];
-
   @override
   void initState() {
     super.initState();
-    _chatStorage = context.read<ChatStorageGateway>();
-    _chatMetadataRepo = _chatStorage.metadataForAccount(widget.accountId);
-    _loadStoredChats();
+    context.read<RoomsBloc>().add(const RoomsLoadStoredChats());
   }
 
   @override
@@ -64,9 +57,7 @@ class RoomsPageState extends State<RoomsPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.accountId != widget.accountId ||
         oldWidget.serverAddress != widget.serverAddress) {
-      _chatMetadataRepo = _chatStorage.metadataForAccount(widget.accountId);
-      _storedChats = const [];
-      _loadStoredChats();
+      context.read<RoomsBloc>().add(const RoomsLoadStoredChats());
     }
   }
 
@@ -82,63 +73,11 @@ class RoomsPageState extends State<RoomsPage> {
     return '$uuid@${_serverKey(serverAddress)}';
   }
 
-  Future<void> _loadStoredChats() async {
-    final allMetadata = await _chatMetadataRepo.loadAllChats();
-    final targetServer = _serverKey(widget.serverAddress);
-    final filtered = allMetadata
-        .where((m) => _serverKey(m.serverAddress) == targetServer)
-        .toList();
-    if (!mounted) return;
-    setState(() {
-      _storedChats = filtered;
-    });
-  }
-
-  Future<void> _upsertChat(
-    String uuid, {
-    String? serverAddress,
-    String? name,
-    Uint8List? avatarBytes,
-  }) async {
-    final server = (serverAddress ?? '').trim();
-    if (server.isEmpty) return;
-    final existing =
-        await _chatMetadataRepo.loadChat(uuid, serverAddress: server);
-    final now = DateTime.now();
-    await _chatMetadataRepo.saveChat(ChatMetadata(
-      uuid: uuid,
-      name:
-          (name != null && name.isNotEmpty) ? name : (existing?.name ?? 'Chat'),
-      serverAddress: server,
-      avatarBytes: avatarBytes ?? existing?.avatarBytes,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      windowWidth: existing?.windowWidth,
-      windowHeight: existing?.windowHeight,
-    ));
-    await _loadStoredChats();
-  }
-
-  Future<void> _deleteStoredChat(ChatMetadata metadata) async {
-    await _chatStorage
-        .historyForChat(
-          accountId: widget.accountId,
-          serverAddress: metadata.serverAddress,
-          chatUUID: metadata.uuid,
-        )
-        .clear();
-    await _chatMetadataRepo.deleteChat(
-      metadata.uuid,
-      serverAddress: metadata.serverAddress,
-    );
-    await _loadStoredChats();
-  }
-
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<RoomsBloc, RoomsState>(
       listener: (context, state) {
-        unawaited(_syncStoredChatsFromActiveRooms(state));
+        context.read<RoomsBloc>().add(const RoomsSyncStoredChats());
         if (state.error != null) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
@@ -162,7 +101,7 @@ class RoomsPageState extends State<RoomsPage> {
   Widget _buildBody(BuildContext context, RoomsState state) {
     final activeKeys =
         state.rooms.map((r) => _chatKey(r.roomUUID, r.serverAddress)).toSet();
-    final storedNotActive = _storedChats
+    final storedNotActive = state.storedChats
         .where((c) => !activeKeys.contains(_chatKey(c.uuid, c.serverAddress)))
         .toList();
     final hasAnything = state.rooms.isNotEmpty || storedNotActive.isNotEmpty;
@@ -190,7 +129,9 @@ class RoomsPageState extends State<RoomsPage> {
                 uuid: chat.uuid,
                 metadata: chat,
                 onOpen: () => _openStoredChatPreview(context, chat),
-                onRemove: () => _deleteStoredChat(chat),
+                onRemove: () => context.read<RoomsBloc>().add(
+                    RoomsDeleteStoredChat(chat.uuid,
+                        serverAddress: chat.serverAddress)),
               )),
         ],
       ],
@@ -306,52 +247,8 @@ class RoomsPageState extends State<RoomsPage> {
       context,
       builder: (_) => _AddRoomSheet(
         roomsBloc: context.read<RoomsBloc>(),
-        onSaveChat: _upsertChat,
       ),
     );
-  }
-
-  Future<void> _syncStoredChatsFromActiveRooms(RoomsState state) async {
-    var changed = false;
-    for (final room in state.rooms) {
-      final chatState = room.chatBloc.state;
-      final existing = await _chatMetadataRepo.loadChat(
-        room.roomUUID,
-        serverAddress: room.serverAddress,
-      );
-      final nextName = chatState.chatName.trim();
-      final shouldSaveName = nextName.isNotEmpty && nextName != 'Chat';
-      final hasAvatar = chatState.chatAvatarBytes != null &&
-          chatState.chatAvatarBytes!.isNotEmpty;
-
-      final needsSave = existing == null ||
-          (shouldSaveName && existing.name != nextName) ||
-          (hasAvatar &&
-              (existing.avatarBytes == null ||
-                  existing.avatarBytes!.length !=
-                      chatState.chatAvatarBytes!.length));
-
-      if (!needsSave) continue;
-
-      final now = DateTime.now();
-      await _chatMetadataRepo.saveChat(ChatMetadata(
-        uuid: room.roomUUID,
-        serverAddress: room.serverAddress,
-        name:
-            shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
-        avatarBytes:
-            hasAvatar ? chatState.chatAvatarBytes : existing?.avatarBytes,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: existing?.updatedAt ?? now,
-        windowWidth: existing?.windowWidth,
-        windowHeight: existing?.windowHeight,
-      ));
-      changed = true;
-    }
-
-    if (changed && mounted) {
-      await _loadStoredChats();
-    }
   }
 }
 
@@ -896,8 +793,7 @@ class _EmptyState extends StatelessWidget {
 
 class _AddRoomSheet extends StatefulWidget {
   final RoomsBloc roomsBloc;
-  final Future<void> Function(String uuid, {String? serverAddress})? onSaveChat;
-  const _AddRoomSheet({required this.roomsBloc, this.onSaveChat});
+  const _AddRoomSheet({required this.roomsBloc});
 
   @override
   State<_AddRoomSheet> createState() => _AddRoomSheetState();
@@ -1007,7 +903,7 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       transport: targetNode?.transport,
       useTls: targetNode?.useTls,
     ));
-    await widget.onSaveChat?.call(uuid, serverAddress: serverAddress);
+    widget.roomsBloc.add(RoomsUpsertChat(uuid, serverAddress: serverAddress));
     if (mounted) Navigator.of(context).pop();
   }
 

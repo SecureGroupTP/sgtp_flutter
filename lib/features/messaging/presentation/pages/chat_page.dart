@@ -17,10 +17,10 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_bloc.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_recorder.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/message_bubble.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';

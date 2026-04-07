@@ -7,8 +7,8 @@ import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_event.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
