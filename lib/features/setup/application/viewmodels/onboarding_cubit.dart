@@ -164,9 +164,6 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
       await _settings.upsertNode(node);
       await _settings.setLastNodeId(node.id);
       await _settings.setLastAccountId(accountId);
-      if (state.resolvedOptions != null) {
-        await _settings.saveNodeServerOptions(node.id, state.resolvedOptions!);
-      }
 
       var savedKey = await _settings.loadPrivateKeyForNode(accountId);
       savedKey ??= await _settings.loadPrivateKey();

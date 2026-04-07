@@ -291,14 +291,20 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
       {SgtpConfig? configOverride, bool openOffline = false}) {
     final hexUUID = uuidBytesToHex(roomUUID);
-    if (state.rooms.any((r) => r.roomUUID == hexUUID)) {
-      emit(state.copyWith(error: 'Already joined this room'));
-      return;
-    }
-
     final config = (configOverride ?? _baseConfig)
         .copyWith(accountId: _accountId)
         .copyWithRoomUUID(roomUUID);
+    final targetServer = _normalizeAddress(config.serverAddr);
+    final alreadyJoined = state.rooms.any(
+      (r) =>
+          r.roomUUID == hexUUID &&
+          _normalizeAddress(r.serverAddress) == targetServer,
+    );
+    if (alreadyJoined) {
+      // Idempotent join: repeated taps / duplicate intents for the same
+      // room+server should not surface an error in UI.
+      return;
+    }
     final chatBloc = ChatBloc(
         accountId: _accountId,
         storageGateway: _chatStorage,

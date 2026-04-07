@@ -13,7 +13,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/uint64_utils.dart';
-import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/crypto/chacha20_utils.dart';
 import 'package:sgtp_flutter/core/crypto/ed25519_utils.dart';
@@ -23,7 +22,6 @@ import 'package:sgtp_flutter/core/protocol/frame_parser.dart';
 import 'package:sgtp_flutter/core/protocol/packet_types.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_repository.dart';
-import 'package:sgtp_flutter/features/setup/data/repositories/settings_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/http_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
@@ -399,21 +397,8 @@ class SgtpClient implements ISgtpSession {
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
       final (host, _) = _parseHostPortOrThrow(_config.serverAddr);
 
-      SgtpServerOptions? options;
-      try {
-        final result = await SgtpServerDiscovery.discover(host);
-        options = result.opts;
-        final nodeId = (_config.nodeId ?? '').trim();
-        if (nodeId.isNotEmpty) {
-          await SettingsRepository().saveNodeServerOptions(nodeId, options);
-        }
-      } catch (e) {
-        final nodeId = (_config.nodeId ?? '').trim();
-        if (nodeId.isNotEmpty) {
-          options = await SettingsRepository().loadNodeServerOptions(nodeId);
-        }
-        if (options == null) rethrow;
-      }
+      final result = await SgtpServerDiscovery.discover(host);
+      final options = result.opts;
 
       if (!options.hasAny) {
         throw StateError('Server returned no transport options');

@@ -3131,7 +3131,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
   bool _useTls = false;
   bool _advancedExpanded = false;
   SgtpServerOptions? _serverOptions;
-  DateTime? _serverOptionsAt;
   bool _optionsLoading = false;
   String? _optionsError;
   Timer? _fetchTimer;
@@ -3161,12 +3160,9 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
 
   Future<void> _loadCachedOptions() async {
     final opts = await widget.settings.loadNodeServerOptions(widget.baseId);
-    final at =
-        await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
     if (!mounted || opts == null) return;
     setState(() {
       _serverOptions = opts;
-      _serverOptionsAt = at;
     });
   }
 
@@ -3191,13 +3187,9 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     try {
       final (:opts, port: _, tls: _) =
           await widget.settings.discoverServer(host);
-      await widget.settings.saveNodeServerOptions(widget.baseId, opts);
-      final savedAt =
-          await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
       if (!mounted) return;
       setState(() {
         _serverOptions = opts;
-        _serverOptionsAt = savedAt ?? DateTime.now();
         _optionsLoading = false;
         if (_useTls && !_tlsAvailable()) _useTls = false;
       });
@@ -3470,8 +3462,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               ] else if (_serverOptions != null) ...[
                 const SizedBox(height: 10),
                 Text(
-                  'Available: ${_serverOptions!.availableLabels().join(", ")}'
-                  '${_serverOptionsAt != null ? " (cached)" : ""}',
+                  'Available: ${_serverOptions!.availableLabels().join(", ")}',
                   style: const TextStyle(
                       color: AppColors.textSecondary, fontSize: 12),
                 ),

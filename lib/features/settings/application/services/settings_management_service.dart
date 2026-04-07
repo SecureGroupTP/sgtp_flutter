@@ -95,12 +95,23 @@ class SettingsManagementService {
   Future<void> saveNodeServerOptions(
     String nodeId,
     SgtpServerOptions options,
-  ) =>
-      _settings.saveNodeServerOptions(nodeId, options);
-  Future<SgtpServerOptions?> loadNodeServerOptions(String nodeId) =>
-      _settings.loadNodeServerOptions(nodeId);
-  Future<DateTime?> loadNodeServerOptionsSavedAt(String nodeId) =>
-      _settings.loadNodeServerOptionsSavedAt(nodeId);
+  ) async {}
+  Future<SgtpServerOptions?> loadNodeServerOptions(String nodeId) async {
+    final id = nodeId.trim();
+    if (id.isEmpty) return null;
+    final nodes = await _settings.loadNodes();
+    final node = nodes.where((n) => n.id == id).firstOrNull;
+    if (node == null) return null;
+    try {
+      final normalizedHost = normalizeNodeHost(node.host);
+      if (normalizedHost.isEmpty) return null;
+      final result = await SgtpServerDiscovery.discover(normalizedHost);
+      return result.opts;
+    } catch (_) {
+      return null;
+    }
+  }
+  Future<DateTime?> loadNodeServerOptionsSavedAt(String nodeId) async => null;
   Future<void> saveNodeEditorAdvancedExpanded(bool expanded) =>
       _settings.saveNodeEditorAdvancedExpanded(expanded);
   Future<bool> loadNodeEditorAdvancedExpanded() =>
@@ -552,7 +563,6 @@ class SettingsManagementService {
 
   Future<void> discoverNodeAndCache(NodeConfig node) async {
     final (:opts, :port, :tls) = await SgtpServerDiscovery.discover(node.host);
-    await _settings.saveNodeServerOptions(node.id, opts);
     final labels = [
       if (opts.tcp) 'TCP:${opts.tcpPort}',
       if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
@@ -569,35 +579,10 @@ class SettingsManagementService {
 
   Future<void> logCachedDiscovery(List<NodeConfig> nodes) async {
     if (nodes.isEmpty) {
-      AppLogger.i('Discovery cache: no accounts configured', tag: 'DISC');
+      AppLogger.i('Discovery: no accounts configured', tag: 'DISC');
       return;
     }
-    for (final node in nodes) {
-      final opts = await _settings.loadNodeServerOptions(node.id);
-      final at = await _settings.loadNodeServerOptionsSavedAt(node.id);
-      if (opts == null) {
-        AppLogger.i(
-          'Discovery cache [${node.name}] ${node.chatAddress}: no cache',
-          tag: 'DISC',
-        );
-        continue;
-      }
-      final age = at != null
-          ? '${DateTime.now().difference(at).inMinutes}m ago'
-          : 'unknown age';
-      final labels = [
-        if (opts.tcp) 'TCP:${opts.tcpPort}',
-        if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
-        if (opts.http) 'HTTP:${opts.httpPort}',
-        if (opts.httpTls) 'HTTP+TLS:${opts.httpTlsPort}',
-        if (opts.websocket) 'WebSocket:${opts.websocketPort}',
-        if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
-      ];
-      AppLogger.i(
-        'Discovery cache [${node.name}] ${node.chatAddress}: ${labels.join(", ")} ($age)',
-        tag: 'DISC',
-      );
-    }
+    AppLogger.i('Discovery cache is disabled; using live discovery', tag: 'DISC');
   }
 
   String normalizeNodeHost(String raw) => raw
@@ -617,9 +602,7 @@ class SettingsManagementService {
 
     final (:opts, :port, :tls) =
         await SgtpServerDiscovery.discover(normalizedHost);
-    await _settings.saveNodeServerOptions(nodeId, opts);
-    final savedAt =
-        await _settings.loadNodeServerOptionsSavedAt(nodeId) ?? DateTime.now();
+    final savedAt = DateTime.now();
     final labels = [
       if (opts.tcp) 'TCP:${opts.tcpPort}',
       if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
