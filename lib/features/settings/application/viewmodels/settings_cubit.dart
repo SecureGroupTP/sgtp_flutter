@@ -232,13 +232,24 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Intent: Select account ──────────────────────────────────────────────
 
-  Future<void> selectAccountId(String accountId) async {
-    if (_preferredAccountId == accountId) return;
-    _preferredAccountId = accountId;
-    await _settings.setLastAccountId(accountId);
+  Future<void> selectAccountId(
+    String accountId, {
+    bool forceReload = false,
+  }) async {
+    final normalized = accountId.trim();
+    if (normalized.isEmpty) return;
+    final sameAccount = _preferredAccountId == normalized;
+
+    if (!sameAccount) {
+      _preferredAccountId = normalized;
+      await _settings.setLastAccountId(normalized);
+      _buildState();
+    } else if (!forceReload) {
+      return;
+    }
+
     final loadSeq = ++_accountLoadSeq;
-    _buildState();
-    await _loadAccountData(accountId, expectedLoadSeq: loadSeq);
+    await _loadAccountData(normalized, expectedLoadSeq: loadSeq);
   }
 
   // ── Intent: Delete account ──────────────────────────────────────────────
@@ -260,7 +271,8 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   Future<void> addEmptyAccount(String accountId) async {
     await _settings.addEmptyAccount(accountId);
-    await reloadNodes();
+    await reloadNodes(applyConfig: false);
+    await selectAccountId(accountId, forceReload: true);
   }
 
   // ── Intent: Edit node ───────────────────────────────────────────────────
@@ -280,7 +292,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Intent: Reload nodes ────────────────────────────────────────────────
 
-  Future<void> reloadNodes() async {
+  Future<void> reloadNodes({bool applyConfig = true}) async {
     final reload = await _settings.reloadRegistryState();
     _nodes = reload.nodes;
     _accountIdsList = reload.accountIds;
@@ -288,7 +300,21 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _preferredAccountId = reload.preferredAccountId;
     _buildState();
     unawaited(_refreshProfilesCache(_accountIdsList));
-    tryApplyConfig();
+
+    final activeAccountId = _activeAccountId();
+    if (activeAccountId != null && activeAccountId.trim().isNotEmpty) {
+      final loadSeq = ++_accountLoadSeq;
+      await _loadAccountData(
+        activeAccountId,
+        applyConfig: applyConfig,
+        expectedLoadSeq: loadSeq,
+      );
+      return;
+    }
+
+    if (applyConfig) {
+      tryApplyConfig();
+    }
   }
 
   // ── Intent: Save nickname ───────────────────────────────────────────────
