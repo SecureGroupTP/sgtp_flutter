@@ -1008,10 +1008,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _addAccountOnly() async {
-    await _cubit.addEmptyAccount();
-    final s = _cubit.state;
-    final accountId = s.accountIdsList.isNotEmpty ? s.accountIdsList.last : null;
-    if (accountId == null) return;
+    final accountId = uuidBytesToHex(generateUUIDv7());
+    await _cubit.addEmptyAccount(accountId);
     if (!mounted) return;
     final ok = await _promptPrivateKeyForAccount(accountId);
     if (!mounted) return;
@@ -1551,7 +1549,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                usernameError!,
+                usernameError,
                 style:
                     const TextStyle(fontSize: 12, color: AppColors.statusRed),
               ),

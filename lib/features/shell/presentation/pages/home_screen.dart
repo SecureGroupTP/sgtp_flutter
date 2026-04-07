@@ -5,7 +5,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
-import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
