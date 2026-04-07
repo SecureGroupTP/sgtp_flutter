@@ -32,6 +32,7 @@ import 'package:sgtp_flutter/features/settings/presentation/pages/logs_screen.da
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 
 typedef ConfigChangedCallback = void Function(
@@ -653,7 +654,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (bytes == null || bytes.isEmpty) return;
     final keyText = String.fromCharCodes(bytes).trim();
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
@@ -750,7 +752,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirm = await showAppConfirmSheet(
       context,
       title: 'Are you sure?',
-      body: 'Importing a key from clipboard will REPLACE the private key for this account.',
+      body:
+          'Importing a key from clipboard will REPLACE the private key for this account.',
       confirmLabel: 'Yes',
       cancelLabel: 'No',
     );
@@ -817,7 +820,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirm = await showAppConfirmSheet(
       context,
       title: 'Generate New Key?',
-      body: 'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
+      body:
+          'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
           'Your old key will be replaced. Peers that trusted your old key will need to add the new one to their whitelist.',
       confirmLabel: 'Generate',
     );
@@ -880,7 +884,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final pasteCtrl = TextEditingController();
     if (!mounted) return false;
 
-    await showAppBottomSheet<void>(context,
+    await showAppBottomSheet<void>(
+      context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => SafeArea(
           child: Padding(
@@ -1287,7 +1292,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       {NodeConfig? existing, String? accountIdForNew}) async {
     final baseId = existing?.id ?? uuidBytesToHex(generateUUIDv7());
     NodeConfig? result;
-    await showAppBottomSheet<void>(context,
+    await showAppBottomSheet<void>(
+      context,
       builder: (ctx) => _NodeEditorSheet(
         existing: existing,
         baseId: baseId,
@@ -1331,14 +1337,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final updated = await _openNodeEditor(existing: node);
     if (updated == null) return;
     await _settings.saveDetachedNode(updated);
+    await _migrateEditedServerChats(previous: node, updated: updated);
     unawaited(_runDiscoveryForNode(updated));
     await _reloadNodes();
     _tryApplyConfig();
   }
 
+  String _normalizeServerKey(String raw) {
+    return raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .toLowerCase();
+  }
+
+  Future<void> _migrateEditedServerChats({
+    required NodeConfig previous,
+    required NodeConfig updated,
+  }) async {
+    final from = previous.chatAddress.trim();
+    final to = updated.chatAddress.trim();
+    if (from.isEmpty || to.isEmpty) return;
+    if (_normalizeServerKey(from) == _normalizeServerKey(to)) return;
+
+    final accountId = (_activeAccountId() ?? '').trim();
+    if (accountId.isEmpty) return;
+
+    final migrated =
+        await context.read<ChatStorageGateway>().migrateServerAddress(
+              accountId: accountId,
+              fromServerAddress: from,
+              toServerAddress: to,
+            );
+    if (!mounted || migrated <= 0) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          migrated == 1
+              ? 'Moved 1 chat history to $to'
+              : 'Moved $migrated chat histories to $to',
+        ),
+      ),
+    );
+  }
+
   Future<void> _deleteNode(NodeConfig node) async {
     bool confirmed = false;
-    await showAppBottomSheet<void>(context,
+    await showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
@@ -1449,12 +1495,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onBack: () => setState(() => _activeSection = null),
             ),
       body: ListView(
-        padding: EdgeInsets.only(top: activeSection == null ? 0 : 20, bottom: 100),
+        padding:
+            EdgeInsets.only(top: activeSection == null ? 0 : 20, bottom: 100),
         children: activeSection == null
             ? [
                 _buildAccountSwitcher(),
                 _buildProfileSection(),
-                _SettingsGroup(title: 'Server Connection', child: _buildNetworkCard()),
+                _SettingsGroup(
+                    title: 'Server Connection', child: _buildNetworkCard()),
                 _buildSettingsHub(),
                 const SizedBox(height: 16),
               ]
@@ -1635,7 +1683,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
@@ -1670,7 +1719,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
         .replaceAll(RegExp(r'^-+|-+$'), '');
 
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (ctx) => SafeArea(
         child: PrettyQrSharePanel(
           data: shareData,
@@ -2004,7 +2054,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showAddAccountSheet() {
-    showAppBottomSheet<void>(context,
+    showAppBottomSheet<void>(
+      context,
       builder: (_) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
@@ -2348,7 +2399,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           padding: const EdgeInsets.all(10),
           child: Text(
             _cameraCheckError!,
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            style:
+                const TextStyle(color: AppColors.textSecondary, fontSize: 12),
             textAlign: TextAlign.center,
           ),
         ),
@@ -2498,10 +2550,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SwitchRow(
             label: 'Microphone check',
             value: _micCheckEnabled,
-            onChanged:
-                _selectedMicrophoneId != null && _microphones.isNotEmpty
-                    ? (v) => unawaited(_setMicrophoneCheckEnabled(v))
-                    : null,
+            onChanged: _selectedMicrophoneId != null && _microphones.isNotEmpty
+                ? (v) => unawaited(_setMicrophoneCheckEnabled(v))
+                : null,
           ),
           const SizedBox(height: 14),
           const Text(
@@ -2536,7 +2587,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? (v) => unawaited(_setCameraCheckEnabled(v))
                 : null,
           ),
-          if (_cameraCheckEnabled || _cameraCheckLoading || _cameraCheckError != null)
+          if (_cameraCheckEnabled ||
+              _cameraCheckLoading ||
+              _cameraCheckError != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: _buildCameraCheckPreview(),
@@ -2723,19 +2776,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: const Padding(
             padding: EdgeInsets.symmetric(vertical: 12),
             child: Row(
-            children: [
-              Icon(Icons.code, size: 18, color: Color(0xFF0A84FF)),
-              SizedBox(width: 8),
-              Text(
-                'GitHub Repository',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF0A84FF),
+              children: [
+                Icon(Icons.code, size: 18, color: Color(0xFF0A84FF)),
+                SizedBox(width: 8),
+                Text(
+                  'GitHub Repository',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF0A84FF),
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
           ),
         ),
       ],
@@ -2777,10 +2830,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'Relay Server',
         'Connect to a valid SGTP relay address to start broadcasting.'
       ),
-      (
-        'Chat Securely',
-        'All messages are end-to-end encrypted by default.'
-      ),
+      ('Chat Securely', 'All messages are end-to-end encrypted by default.'),
     ];
     return Column(
       children: List.generate(steps.length, (i) {
@@ -2853,9 +2903,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.archive_outlined,
           label: 'Create backup',
           loading: _isCreatingBackup,
-          onPressed: (_isCreatingBackup || _isRestoringBackup)
-              ? null
-              : _makeBackup,
+          onPressed:
+              (_isCreatingBackup || _isRestoringBackup) ? null : _makeBackup,
         ),
         const SizedBox(height: 16),
         const Text(
@@ -3000,8 +3049,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: const TextStyle(color: AppColors.textPrimary),
                   decoration: InputDecoration(
                     hintText: 'Enter code',
-                    hintStyle:
-                        const TextStyle(color: AppColors.textSecondary),
+                    hintStyle: const TextStyle(color: AppColors.textSecondary),
                     errorText: err,
                     filled: true,
                     fillColor: AppColors.bgSurfaceActive,
@@ -3407,7 +3455,6 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-
 // ── Node editor bottom sheet ──────────────────────────────────────────────────
 
 class _NodeEditorSheet extends StatefulWidget {
@@ -3432,9 +3479,11 @@ class _NodeEditorSheet extends StatefulWidget {
 class _NodeEditorSheetState extends State<_NodeEditorSheet> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _hostCtrl;
+  late final TextEditingController _fakeSniCtrl;
 
   SgtpTransportFamily _transport = SgtpTransportFamily.tcp;
   bool _useTls = false;
+  bool _advancedExpanded = false;
   SgtpServerOptions? _serverOptions;
   DateTime? _serverOptionsAt;
   bool _optionsLoading = false;
@@ -3447,13 +3496,21 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     final e = widget.existing;
     _nameCtrl = TextEditingController(text: e?.name ?? '');
     _hostCtrl = TextEditingController(text: e?.host ?? '');
+    _fakeSniCtrl = TextEditingController(text: e?.fakeSni ?? '');
     _transport = SgtpTransportFamilyCodec.resolve(
         e?.transport ?? SgtpTransportFamily.tcp);
     _useTls = e?.useTls ?? false;
 
     _hostCtrl.addListener(_scheduleFetch);
 
+    unawaited(_loadAdvancedExpandedPref());
     if (e != null) unawaited(_loadCachedOptions());
+  }
+
+  Future<void> _loadAdvancedExpandedPref() async {
+    final expanded = await widget.settings.loadNodeEditorAdvancedExpanded();
+    if (!mounted) return;
+    setState(() => _advancedExpanded = expanded);
   }
 
   Future<void> _loadCachedOptions() async {
@@ -3486,7 +3543,8 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       _optionsError = null;
     });
     try {
-      final (:opts, port: _, tls: _) = await widget.settings.discoverServer(host);
+      final (:opts, port: _, tls: _) =
+          await widget.settings.discoverServer(host);
       await widget.settings.saveNodeServerOptions(widget.baseId, opts);
       final savedAt =
           await widget.settings.loadNodeServerOptionsSavedAt(widget.baseId);
@@ -3531,6 +3589,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       voicePort: 443,
       transport: _transport,
       useTls: _useTls,
+      fakeSni: _fakeSniCtrl.text.trim(),
     ));
   }
 
@@ -3539,6 +3598,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     _fetchTimer?.cancel();
     _nameCtrl.dispose();
     _hostCtrl.dispose();
+    _fakeSniCtrl.dispose();
     super.dispose();
   }
 
@@ -3575,8 +3635,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
                 icon: Icons.dns_outlined,
                 hint: 'Server Address (IP or Domain)',
               ),
-              const SizedBox(height: 12),
-
               const SizedBox(height: 12),
 
               StyledDropdown<SgtpTransportFamily>(
@@ -3633,6 +3691,109 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
                   ],
                 ),
               ),
+              const SizedBox(height: 12),
+
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B1B1F),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Column(
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () {
+                        final next = !_advancedExpanded;
+                        setState(() => _advancedExpanded = next);
+                        unawaited(
+                          widget.settings.saveNodeEditorAdvancedExpanded(next),
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.tune,
+                                size: 22, color: AppColors.textSecondary),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                'Advanced',
+                                style: TextStyle(
+                                    color: AppColors.textPrimary, fontSize: 15),
+                              ),
+                            ),
+                            AnimatedRotation(
+                              duration: const Duration(milliseconds: 160),
+                              turns: _advancedExpanded ? 0.5 : 0,
+                              child: const Icon(Icons.expand_more,
+                                  color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (_advancedExpanded) ...[
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: AppColors.border,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0x33FF9500),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: const Color(0x66FF9500),
+                                ),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              child: const Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.warning_amber_rounded,
+                                    size: 18,
+                                    color: Color(0xFFFFB347),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Advanced settings can break connection. '
+                                      'Do not change them if you are not sure what you are doing.',
+                                      style: TextStyle(
+                                        color: AppColors.textPrimary,
+                                        fontSize: 12,
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            _StyledField(
+                              controller: _fakeSniCtrl,
+                              icon: Icons.shield_outlined,
+                              hint: 'Fake SNI (domain)',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
 
               // Status line
               if (_optionsLoading) ...[
@@ -3679,7 +3840,6 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     );
   }
 }
-
 
 // ── Styled input matching contacts_screen style ───────────────────────────────
 
@@ -3989,8 +4149,9 @@ class _SwitchRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      crossAxisAlignment:
-          subtitle == null ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      crossAxisAlignment: subtitle == null
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
       children: [
         Expanded(
           child: Column(
@@ -4045,7 +4206,8 @@ class _ChoiceChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? Colors.white : const Color(0xFF2C2C2E),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: selected ? Colors.white : Colors.transparent),
+          border:
+              Border.all(color: selected ? Colors.white : Colors.transparent),
         ),
         child: Text(
           label,

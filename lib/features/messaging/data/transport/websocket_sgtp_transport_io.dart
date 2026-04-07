@@ -4,12 +4,16 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
+
+const _tag = 'WS';
 
 class WebSocketSgtpTransport implements SgtpTransport {
   final String host;
   final int port;
   final bool useTls;
+  final String? fakeSni;
 
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
@@ -40,6 +44,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
     required this.host,
     required this.port,
     required this.useTls,
+    this.fakeSni,
   });
 
   @override
@@ -53,11 +58,14 @@ class WebSocketSgtpTransport implements SgtpTransport {
   @override
   Future<void> connect() async {
     if (_socket != null) return;
+    final tlsSni = (fakeSni ?? '').trim();
+    AppLogger.d(
+      'Connecting WS to $host:$port (tls=$useTls, sni=${tlsSni.isEmpty ? host : tlsSni})',
+      tag: _tag,
+    );
 
-    final sock = useTls
-        ? await SecureSocket.connect(host, port,
-            onBadCertificate: (_) => true)
-        : await Socket.connect(host, port);
+    final sock =
+        useTls ? await _connectTlsSocket() : await Socket.connect(host, port);
 
     _socket = sock;
 
@@ -93,6 +101,20 @@ class WebSocketSgtpTransport implements SgtpTransport {
     await sock.flush();
 
     await _upgradeCompleter.future;
+  }
+
+  Future<SecureSocket> _connectTlsSocket() async {
+    final tlsServerName = (fakeSni ?? '').trim();
+    if (tlsServerName.isNotEmpty &&
+        tlsServerName.toLowerCase() != host.toLowerCase()) {
+      final raw = await Socket.connect(host, port);
+      return SecureSocket.secure(
+        raw,
+        host: tlsServerName,
+        onBadCertificate: (_) => true,
+      );
+    }
+    return SecureSocket.connect(host, port, onBadCertificate: (_) => true);
   }
 
   // ── send ──────────────────────────────────────────────────────────────────
@@ -320,8 +342,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
 
   static Uint8List _encodeCloseFrame() {
     final mask = _randomMask();
-    return Uint8List.fromList(
-        [0x88, 0x80, mask[0], mask[1], mask[2], mask[3]]);
+    return Uint8List.fromList([0x88, 0x80, mask[0], mask[1], mask[2], mask[3]]);
   }
 
   static Uint8List _encodePong(Uint8List pingPayload) {
@@ -349,7 +370,9 @@ class WebSocketSgtpTransport implements SgtpTransport {
 
   static String _generateWsKey() {
     final bytes = Uint8List(16);
-    for (int i = 0; i < 16; i++) { bytes[i] = _rng.nextInt(256); }
+    for (int i = 0; i < 16; i++) {
+      bytes[i] = _rng.nextInt(256);
+    }
     return base64.encode(bytes);
   }
 }

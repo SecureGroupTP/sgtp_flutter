@@ -53,6 +53,8 @@ class SettingsRepository {
   static const _nodeServerOptionsKeyPrefix = 'sgtp_node_server_options_v1_';
   static const _nodeServerOptionsSavedAtKeyPrefix =
       'sgtp_node_server_options_saved_at_v1_';
+  static const _nodeEditorAdvancedExpandedKey =
+      'sgtp_node_editor_advanced_expanded_v1';
   static const int _maxSaved = 10;
 
   String _scopedKey(String base, String? nodeId) {
@@ -369,6 +371,16 @@ class SettingsRepository {
     final ts = p.getInt('$_nodeServerOptionsSavedAtKeyPrefix$id');
     if (ts == null || ts <= 0) return null;
     return DateTime.fromMillisecondsSinceEpoch(ts);
+  }
+
+  Future<void> saveNodeEditorAdvancedExpanded(bool expanded) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_nodeEditorAdvancedExpandedKey, expanded);
+  }
+
+  Future<bool> loadNodeEditorAdvancedExpanded() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getBool(_nodeEditorAdvancedExpandedKey) ?? false;
   }
 
   NodeConfig _nodeFromLegacyAddress(String address) {

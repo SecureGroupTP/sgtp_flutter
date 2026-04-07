@@ -101,6 +101,10 @@ class SettingsManagementService {
       _settings.loadNodeServerOptions(nodeId);
   Future<DateTime?> loadNodeServerOptionsSavedAt(String nodeId) =>
       _settings.loadNodeServerOptionsSavedAt(nodeId);
+  Future<void> saveNodeEditorAdvancedExpanded(bool expanded) =>
+      _settings.saveNodeEditorAdvancedExpanded(expanded);
+  Future<bool> loadNodeEditorAdvancedExpanded() =>
+      _settings.loadNodeEditorAdvancedExpanded();
   Future<void> upsertAccountId(String accountId) =>
       _settings.upsertAccountId(accountId);
   Future<void> deleteNode(String nodeId) => _settings.deleteNode(nodeId);
@@ -167,13 +171,15 @@ class SettingsManagementService {
             ? savedAccountId
             : (accountIds.isNotEmpty ? accountIds.first : null);
     if (preferredAccountId != null && preferredAccountId.trim().isNotEmpty) {
-      await _settings.migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
+      await _settings
+          .migrateLegacyAccountDataToNodeIfNeeded(preferredAccountId);
     }
 
     return SettingsBootstrapData(
       nodes: nodes,
       accountIds: accountIds,
-      preferredNodeId: preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null),
+      preferredNodeId:
+          preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null),
       preferredAccountId: preferredAccountId,
       lastAddress: await _settings.getLastAddress(),
       mediaSettings: await _settings.loadMediaTransferSettings(),
@@ -210,7 +216,8 @@ class SettingsManagementService {
     );
   }
 
-  Future<SettingsProfilesCache> loadProfilesCache(List<String> accountIds) async {
+  Future<SettingsProfilesCache> loadProfilesCache(
+      List<String> accountIds) async {
     final avatars = <String, Uint8List?>{};
     final nicknames = <String, String>{};
     for (final accountId in accountIds) {
@@ -235,7 +242,8 @@ class SettingsManagementService {
     return SettingsRegistryState(
       nodes: nodes,
       accountIds: accountIds,
-      preferredNodeId: preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null),
+      preferredNodeId:
+          preferred?.id ?? (nodes.isNotEmpty ? nodes.first.id : null),
       preferredAccountId: preferredAccountId,
     );
   }
@@ -532,6 +540,7 @@ class SettingsManagementService {
         whitelist: whitelistEntries.map((entry) => entry.hexKey).toSet(),
         transport: node.transport,
         useTls: node.useTls,
+        fakeSni: node.fakeSni,
         nodeId: node.id,
         pingIntervalSeconds: pingIntervalSeconds,
         mediaChunkSizeBytes: mediaChunkSizeBytes,
@@ -609,8 +618,8 @@ class SettingsManagementService {
     final (:opts, :port, :tls) =
         await SgtpServerDiscovery.discover(normalizedHost);
     await _settings.saveNodeServerOptions(nodeId, opts);
-    final savedAt = await _settings.loadNodeServerOptionsSavedAt(nodeId) ??
-        DateTime.now();
+    final savedAt =
+        await _settings.loadNodeServerOptionsSavedAt(nodeId) ?? DateTime.now();
     final labels = [
       if (opts.tcp) 'TCP:${opts.tcpPort}',
       if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
@@ -665,7 +674,8 @@ class SettingsManagementService {
         ? data.nodeId!.trim()
         : uuidBytesToHex(generateUUIDv7());
 
-    String? host = data.nodeHost != null ? normalizeNodeHost(data.nodeHost!) : null;
+    String? host =
+        data.nodeHost != null ? normalizeNodeHost(data.nodeHost!) : null;
     int? chatPort = data.nodeChatPort;
 
     if ((host == null || host.isEmpty) && data.serverAddress != null) {

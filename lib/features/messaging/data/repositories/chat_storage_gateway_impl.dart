@@ -40,6 +40,14 @@ class _ChatHistoryStoreAdapter implements ChatHistoryStore {
 class DefaultChatStorageGateway implements ChatStorageGateway {
   const DefaultChatStorageGateway();
 
+  String _serverKey(String raw) {
+    return raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .toLowerCase();
+  }
+
   @override
   ChatMetadataStore metadataForAccount(String accountId) {
     return _ChatMetadataStoreAdapter(
@@ -60,5 +68,61 @@ class DefaultChatStorageGateway implements ChatStorageGateway {
         chatUUID: chatUUID,
       ),
     );
+  }
+
+  @override
+  Future<int> migrateServerAddress({
+    required String accountId,
+    required String fromServerAddress,
+    required String toServerAddress,
+  }) async {
+    final acc = accountId.trim();
+    final fromRaw = fromServerAddress.trim();
+    final toRaw = toServerAddress.trim();
+    if (acc.isEmpty || fromRaw.isEmpty || toRaw.isEmpty) return 0;
+    if (_serverKey(fromRaw) == _serverKey(toRaw)) return 0;
+
+    final metadataRepo = ChatMetadataRepository(accountId: acc);
+    final all = await metadataRepo.loadAllChats();
+    final source =
+        all.where((m) => _serverKey(m.serverAddress) == _serverKey(fromRaw));
+    var migrated = 0;
+
+    for (final chat in source) {
+      final oldServer = chat.serverAddress.trim();
+      if (oldServer.isEmpty) continue;
+
+      final next = chat.copyWith(
+        serverAddress: toRaw,
+        updatedAt: DateTime.now(),
+      );
+      await metadataRepo.saveChat(next);
+
+      final oldHistory = ChatHistoryRepository(
+        accountId: acc,
+        serverAddress: oldServer,
+        chatUUID: chat.uuid,
+      );
+      final newHistory = ChatHistoryRepository(
+        accountId: acc,
+        serverAddress: toRaw,
+        chatUUID: chat.uuid,
+      );
+
+      const page = 250;
+      var offset = 0;
+      while (true) {
+        final records = await oldHistory.readRange(offset: offset, limit: page);
+        if (records.isEmpty) break;
+        for (final record in records) {
+          await newHistory.appendIfAbsent(record);
+        }
+        offset += records.length;
+      }
+      await oldHistory.clear();
+      await metadataRepo.deleteChat(chat.uuid, serverAddress: oldServer);
+      migrated++;
+    }
+    return migrated;
   }
 }

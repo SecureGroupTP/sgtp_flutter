@@ -9,6 +9,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
   final String host;
   final int port;
   final bool useTls;
+  final String? fakeSni;
 
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
@@ -19,6 +20,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
     required this.host,
     required this.port,
     required this.useTls,
+    this.fakeSni,
   });
 
   @override

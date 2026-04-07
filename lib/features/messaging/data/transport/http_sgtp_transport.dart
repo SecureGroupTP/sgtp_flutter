@@ -4,15 +4,19 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/http_client_factory.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
+
+const _tag = 'HTTP';
 
 class HttpSgtpTransport implements SgtpTransport {
   final String host;
   final int port;
   final bool useTls;
+  final String? fakeSni;
 
-  final http.Client _client = createSgtpHttpClient();
+  late final http.Client _client;
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
 
@@ -24,7 +28,15 @@ class HttpSgtpTransport implements SgtpTransport {
     required this.host,
     required this.port,
     required this.useTls,
-  });
+    this.fakeSni,
+  }) {
+    _client = createSgtpHttpClient(
+      host: host,
+      port: port,
+      useTls: useTls,
+      fakeSni: fakeSni,
+    );
+  }
 
   Uri _uri(String path, [Map<String, String>? query]) {
     return Uri(
@@ -45,6 +57,11 @@ class HttpSgtpTransport implements SgtpTransport {
   @override
   Future<void> connect() async {
     if (_sidHex != null) return;
+    final tlsSni = (fakeSni ?? '').trim();
+    AppLogger.d(
+      'Connecting HTTP to $host:$port (tls=$useTls, sni=${tlsSni.isEmpty ? host : tlsSni})',
+      tag: _tag,
+    );
     final sid = await _createSession();
     _sidHex = sid;
     _recvLoop = _startRecvLoop();

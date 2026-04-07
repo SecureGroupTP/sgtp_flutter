@@ -12,6 +12,7 @@ class TcpSgtpTransport implements SgtpTransport {
   final String host;
   final int port;
   final bool useTls;
+  final String? fakeSni;
 
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
@@ -22,6 +23,7 @@ class TcpSgtpTransport implements SgtpTransport {
     required this.host,
     required this.port,
     required this.useTls,
+    this.fakeSni,
   });
 
   @override
@@ -33,24 +35,47 @@ class TcpSgtpTransport implements SgtpTransport {
   @override
   Future<void> connect() async {
     if (_socket != null) return;
-    AppLogger.d('Connecting to $host:$port (tls=$useTls)', tag: _tag);
+    final tlsSni = (fakeSni ?? '').trim();
+    AppLogger.d(
+      'Connecting to $host:$port (tls=$useTls, sni=${tlsSni.isEmpty ? host : tlsSni})',
+      tag: _tag,
+    );
     Socket s;
     try {
       if (useTls) {
+        final tlsServerName = (fakeSni ?? '').trim();
         AppLogger.d('Starting TLS handshake with $host:$port', tag: _tag);
-        s = await SecureSocket.connect(
-          host,
-          port,
-          onBadCertificate: (cert) {
-            AppLogger.e(
-              'TLS cert rejected by Dart: subject="${cert.subject}" '
-              'issuer="${cert.issuer}" '
-              'valid=${cert.startValidity}–${cert.endValidity}',
-              tag: _tag,
-            );
-            return false;
-          },
-        );
+        if (tlsServerName.isNotEmpty &&
+            tlsServerName.toLowerCase() != host.toLowerCase()) {
+          final raw = await Socket.connect(host, port);
+          s = await SecureSocket.secure(
+            raw,
+            host: tlsServerName,
+            onBadCertificate: (cert) {
+              AppLogger.e(
+                'TLS cert rejected by Dart: subject="${cert.subject}" '
+                'issuer="${cert.issuer}" '
+                'valid=${cert.startValidity}–${cert.endValidity}',
+                tag: _tag,
+              );
+              return false;
+            },
+          );
+        } else {
+          s = await SecureSocket.connect(
+            host,
+            port,
+            onBadCertificate: (cert) {
+              AppLogger.e(
+                'TLS cert rejected by Dart: subject="${cert.subject}" '
+                'issuer="${cert.issuer}" '
+                'valid=${cert.startValidity}–${cert.endValidity}',
+                tag: _tag,
+              );
+              return false;
+            },
+          );
+        }
         final secure = s as SecureSocket;
         AppLogger.d(
           'TLS handshake OK: '
@@ -115,8 +140,7 @@ class TcpSgtpTransport implements SgtpTransport {
             // threaded; no other stream event fires until this callback
             // returns, guaranteeing correct ordering.)
             if (all.length > discoveryHeaderLen) {
-              _inbound.add(
-                  Uint8List.fromList(all.sublist(discoveryHeaderLen)));
+              _inbound.add(Uint8List.fromList(all.sublist(discoveryHeaderLen)));
             }
 
             headerDone.complete();

@@ -92,12 +92,12 @@ class UserDirClient implements IUserDirClient {
       SgtpTransportFamily.http => useTls ? 'https' : 'http',
     };
     final transport = switch (family) {
-      SgtpTransportFamily.tcp =>
-        TcpSgtpTransport(host: node.host, port: port, useTls: useTls),
-      SgtpTransportFamily.websocket =>
-        WebSocketSgtpTransport(host: node.host, port: port, useTls: useTls),
-      SgtpTransportFamily.http =>
-        HttpSgtpTransport(host: node.host, port: port, useTls: useTls),
+      SgtpTransportFamily.tcp => TcpSgtpTransport(
+          host: node.host, port: port, useTls: useTls, fakeSni: node.fakeSni),
+      SgtpTransportFamily.websocket => WebSocketSgtpTransport(
+          host: node.host, port: port, useTls: useTls, fakeSni: node.fakeSni),
+      SgtpTransportFamily.http => HttpSgtpTransport(
+          host: node.host, port: port, useTls: useTls, fakeSni: node.fakeSni),
     };
     return UserDirClient(
         transport: transport, label: '$scheme://${node.host}:$port');

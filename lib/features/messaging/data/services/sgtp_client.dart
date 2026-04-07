@@ -256,6 +256,10 @@ class SgtpClient implements ISgtpSession {
   bool _historyRequested = false;
   final Map<String, int> _hsiReplies = {};
   Timer? _hsiTimer;
+  final Map<String, int> _chatKeyAckEpochByPeer = {};
+  final Map<String, int> _chatKeyRetryCountByPeer = {};
+  final Map<String, Timer> _chatKeyRetryTimers = {};
+  final Map<String, int> _needChatKeyLastSentMsByPeer = {};
 
   static const int _histNonceBit = 1 << 62;
 
@@ -428,8 +432,13 @@ class SgtpClient implements ISgtpSession {
         throw StateError('Invalid port for selected transport: $port');
       }
 
-      _transport =
-          _buildTransport(host: host, port: port, family: family, tls: tls);
+      _transport = _buildTransport(
+        host: host,
+        port: port,
+        family: family,
+        tls: tls,
+        fakeSni: _config.fakeSni,
+      );
       await _transport!.connect();
 
       _state = _ClientState.waitingHandshake;
@@ -518,22 +527,26 @@ class SgtpClient implements ISgtpSession {
     required int port,
     required SgtpTransportFamily family,
     required bool tls,
+    String? fakeSni,
   }) {
     return switch (family) {
       SgtpTransportFamily.tcp => TcpSgtpTransport(
           host: host,
           port: port,
           useTls: tls,
+          fakeSni: fakeSni,
         ),
       SgtpTransportFamily.http => HttpSgtpTransport(
           host: host,
           port: port,
           useTls: tls,
+          fakeSni: fakeSni,
         ),
       SgtpTransportFamily.websocket => WebSocketSgtpTransport(
           host: host,
           port: port,
           useTls: tls,
+          fakeSni: fakeSni,
         ),
     };
   }
@@ -1102,39 +1115,55 @@ class SgtpClient implements ISgtpSession {
     switch (frame.packetType) {
       case PacketType.intent:
         await _onIntent(frame);
+        break;
       case PacketType.ping:
         await _onPing(frame);
+        break;
       case PacketType.pong:
         await _onPong(frame);
+        break;
       case PacketType.info:
         if (frame.payloadLength == 0)
           await _onInfoReq(frame);
         else
           await _onInfoResp(frame);
+        break;
       case PacketType.chatRequest:
         if (_isMaster) await _onChatRequest(frame);
+        break;
       case PacketType.chatKey:
         await _onChatKey(frame);
+        break;
       case PacketType.chatKeyAck:
+        await _onChatKeyAck(frame);
         break;
       case PacketType.message:
         await _onMessage(frame);
+        break;
       case PacketType.messageFailed:
         await _onMsgFailed(frame);
+        break;
       case PacketType.status:
         await _onStatus(frame);
+        break;
       case PacketType.fin:
         await _onFin(frame);
+        break;
       case PacketType.kicked:
         _onKicked(frame);
+        break;
       case PacketType.hsir:
         await _onHsir(frame);
+        break;
       case PacketType.hsi:
         await _onHsi(frame);
+        break;
       case PacketType.hsr:
         await _onHsr(frame);
+        break;
       case PacketType.hsra:
         await _onHsra(frame);
+        break;
       default:
         break;
     }
@@ -1153,6 +1182,9 @@ class SgtpClient implements ISgtpSession {
     final known = _peers[h];
     if (known != null && known.handshakeComplete) {
       _peerLastSeen[h] = DateTime.now().millisecondsSinceEpoch;
+      if (_isMaster && _state == _ClientState.ready) {
+        await _ensureChatKeyForPeer(h);
+      }
       return;
     }
     // Use configurable threshold (not hardcoded 30s) to avoid kicking
@@ -1172,9 +1204,13 @@ class SgtpClient implements ISgtpSession {
       _peers.remove(h);
       _peerLastSeen.remove(h);
       _pendingHandshakes.remove(h);
-      AppLogger.i('Peer left: \${h.substring(0,8)}', tag: 'SGTP');
+      _chatKeyAckEpochByPeer.remove(h);
+      _chatKeyRetryCountByPeer.remove(h);
+      _chatKeyRetryTimers.remove(h)?.cancel();
+      _needChatKeyLastSentMsByPeer.remove(h);
+      AppLogger.i('Peer left: ${h.substring(0, 8)}', tag: 'SGTP');
       if (!_eventController.isClosed)
-        AppLogger.i('Peer left: \${h.substring(0,8)}', tag: 'SGTP');
+        AppLogger.i('Peer left: ${h.substring(0, 8)}', tag: 'SGTP');
       if (!_eventController.isClosed)
         _eventController.add(SgtpPeerLeft(peerUUID: h));
     }
@@ -1221,7 +1257,7 @@ class SgtpClient implements ISgtpSession {
     _peerPublicKeys[h] = edH;
     if (!_eventController.isClosed && !_announcedJoins.contains(h)) {
       _announcedJoins.add(h);
-      AppLogger.i('Peer joined: \${h.substring(0,8)}', tag: 'SGTP');
+      AppLogger.i('Peer joined: ${h.substring(0, 8)}', tag: 'SGTP');
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
   }
@@ -1259,7 +1295,7 @@ class SgtpClient implements ISgtpSession {
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
     if (_state == _ClientState.ready && _isMaster) {
-      await _issueCK();
+      await _ensureChatKeyForPeer(h);
     } else {
       _scheduleInfo();
       await _checkChatReq();
@@ -1403,9 +1439,45 @@ class SgtpClient implements ISgtpSession {
         enc,
         version: version,
       ));
+      _scheduleChatKeyRetry(peerHex);
     } catch (e) {
       AppLogger.e('_issueCKToPeer failed for $peerHex: $e', tag: 'SGTP');
     }
+  }
+
+  bool _isChatKeyAckedForCurrentEpoch(String peerHex) {
+    return _chatKeyAckEpochByPeer[peerHex] == _chatEpoch;
+  }
+
+  Future<void> _ensureChatKeyForPeer(String peerHex) async {
+    if (!_isMaster || _chatKey == null) return;
+    final peer = _peers[peerHex];
+    if (peer == null || peer.sharedKey.isEmpty) return;
+    if (_isChatKeyAckedForCurrentEpoch(peerHex)) return;
+    await _issueCKToPeer(peerHex);
+  }
+
+  void _scheduleChatKeyRetry(String peerHex) {
+    _chatKeyRetryTimers.remove(peerHex)?.cancel();
+    _chatKeyRetryTimers[peerHex] = Timer(
+      const Duration(seconds: SgtpConstants.ckAckTimeoutSeconds),
+      () async {
+        if (_state == _ClientState.disconnected || !_isMaster) return;
+        if (_isChatKeyAckedForCurrentEpoch(peerHex)) return;
+        final retries = (_chatKeyRetryCountByPeer[peerHex] ?? 0) + 1;
+        if (retries > SgtpConstants.ckAckRetries) {
+          _chatKeyRetryCountByPeer.remove(peerHex);
+          _chatKeyRetryTimers.remove(peerHex)?.cancel();
+          AppLogger.w(
+            'CHAT_KEY retry budget exhausted for ${peerHex.substring(0, 8)} epoch=$_chatEpoch',
+            tag: 'SGTP',
+          );
+          return;
+        }
+        _chatKeyRetryCountByPeer[peerHex] = retries;
+        await _issueCKToPeer(peerHex);
+      },
+    );
   }
 
   Future<void> _issueCK() async {
@@ -1415,9 +1487,13 @@ class SgtpClient implements ISgtpSession {
     final ts = DateTime.now().millisecondsSinceEpoch;
     _chatEpoch = ts > _chatEpoch ? ts : _chatEpoch + 1;
     _myNonce = 0;
+    _chatKeyRetryTimers.forEach((_, t) => t.cancel());
+    _chatKeyRetryTimers.clear();
+    _chatKeyRetryCountByPeer.clear();
     for (final peer in _peers.values) {
       if (peer.sharedKey.isEmpty) continue;
       try {
+        _chatKeyAckEpochByPeer.remove(peer.uuid);
         final version = peer.protocolVersion;
         final nonce = version >= 0x0002 ? _randomUint64() : _chatEpoch;
         final enc = await encrypt(key, peer.sharedKey, nonce);
@@ -1430,6 +1506,7 @@ class SgtpClient implements ISgtpSession {
           enc,
           version: version,
         ));
+        _scheduleChatKeyRetry(peer.uuid);
       } catch (e) {
         AppLogger.e('issueCK encrypt failed for ${peer.uuid}: $e', tag: 'SGTP');
       }
@@ -1439,7 +1516,7 @@ class SgtpClient implements ISgtpSession {
       _state = _ClientState.ready;
       _handshakeRetryTimer?.cancel();
       _handshakeRetryTimer = null;
-      AppLogger.i('Ready (master) room=\${roomUUIDHex.substring(0,8)}',
+      AppLogger.i('Ready (master) room=${roomUUIDHex.substring(0, 8)}',
           tag: 'SGTP');
       _eventController.add(SgtpReady(isMaster: true, roomUUIDHex: roomUUIDHex));
     }
@@ -1464,13 +1541,19 @@ class SgtpClient implements ISgtpSession {
       _chatKey = Uint8List.fromList(dec);
       _chatEpoch = f.epoch;
       _myNonce = 0;
-      await _sendFrame(buildChatKeyAck(_roomUUID, f.senderUUID, _myUUID));
+      await _sendFrame(buildChatKeyAck(
+        _roomUUID,
+        f.senderUUID,
+        _myUUID,
+        f.epoch,
+        version: f.version,
+      ));
       if (!_readyEmitted) {
         _readyEmitted = true;
         _state = _ClientState.ready;
         _handshakeRetryTimer?.cancel();
         _handshakeRetryTimer = null;
-        AppLogger.i('Ready (peer) room=\${roomUUIDHex.substring(0,8)}',
+        AppLogger.i('Ready (peer) room=${roomUUIDHex.substring(0, 8)}',
             tag: 'SGTP');
         _eventController
             .add(SgtpReady(isMaster: false, roomUUIDHex: roomUUIDHex));
@@ -1483,6 +1566,21 @@ class SgtpClient implements ISgtpSession {
       AppLogger.w('CHAT_KEY decrypt failed (will recover): $e', tag: 'SGTP');
       await _recoverFromChatKeyDecryptFailure(f.senderUUID);
     }
+  }
+
+  Future<void> _onChatKeyAck(ParsedFrame f) async {
+    if (!_isMaster) return;
+    final senderH = uuidBytesToHex(f.senderUUID);
+    final peer = _peers[senderH];
+    if (peer == null) return;
+    if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
+    final ackEpoch = f.chatKeyAckEpoch ?? _chatEpoch;
+    if (ackEpoch != _chatEpoch) {
+      return;
+    }
+    _chatKeyAckEpochByPeer[senderH] = ackEpoch;
+    _chatKeyRetryCountByPeer.remove(senderH);
+    _chatKeyRetryTimers.remove(senderH)?.cancel();
   }
 
   Future<void> _recoverFromChatKeyDecryptFailure(Uint8List senderUUID) async {
@@ -1512,7 +1610,12 @@ class SgtpClient implements ISgtpSession {
   // ---------------------------------------------------------------------------
 
   Future<void> _onMessage(ParsedFrame f, {bool history = false}) async {
-    if (_chatKey == null || f.payloadLength < 40) return;
+    if (_chatKey == null || f.payloadLength < 40) {
+      if (!history) {
+        await _sendNeedChatKeyIfNeeded(uuidBytesToHex(f.senderUUID));
+      }
+      return;
+    }
     final sH = uuidBytesToHex(f.senderUUID);
     if (!history) {
       final peer = _peers[sH];
@@ -1539,7 +1642,11 @@ class SgtpClient implements ISgtpSession {
             : DateTime.now(),
         history: history,
       );
-    } catch (_) {}
+    } catch (_) {
+      if (!history) {
+        await _sendNeedChatKeyIfNeeded(sH);
+      }
+    }
   }
 
   Future<void> _emitRecordFromHistory(PersistedHistoryRecord record) async {
@@ -2092,7 +2199,8 @@ class SgtpClient implements ISgtpSession {
   }
 
   Future<void> _onStatus(ParsedFrame f) async {
-    final peer = _peers[uuidBytesToHex(f.senderUUID)];
+    final senderH = uuidBytesToHex(f.senderUUID);
+    final peer = _peers[senderH];
     if (peer == null || peer.sharedKey.isEmpty) return;
     if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
     try {
@@ -2101,10 +2209,49 @@ class SgtpClient implements ISgtpSession {
       if (plain.length >= 2) {
         final code = ByteData.view(plain.buffer, plain.offsetInBytes, 2)
             .getUint16(0, Endian.big);
+        if (code == SgtpConstants.statusNeedChatKey && _isMaster) {
+          await _ensureChatKeyForPeer(senderH);
+          return;
+        }
         AppLogger.e('Server status $code', tag: 'SGTP');
         _eventController.add(SgtpError(error: 'Server status $code'));
       }
     } catch (_) {}
+  }
+
+  Future<void> _sendNeedChatKeyIfNeeded(String peerHex) async {
+    final peer = _peers[peerHex];
+    if (peer == null || peer.sharedKey.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _needChatKeyLastSentMsByPeer[peerHex] ?? 0;
+    if (now - last < 1500) return;
+    _needChatKeyLastSentMsByPeer[peerHex] = now;
+    try {
+      final plain = Uint8List(2);
+      final bd = ByteData.view(plain.buffer);
+      bd.setUint16(0, SgtpConstants.statusNeedChatKey, Endian.big);
+      final version = peer.protocolVersion;
+      final nonce = version >= 0x0002 ? _randomUint64() : now;
+      final cipher = await encrypt(plain, peer.sharedKey, nonce);
+      final payload = version >= 0x0002
+          ? (() {
+              final out = Uint8List(8 + cipher.length);
+              final outBd = ByteData.view(out.buffer);
+              bdSetUint64(outBd, 0, nonce, Endian.big);
+              out.setRange(8, 8 + cipher.length, cipher);
+              return out;
+            })()
+          : cipher;
+      await _sendFrame(buildStatus(
+        _roomUUID,
+        peer.uuidBytes,
+        _myUUID,
+        payload,
+        version: version,
+      ));
+    } catch (e) {
+      AppLogger.w('Failed to send NEED_CHAT_KEY to $peerHex: $e', tag: 'SGTP');
+    }
   }
 
   Future<void> _onFin(ParsedFrame f) async {
@@ -2124,6 +2271,10 @@ class SgtpClient implements ISgtpSession {
     _pendingHandshakes.remove(h);
     _pendingHandshakeTimers.remove(h)?.cancel();
     _peerLastSeen.remove(h);
+    _chatKeyAckEpochByPeer.remove(h);
+    _chatKeyRetryCountByPeer.remove(h);
+    _chatKeyRetryTimers.remove(h)?.cancel();
+    _needChatKeyLastSentMsByPeer.remove(h);
     _announcedJoins.remove(h); // allow re-announce if they rejoin later
     _eventController.add(SgtpPeerLeft(peerUUID: h));
     if (_state == _ClientState.ready) {
@@ -2145,6 +2296,10 @@ class SgtpClient implements ISgtpSession {
     _peers.remove(h);
     _pendingHandshakes.remove(h);
     _pendingHandshakeTimers.remove(h)?.cancel();
+    _chatKeyAckEpochByPeer.remove(h);
+    _chatKeyRetryCountByPeer.remove(h);
+    _chatKeyRetryTimers.remove(h)?.cancel();
+    _needChatKeyLastSentMsByPeer.remove(h);
     _eventController.add(SgtpPeerLeft(peerUUID: h));
   }
 
@@ -2318,6 +2473,13 @@ class SgtpClient implements ISgtpSession {
       timer.cancel();
     }
     _pendingHandshakeTimers.clear();
+    for (final timer in _chatKeyRetryTimers.values) {
+      timer.cancel();
+    }
+    _chatKeyRetryTimers.clear();
+    _chatKeyRetryCountByPeer.clear();
+    _chatKeyAckEpochByPeer.clear();
+    _needChatKeyLastSentMsByPeer.clear();
     _frameChain = Future.value();
     for (final fut in _pendingFiles.values) {
       fut.then((pf) => pf.close()).catchError((_) {});

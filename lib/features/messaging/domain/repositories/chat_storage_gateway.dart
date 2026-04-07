@@ -20,4 +20,12 @@ abstract class ChatStorageGateway {
     required String serverAddress,
     required String chatUUID,
   });
+
+  /// Migrates all local chat metadata + history for [accountId] from one
+  /// server address to another. Returns number of migrated chats.
+  Future<int> migrateServerAddress({
+    required String accountId,
+    required String fromServerAddress,
+    required String toServerAddress,
+  });
 }

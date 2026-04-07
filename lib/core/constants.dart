@@ -49,6 +49,15 @@ class SgtpConstants {
   /// Message failed max retries (§1: MESSAGE_FAILED_RETRIES = 3)
   static const int messageFailedRetries = 3;
 
+  /// CHAT_KEY_ACK timeout in seconds before retransmit.
+  static const int ckAckTimeoutSeconds = 3;
+
+  /// CHAT_KEY retransmit max retries while waiting for ACK.
+  static const int ckAckRetries = 3;
+
+  /// STATUS code: peer requests re-delivery of current CHAT_KEY.
+  static const int statusNeedChatKey = 0x0004;
+
   /// Header size in bytes
   static const int headerSize = 64;
 

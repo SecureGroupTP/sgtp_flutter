@@ -65,7 +65,8 @@ class AppStartupService {
     savedKey ??= await _settings.loadPrivateKey();
     if (savedKey == null) {
       try {
-        final generated = await _settings.generatePrivateKey(accountId: accountId);
+        final generated =
+            await _settings.generatePrivateKey(accountId: accountId);
         savedKey = (bytes: generated.bytes, name: generated.name);
       } catch (_) {
         return const AppStartupResult.retry();
@@ -80,8 +81,9 @@ class AppStartupService {
       final entries = accountId.trim().isEmpty
           ? await _settings.loadWhitelistEntries()
           : await _settings.loadWhitelistEntriesForNode(accountId);
-      final selfHex =
-          parsed.publicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final selfHex = parsed.publicKey
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
       final seen = <String>{};
       final sanitizedEntries = <WhitelistEntry>[];
       for (final entry in entries) {
@@ -108,6 +110,7 @@ class AppStartupService {
             whitelist: whitelist,
             transport: preferredNode?.transport ?? SgtpTransportFamily.tcp,
             useTls: preferredNode?.useTls ?? false,
+            fakeSni: preferredNode?.fakeSni ?? '',
             nodeId: preferredNode?.id,
             mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
           ),

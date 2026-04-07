@@ -9,6 +9,7 @@ class NodeConfig {
   final int voicePort;
   final SgtpTransportFamily transport;
   final bool useTls;
+  final String fakeSni;
 
   const NodeConfig({
     required this.id,
@@ -19,6 +20,7 @@ class NodeConfig {
     required this.voicePort,
     this.transport = SgtpTransportFamily.tcp,
     this.useTls = false,
+    this.fakeSni = '',
   });
 
   String get effectiveAccountId {
@@ -37,6 +39,7 @@ class NodeConfig {
     int? voicePort,
     SgtpTransportFamily? transport,
     bool? useTls,
+    String? fakeSni,
   }) {
     return NodeConfig(
       id: id ?? this.id,
@@ -47,6 +50,7 @@ class NodeConfig {
       voicePort: voicePort ?? this.voicePort,
       transport: transport ?? this.transport,
       useTls: useTls ?? this.useTls,
+      fakeSni: fakeSni ?? this.fakeSni,
     );
   }
 
@@ -59,6 +63,7 @@ class NodeConfig {
         'voicePort': voicePort,
         'transport': transport.id,
         'tls': useTls,
+        if (fakeSni.trim().isNotEmpty) 'fakeSni': fakeSni.trim(),
       };
 
   static NodeConfig fromJson(Map<String, dynamic> json) {
@@ -74,6 +79,7 @@ class NodeConfig {
           ((json['chatPort'] as num?)?.toInt() ?? 443),
       transport: SgtpTransportFamilyCodec.fromId(json['transport'] as String?),
       useTls: (json['tls'] as bool?) ?? false,
+      fakeSni: (json['fakeSni'] as String? ?? '').trim(),
       // 'usersPort' key is ignored for backward compatibility
     );
   }

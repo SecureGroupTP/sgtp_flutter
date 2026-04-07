@@ -14,6 +14,7 @@ class SgtpConfig {
   final Set<String> whitelist;
   final SgtpTransportFamily transport;
   final bool useTls;
+  final String fakeSni;
   final String? nodeId;
   final String chatName;
   final Uint8List? chatAvatarBytes;
@@ -29,6 +30,7 @@ class SgtpConfig {
     required this.whitelist,
     this.transport = SgtpTransportFamily.tcp,
     this.useTls = false,
+    this.fakeSni = '',
     this.nodeId,
     this.chatName = 'Chat',
     this.chatAvatarBytes,
@@ -45,6 +47,7 @@ class SgtpConfig {
         whitelist: whitelist,
         transport: transport,
         useTls: useTls,
+        fakeSni: fakeSni,
         nodeId: nodeId,
         chatName: chatName,
         chatAvatarBytes: chatAvatarBytes,
@@ -61,6 +64,7 @@ class SgtpConfig {
         whitelist: whitelist,
         transport: transport,
         useTls: useTls,
+        fakeSni: fakeSni,
         nodeId: nodeId,
         chatName: name ?? chatName,
         chatAvatarBytes: avatar ?? chatAvatarBytes,
@@ -75,6 +79,7 @@ class SgtpConfig {
     int? mediaChunkSizeBytes,
     SgtpTransportFamily? transport,
     bool? useTls,
+    String? fakeSni,
     String? nodeId,
   }) {
     return SgtpConfig(
@@ -86,6 +91,7 @@ class SgtpConfig {
       whitelist: whitelist ?? this.whitelist,
       transport: transport ?? this.transport,
       useTls: useTls ?? this.useTls,
+      fakeSni: fakeSni ?? this.fakeSni,
       nodeId: nodeId ?? this.nodeId,
       chatName: chatName,
       chatAvatarBytes: chatAvatarBytes,

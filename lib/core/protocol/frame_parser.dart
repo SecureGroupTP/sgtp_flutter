@@ -100,6 +100,12 @@ class ParsedFrame {
     return Uint8List.fromList(payload.sublist(8, 8 + 48));
   }
 
+  int? get chatKeyAckEpoch {
+    if (payload.length < 8) return null;
+    final bd = ByteData.view(payload.buffer, payload.offsetInBytes, 8);
+    return bdGetUint64(bd, 0, Endian.big);
+  }
+
   // ---- MESSAGE accessors ----
 
   Uint8List get messageUUID =>

@@ -152,10 +152,54 @@ Uint8List buildChatKey(
   return frame;
 }
 
-Uint8List buildChatKeyAck(Uint8List roomUUID, Uint8List masterUUID, Uint8List senderUUID) {
-  final frame = _allocFrame(0);
+Uint8List buildChatKeyAck(
+  Uint8List roomUUID,
+  Uint8List masterUUID,
+  Uint8List senderUUID,
+  int epoch, {
+  int version = SgtpConstants.version,
+}) {
+  final payloadLength = version >= 0x0002 ? 8 : 0;
+  final frame = _allocFrame(payloadLength);
   final bd = ByteData.view(frame.buffer);
-  _writeHeader(bd, roomUUID, masterUUID, senderUUID, PacketType.chatKeyAck, 0);
+  _writeHeader(
+    bd,
+    roomUUID,
+    masterUUID,
+    senderUUID,
+    PacketType.chatKeyAck,
+    payloadLength,
+    version: version,
+  );
+  if (payloadLength == 8) {
+    bdSetUint64(bd, SgtpConstants.headerSize, epoch, Endian.big);
+  }
+  return frame;
+}
+
+Uint8List buildStatus(
+  Uint8List roomUUID,
+  Uint8List receiverUUID,
+  Uint8List senderUUID,
+  Uint8List payloadCipher, {
+  int version = SgtpConstants.version,
+}) {
+  final frame = _allocFrame(payloadCipher.length);
+  final bd = ByteData.view(frame.buffer);
+  _writeHeader(
+    bd,
+    roomUUID,
+    receiverUUID,
+    senderUUID,
+    PacketType.status,
+    payloadCipher.length,
+    version: version,
+  );
+  frame.setRange(
+    SgtpConstants.headerSize,
+    SgtpConstants.headerSize + payloadCipher.length,
+    payloadCipher,
+  );
   return frame;
 }
 
