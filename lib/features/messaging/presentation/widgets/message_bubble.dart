@@ -15,6 +15,8 @@ import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 
+enum _MessageContextAction { copyMessage, react, reply }
+
 Size _fitSizeForAspectRatio({
   required double aspectRatio,
   required double maxWidth,
@@ -366,9 +368,13 @@ class MessageBubble extends StatelessWidget {
         onLongPress: onReact == null
             ? null
             : () => _showContextMenu(context, Theme.of(context)),
-        onSecondaryTap: onReact == null
+        onSecondaryTapDown: onReact == null
             ? null
-            : () => _showContextMenu(context, Theme.of(context)),
+            : (details) => _showContextMenu(
+                  context,
+                  Theme.of(context),
+                  globalPosition: details.globalPosition,
+                ),
         behavior: HitTestBehavior.translucent,
         child: Stack(
           clipBehavior: Clip.none,
@@ -454,12 +460,26 @@ class MessageBubble extends StatelessWidget {
         : () => _showReactionPicker(context, Theme.of(context));
   }
 
-  /// Shows a context menu with both React and Reply options.
-  void _showContextMenu(BuildContext context, ThemeData theme) {
+  /// Shows message actions.
+  void _showContextMenu(
+    BuildContext context,
+    ThemeData theme, {
+    Offset? globalPosition,
+  }) {
     final isDesktop =
         !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+    if (isDesktop) {
+      unawaited(
+        _showDesktopContextMenu(
+          context,
+          theme,
+          globalPosition: globalPosition,
+        ),
+      );
+      return;
+    }
     // On mobile, longPress directly opens react picker unless longPressShowsMenu is on.
-    if (!isDesktop && !InteractionPrefs.longPressShowsMenu) {
+    if (!InteractionPrefs.longPressShowsMenu) {
       _showReactionPicker(context, theme);
       return;
     }
@@ -508,6 +528,21 @@ class MessageBubble extends StatelessWidget {
                   onReply?.call();
                 },
               ),
+            if (message.type == MessageType.text &&
+                message.content.trim().isNotEmpty)
+              ListTile(
+                leading:
+                    const Icon(Icons.copy_rounded, color: Color(0xFF8E8E93)),
+                title: const Text('Copy Message',
+                    style: TextStyle(color: Color(0xFFF5F5F5))),
+                onTap: () {
+                  Navigator.pop(context);
+                  Clipboard.setData(ClipboardData(text: message.content));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Message copied')),
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.emoji_emotions_outlined,
                   color: Color(0xFF8E8E93)),
@@ -523,6 +558,70 @@ class MessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _showDesktopContextMenu(
+    BuildContext context,
+    ThemeData theme, {
+    Offset? globalPosition,
+  }) async {
+    final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final overlaySize = overlayBox?.size ?? MediaQuery.of(context).size;
+    final clickPos =
+        globalPosition ?? Offset(overlaySize.width / 2, overlaySize.height / 2);
+    final position = RelativeRect.fromRect(
+      Rect.fromLTWH(clickPos.dx, clickPos.dy, 0, 0),
+      Offset.zero & overlaySize,
+    );
+    final canCopyMessage =
+        message.type == MessageType.text && message.content.trim().isNotEmpty;
+
+    final action = await showMenu<_MessageContextAction>(
+      context: context,
+      position: position,
+      color: const Color(0xFF1F1F24),
+      items: [
+        if (canCopyMessage)
+          const PopupMenuItem<_MessageContextAction>(
+            value: _MessageContextAction.copyMessage,
+            child: _DesktopMenuItem(
+              icon: Icons.copy_rounded,
+              label: 'Copy Message',
+            ),
+          ),
+        const PopupMenuItem<_MessageContextAction>(
+          value: _MessageContextAction.react,
+          child: _DesktopMenuItem(
+            icon: Icons.emoji_emotions_outlined,
+            label: 'React',
+          ),
+        ),
+        if (onReply != null)
+          const PopupMenuItem<_MessageContextAction>(
+            value: _MessageContextAction.reply,
+            child: _DesktopMenuItem(
+              icon: Icons.reply_rounded,
+              label: 'Reply',
+            ),
+          ),
+      ],
+    );
+    if (action == null || !context.mounted) return;
+    switch (action) {
+      case _MessageContextAction.copyMessage:
+        await Clipboard.setData(ClipboardData(text: message.content));
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message copied')),
+        );
+        return;
+      case _MessageContextAction.react:
+        _showReactionPicker(context, theme);
+        return;
+      case _MessageContextAction.reply:
+        onReply?.call();
+        return;
+    }
   }
 
   void _showReactionPicker(BuildContext context, ThemeData theme) {
@@ -858,8 +957,13 @@ class MessageBubble extends StatelessWidget {
       onDoubleTap: _doubleTapAction(context),
       onLongPress:
           onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap:
-          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTapDown: onReact == null
+          ? null
+          : (details) => _showContextMenu(
+                context,
+                theme,
+                globalPosition: details.globalPosition,
+              ),
       behavior: HitTestBehavior.translucent,
       child: ClipRRect(
         borderRadius: BorderRadius.only(
@@ -940,8 +1044,13 @@ class MessageBubble extends StatelessWidget {
       onDoubleTap: _doubleTapAction(context),
       onLongPress:
           onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap:
-          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTapDown: onReact == null
+          ? null
+          : (details) => _showContextMenu(
+                context,
+                theme,
+                globalPosition: details.globalPosition,
+              ),
       behavior: HitTestBehavior.translucent,
       child: Column(
         crossAxisAlignment:
@@ -979,8 +1088,13 @@ class MessageBubble extends StatelessWidget {
       onDoubleTap: _doubleTapAction(context),
       onLongPress:
           onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap:
-          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTapDown: onReact == null
+          ? null
+          : (details) => _showContextMenu(
+                context,
+                theme,
+                globalPosition: details.globalPosition,
+              ),
       // translucent so video play-button tap still works
       behavior: HitTestBehavior.translucent,
       child: Column(
@@ -1007,8 +1121,13 @@ class MessageBubble extends StatelessWidget {
       onDoubleTap: _doubleTapAction(context),
       onLongPress:
           onReact == null ? null : () => _showContextMenu(context, theme),
-      onSecondaryTap:
-          onReact == null ? null : () => _showContextMenu(context, theme),
+      onSecondaryTapDown: onReact == null
+          ? null
+          : (details) => _showContextMenu(
+                context,
+                theme,
+                globalPosition: details.globalPosition,
+              ),
       behavior: HitTestBehavior.translucent,
       child: Column(
         crossAxisAlignment:
@@ -1490,6 +1609,27 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
     if (hex.length != 6) return null;
     final parsed = int.tryParse('FF$hex', radix: 16);
     return parsed == null ? null : Color(parsed);
+  }
+}
+
+class _DesktopMenuItem extends StatelessWidget {
+  const _DesktopMenuItem({
+    required this.icon,
+    required this.label,
+  });
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: const Color(0xFF8E8E93)),
+        const SizedBox(width: 10),
+        Text(label, style: const TextStyle(color: Color(0xFFF5F5F5))),
+      ],
+    );
   }
 }
 

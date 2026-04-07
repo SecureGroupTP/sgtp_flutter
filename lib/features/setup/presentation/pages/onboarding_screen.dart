@@ -245,6 +245,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           decoration: const InputDecoration(
             labelText: 'Username (optional)',
             hintText: '@alice',
+            helperText: 'Set an @username so friends can easily find you',
             border: OutlineInputBorder(),
           ),
         ),
