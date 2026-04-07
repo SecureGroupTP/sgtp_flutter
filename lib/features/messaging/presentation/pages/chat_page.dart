@@ -1869,8 +1869,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         minLines: 1,
                         maxLines: 5,
                         textInputAction: TextInputAction.send,
-                        onSubmitted:
-                            canSend ? (_) => _sendMessage(context) : null,
+                        onSubmitted: canSend
+                            ? (value) {
+                                if (value.trim().isEmpty) {
+                                  _focusNode.requestFocus();
+                                  return;
+                                }
+                                _sendMessage(context);
+                              }
+                            : null,
                       ),
                     ),
                   ),
