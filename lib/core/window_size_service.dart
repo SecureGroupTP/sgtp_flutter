@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:sgtp_flutter/core/app_logger.dart';
 
 /// Saves and restores desktop window size between launches.
 /// Uses window_manager package (Windows / macOS / Linux only).
@@ -21,7 +22,7 @@ class WindowSizeService {
     if (!_isDesktop) return;
     try {
       final saved = await _loadSize();
-      final size  = saved ?? _defaultSize;
+      final size = saved ?? _defaultSize;
 
       await windowManager.setMinimumSize(_minSize);
       await windowManager.setSize(size);
@@ -29,9 +30,17 @@ class WindowSizeService {
       await windowManager.show();
       await windowManager.focus();
 
-      debugPrint('[Window] Restored size: ${size.width.toInt()}x${size.height.toInt()}');
+      AppLogger.i(
+        '[Window] Restored size: ${size.width.toInt()}x${size.height.toInt()}',
+        tag: 'WINDOW',
+        source: 'WindowSizeService',
+      );
     } catch (e) {
-      debugPrint('[Window] restoreSize error: $e');
+      AppLogger.w(
+        '[Window] restoreSize error: $e',
+        tag: 'WINDOW',
+        source: 'WindowSizeService',
+      );
     }
   }
 
@@ -42,7 +51,11 @@ class WindowSizeService {
       final size = await windowManager.getSize();
       await _saveSize(size);
     } catch (e) {
-      debugPrint('[Window] saveCurrentSize error: $e');
+      AppLogger.w(
+        '[Window] saveCurrentSize error: $e',
+        tag: 'WINDOW',
+        source: 'WindowSizeService',
+      );
     }
   }
 
@@ -57,10 +70,14 @@ class WindowSizeService {
     try {
       final file = await _getFile();
       if (!file.existsSync()) return null;
-      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      final w = (json['width']  as num?)?.toDouble();
+      final json =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final w = (json['width'] as num?)?.toDouble();
       final h = (json['height'] as num?)?.toDouble();
-      if (w != null && h != null && w >= _minSize.width && h >= _minSize.height) {
+      if (w != null &&
+          h != null &&
+          w >= _minSize.width &&
+          h >= _minSize.height) {
         return Size(w, h);
       }
     } catch (_) {}
@@ -71,11 +88,15 @@ class WindowSizeService {
     try {
       final file = await _getFile();
       await file.writeAsString(jsonEncode({
-        'width':   size.width.toInt(),
-        'height':  size.height.toInt(),
+        'width': size.width.toInt(),
+        'height': size.height.toInt(),
         'savedAt': DateTime.now().toIso8601String(),
       }));
-      debugPrint('[Window] Saved: ${size.width.toInt()}x${size.height.toInt()}');
+      AppLogger.d(
+        '[Window] Saved: ${size.width.toInt()}x${size.height.toInt()}',
+        tag: 'WINDOW',
+        source: 'WindowSizeService',
+      );
     } catch (_) {}
   }
 }

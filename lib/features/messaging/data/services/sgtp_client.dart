@@ -7,7 +7,7 @@ import 'dart:typed_data';
 import 'package:cross_file/cross_file.dart';
 
 import 'package:cryptography/cryptography.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:sgtp_flutter/core/app_logger.dart';
@@ -1072,18 +1072,28 @@ class SgtpClient implements ISgtpSession {
 
   Future<void> _dispatch(ParsedFrame frame) async {
     if (!_tsOk(frame.timestamp)) {
-      AppLogger.w(
+      AppLogger.packet(
         '← INBOUND ${_pktName(frame.packetType)} from ${uuidBytesToHex(frame.senderUUID).substring(0, 8)} '
         'DROPPED (timestamp out of window: ${frame.timestamp})',
-        tag: 'PKT',
+        packetType: frame.packetType,
+        packetTypeName: _pktName(frame.packetType),
+        direction: PacketDirection.inbound,
+        level: LogLevel.warn,
+        dropped: true,
+        error: true,
       );
       return;
     }
     if (frame.version != SgtpConstants.version) {
-      AppLogger.w(
+      AppLogger.packet(
         '← INBOUND ${_pktName(frame.packetType)} from ${uuidBytesToHex(frame.senderUUID).substring(0, 8)} '
         'DROPPED (version mismatch: ${frame.version})',
-        tag: 'PKT',
+        packetType: frame.packetType,
+        packetTypeName: _pktName(frame.packetType),
+        direction: PacketDirection.inbound,
+        level: LogLevel.warn,
+        dropped: true,
+        error: true,
       );
       return;
     }
@@ -1091,11 +1101,13 @@ class SgtpClient implements ISgtpSession {
     if (_peers.containsKey(frameSender)) {
       _peerLastSeen[frameSender] = DateTime.now().millisecondsSinceEpoch;
     }
-    AppLogger.d(
+    AppLogger.packet(
       '← INBOUND  ${_pktName(frame.packetType).padRight(14)} '
       'from=${frameSender.substring(0, 8)}  '
       'payload=${frame.payloadLength}B',
-      tag: 'PKT',
+      packetType: frame.packetType,
+      packetTypeName: _pktName(frame.packetType),
+      direction: PacketDirection.inbound,
     );
     switch (frame.packetType) {
       case PacketType.intent:
@@ -1390,8 +1402,11 @@ class SgtpClient implements ISgtpSession {
     final name = f.chatRequestName;
     final avatar = f.chatRequestAvatar;
     if (name != null) {
-      debugPrint(
-          '[SGTP] CHAT_REQUEST metadata: name="$name" avatar=${avatar?.length ?? 0}B');
+      AppLogger.d(
+        'CHAT_REQUEST metadata: name="$name" avatar=${avatar?.length ?? 0}B',
+        tag: 'SGTP',
+        source: 'SgtpClient',
+      );
       _eventController.add(SgtpChatMetadataReceived(
         chatName: name,
         avatarBytes: avatar,
@@ -2350,10 +2365,12 @@ class SgtpClient implements ISgtpSession {
           SgtpConstants.headerSize -
           SgtpConstants.signatureSize;
       final recv = uuidBytesToHex(unsigned.sublist(16, 32)).substring(0, 8);
-      AppLogger.d(
+      AppLogger.packet(
         '→ OUTBOUND ${_pktName(pktType).padRight(14)} '
         'to=${recv}  payload=${payloadLen}B',
-        tag: 'PKT',
+        packetType: pktType,
+        packetTypeName: _pktName(pktType),
+        direction: PacketDirection.outbound,
       );
     }
     // Sign first — this is CPU/async work, safe to do before entering the queue.

@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:sgtp_flutter/core/app_logger.dart';
 
 /// Manages window state for desktop platforms (Windows, macOS, Linux).
 /// Persists window width/height between application launches.
@@ -31,9 +32,17 @@ class WindowStateManager {
         'savedAt': DateTime.now().toIso8601String(),
       };
       await file.writeAsString(jsonEncode(state), flush: true);
-      debugPrint('[WindowState] Saved: ${width}x$height');
+      AppLogger.d(
+        '[WindowState] Saved: ${width}x$height',
+        tag: 'WINDOW',
+        source: 'WindowStateManager',
+      );
     } catch (e) {
-      debugPrint('[WindowState] Error saving: $e');
+      AppLogger.w(
+        '[WindowState] Error saving: $e',
+        tag: 'WINDOW',
+        source: 'WindowStateManager',
+      );
     }
   }
 
@@ -53,18 +62,27 @@ class WindowStateManager {
       final height = json['windowHeight'] as int?;
 
       if (width != null && height != null) {
-        debugPrint('[WindowState] Loaded: ${width}x$height');
+        AppLogger.d(
+          '[WindowState] Loaded: ${width}x$height',
+          tag: 'WINDOW',
+          source: 'WindowStateManager',
+        );
         return (width, height);
       }
     } catch (e) {
-      debugPrint('[WindowState] Error loading: $e');
+      AppLogger.w(
+        '[WindowState] Error loading: $e',
+        tag: 'WINDOW',
+        source: 'WindowStateManager',
+      );
     }
     return null;
   }
 
   /// Check if running on a desktop platform
   bool _isDesktop() {
-    return !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+    return !kIsWeb &&
+        (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
   }
 }
 

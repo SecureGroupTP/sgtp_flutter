@@ -25,6 +25,12 @@ class LogsScreen extends StatefulWidget {
 }
 
 class _LogsScreenState extends State<LogsScreen> {
+  static const String _allDirectionValue = '__all_directions__';
+  static const String _directionInValue = '__inbound__';
+  static const String _directionOutValue = '__outbound__';
+  static const String _allTagsValue = '__all_tags__';
+  static const String _allPacketTypesValue = '__all_packet_types__';
+
   final ScrollController _scrollCtrl = ScrollController();
   final TextEditingController _searchCtrl = TextEditingController();
 
@@ -54,6 +60,12 @@ class _LogsScreenState extends State<LogsScreen> {
   Widget build(BuildContext context) {
     return BlocConsumer<LogsCubit, LogsViewState>(
       listener: (context, state) {
+        if (_searchCtrl.text != state.searchText) {
+          _searchCtrl.value = TextEditingValue(
+            text: state.searchText,
+            selection: TextSelection.collapsed(offset: state.searchText.length),
+          );
+        }
         // Auto-scroll to bottom when new entries arrive and already near bottom.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scrollCtrl.hasClients) {
@@ -131,6 +143,23 @@ class _LogsScreenState extends State<LogsScreen> {
                 ),
                 // Copy all
                 IconButton(
+                  icon: const Icon(Icons.content_copy_outlined,
+                      color: AppColors.textSecondary),
+                  tooltip: 'Copy visible logs',
+                  onPressed: shown == 0
+                      ? null
+                      : () {
+                          Clipboard.setData(
+                              ClipboardData(text: cubit.visibleLogText));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Visible logs copied'),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        },
+                ),
+                IconButton(
                   icon: const Icon(Icons.copy_all_outlined,
                       color: AppColors.textSecondary),
                   tooltip: 'Copy all logs',
@@ -194,56 +223,163 @@ class _LogsScreenState extends State<LogsScreen> {
     return Container(
       color: AppColors.bgSurface,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(children: [
-        // Level filter chips
-        for (final level in [null, ...LogLevel.values])
-          Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: _LevelChip(
-              label: level == null ? 'All' : level.name.toUpperCase(),
-              color:
-                  level == null ? const Color(0xFF8E8E93) : _levelColor(level),
-              selected: state.filterLevel == level,
-              onTap: () => cubit.setFilterLevel(level),
-            ),
+      child: Column(
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final level in [null, ...LogLevel.values])
+                _LevelChip(
+                  label: level == null ? 'All' : level.name.toUpperCase(),
+                  color: level == null
+                      ? const Color(0xFF8E8E93)
+                      : _levelColor(level),
+                  selected: state.filterLevel == level,
+                  onTap: () => cubit.setFilterLevel(level),
+                ),
+              _ToggleChip(
+                label: 'Packets',
+                selected: state.packetsOnly,
+                onTap: () => cubit.setPacketsOnly(!state.packetsOnly),
+              ),
+              _ToggleChip(
+                label: 'Issues',
+                selected: state.issuesOnly,
+                onTap: () => cubit.setIssuesOnly(!state.issuesOnly),
+              ),
+              _PopupFilterChip<String>(
+                label: state.filterDirection == null
+                    ? 'Direction: All'
+                    : 'Direction: ${state.filterDirection!.label}',
+                selected: state.filterDirection != null,
+                items: [
+                  const PopupMenuItem<String>(
+                    value: _allDirectionValue,
+                    child: Text('All directions'),
+                  ),
+                  const PopupMenuItem<String>(
+                    value: _directionInValue,
+                    child: Text('IN'),
+                  ),
+                  const PopupMenuItem<String>(
+                    value: _directionOutValue,
+                    child: Text('OUT'),
+                  ),
+                ],
+                onSelected: (value) {
+                  switch (value) {
+                    case _directionInValue:
+                      cubit.setDirection(PacketDirection.inbound);
+                    case _directionOutValue:
+                      cubit.setDirection(PacketDirection.outbound);
+                    default:
+                      cubit.setDirection(null);
+                  }
+                },
+              ),
+              _PopupFilterChip<LogsTimeRange>(
+                label: 'Time: ${state.timeRange.label}',
+                selected: state.timeRange != LogsTimeRange.all,
+                items: [
+                  for (final range in LogsTimeRange.values)
+                    PopupMenuItem<LogsTimeRange>(
+                      value: range,
+                      child: Text(range.label),
+                    ),
+                ],
+                onSelected: cubit.setTimeRange,
+              ),
+              _PopupFilterChip<String>(
+                label: state.filterTag == null
+                    ? 'Tag: All'
+                    : 'Tag: ${state.filterTag}',
+                selected: state.filterTag != null,
+                items: [
+                  const PopupMenuItem<String>(
+                    value: _allTagsValue,
+                    child: Text('All tags'),
+                  ),
+                  for (final tag in state.availableTags)
+                    PopupMenuItem<String>(
+                      value: tag,
+                      child: Text(tag),
+                    ),
+                ],
+                onSelected: (value) {
+                  cubit.setTag(value == _allTagsValue ? null : value);
+                },
+              ),
+              _PopupFilterChip<String>(
+                label: state.filterPacketType == null
+                    ? 'Type: All'
+                    : 'Type: ${state.filterPacketType}',
+                selected: state.filterPacketType != null,
+                items: [
+                  const PopupMenuItem<String>(
+                    value: _allPacketTypesValue,
+                    child: Text('All packet types'),
+                  ),
+                  for (final packetType in state.availablePacketTypes)
+                    PopupMenuItem<String>(
+                      value: packetType,
+                      child: Text(packetType),
+                    ),
+                ],
+                onSelected: (value) {
+                  cubit.setPacketType(
+                    value == _allPacketTypesValue ? null : value,
+                  );
+                },
+              ),
+              _ActionChip(
+                label: 'Reset',
+                icon: Icons.restart_alt,
+                onTap: () {
+                  _searchCtrl.clear();
+                  cubit.resetFilters();
+                },
+              ),
+            ],
           ),
-        const SizedBox(width: 4),
-        // Free-text search
-        Expanded(
-          child: Container(
+          const SizedBox(height: 8),
+          // Free-text search
+          SizedBox(
             height: 32,
-            decoration: BoxDecoration(
-              color: AppColors.bgMain,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.border),
-            ),
-            child: TextField(
-              controller: _searchCtrl,
-              style:
-                  const TextStyle(fontSize: 13, color: AppColors.textPrimary),
-              decoration: InputDecoration(
-                hintText: 'Search…',
-                hintStyle: const TextStyle(
-                    fontSize: 13, color: AppColors.textSecondary),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                suffixIcon: state.searchText.isNotEmpty
-                    ? GestureDetector(
-                        onTap: () {
-                          _searchCtrl.clear();
-                          cubit.setSearchText('');
-                        },
-                        child: const Icon(Icons.close,
-                            size: 16, color: AppColors.textSecondary),
-                      )
-                    : null,
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.bgMain,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: TextField(
+                controller: _searchCtrl,
+                style:
+                    const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                decoration: InputDecoration(
+                  hintText: 'Search message, tag, source, packet type/code…',
+                  hintStyle: const TextStyle(
+                      fontSize: 13, color: AppColors.textSecondary),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  suffixIcon: state.searchText.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            _searchCtrl.clear();
+                            cubit.setSearchText('');
+                          },
+                          child: const Icon(Icons.close,
+                              size: 16, color: AppColors.textSecondary),
+                        )
+                      : null,
+                ),
               ),
             ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -316,6 +452,126 @@ class _LevelChip extends StatelessWidget {
             fontWeight: FontWeight.w600,
             color: selected ? color : const Color(0xFF8E8E93),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ToggleChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ToggleChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? const Color(0xFF30D158) : const Color(0xFF8E8E93);
+    return _LevelChip(
+      label: label,
+      color: color,
+      selected: selected,
+      onTap: onTap,
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _ActionChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 24,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1F1F24),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF2C2C30)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: const Color(0xFF8E8E93)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF8E8E93),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PopupFilterChip<T> extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final List<PopupMenuEntry<T>> items;
+  final ValueChanged<T> onSelected;
+
+  const _PopupFilterChip({
+    required this.label,
+    required this.selected,
+    required this.items,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? const Color(0xFF0A84FF) : const Color(0xFF8E8E93);
+    return PopupMenuButton<T>(
+      onSelected: onSelected,
+      itemBuilder: (_) => items,
+      color: const Color(0xFF1F1F24),
+      child: Container(
+        height: 24,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? color.withAlpha(40) : const Color(0xFF1F1F24),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? color : const Color(0xFF2C2C30),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: selected ? color : const Color(0xFF8E8E93),
+              ),
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              Icons.expand_more,
+              size: 14,
+              color: selected ? color : const Color(0xFF8E8E93),
+            ),
+          ],
         ),
       ),
     );
@@ -423,22 +679,56 @@ class _LogRowState extends State<_LogRow> {
               const SizedBox(width: 8),
               // Message
               Expanded(
-                child: Text(
-                  _expanded ? entry.message : _collapsedMessage,
-                  maxLines: _expanded ? null : 1,
-                  style: TextStyle(
-                    fontFamily: entry.level == LogLevel.error ||
-                            entry.level == LogLevel.warn
-                        ? null
-                        : 'monospace',
-                    fontSize: 12,
-                    color: entry.level == LogLevel.error
-                        ? const Color(0xFFFF6B63)
-                        : entry.level == LogLevel.warn
-                            ? const Color(0xFFFFBF3B)
-                            : const Color(0xFFF5F5F5),
-                    height: 1.4,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        _MetaBadge(label: entry.tag, color: _levelColor),
+                        if ((entry.source ?? '').trim().isNotEmpty)
+                          _MetaBadge(
+                            label: entry.source!.trim(),
+                            color: const Color(0xFF5AC8FA),
+                          ),
+                        if ((entry.packetTypeName ?? '').trim().isNotEmpty)
+                          _MetaBadge(
+                            label:
+                                '${entry.packetTypeName}${entry.packetTypeCode == null ? '' : ' ${entry.packetTypeCode}'}',
+                            color: const Color(0xFFBF5AF2),
+                          ),
+                        if (entry.packetDirection != PacketDirection.none)
+                          _MetaBadge(
+                            label: entry.packetDirection.label,
+                            color: const Color(0xFF30D158),
+                          ),
+                        if (entry.packetDropped || entry.packetError)
+                          _MetaBadge(
+                            label: entry.packetDropped ? 'DROPPED' : 'PKT_ERR',
+                            color: const Color(0xFFFF453A),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _expanded ? entry.message : _collapsedMessage,
+                      maxLines: _expanded ? null : 1,
+                      style: TextStyle(
+                        fontFamily: entry.level == LogLevel.error ||
+                                entry.level == LogLevel.warn
+                            ? null
+                            : 'monospace',
+                        fontSize: 12,
+                        color: entry.level == LogLevel.error
+                            ? const Color(0xFFFF6B63)
+                            : entry.level == LogLevel.warn
+                                ? const Color(0xFFFFBF3B)
+                                : const Color(0xFFF5F5F5),
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               if (_canExpand) ...[
@@ -454,6 +744,36 @@ class _LogRowState extends State<_LogRow> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MetaBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _MetaBadge({
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withAlpha(35),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          color: color,
+          letterSpacing: 0.25,
         ),
       ),
     );

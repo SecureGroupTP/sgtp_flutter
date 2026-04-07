@@ -2,10 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
 
 /// Repository for persisting chat metadata to disk.
@@ -66,7 +67,8 @@ class ChatMetadataRepository {
 
   Future<void> _webSave(ChatMetadata m) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_webKey(m.uuid, m.serverAddress), jsonEncode(_toJson(m)));
+    await prefs.setString(
+        _webKey(m.uuid, m.serverAddress), jsonEncode(_toJson(m)));
   }
 
   Future<ChatMetadata?> _webLoad(String uuid, String serverAddress) async {
@@ -90,7 +92,11 @@ class ChatMetadataRepository {
         if (uuid.isEmpty) continue;
         chats.add(_parseJson(uuid, json));
       } catch (e) {
-        debugPrint('[ChatMetadata] Web: error parsing key $key: $e');
+        AppLogger.w(
+          '[ChatMetadata] Web: error parsing key $key: $e',
+          tag: 'CHATMETA',
+          source: 'ChatMetadataRepository',
+        );
       }
     }
     chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -102,7 +108,8 @@ class ChatMetadataRepository {
     if (serverAddress != null && serverAddress.isNotEmpty) {
       await prefs.remove(_webKey(uuid, serverAddress));
     } else {
-      final toRemove = prefs.getKeys()
+      final toRemove = prefs
+          .getKeys()
           .where((k) => k.startsWith(_webKeyPrefix) && k.endsWith('_$uuid'))
           .toList();
       for (final k in toRemove) {
@@ -141,7 +148,11 @@ class ChatMetadataRepository {
                 jsonDecode(await file.readAsString()) as Map<String, dynamic>;
             chats.add(_parseJson(uuid, parsed));
           } catch (e) {
-            debugPrint('[ChatMetadata] Error parsing chat $uuid: $e');
+            AppLogger.w(
+              '[ChatMetadata] Error parsing chat $uuid: $e',
+              tag: 'CHATMETA',
+              source: 'ChatMetadataRepository',
+            );
           }
         }
       }
@@ -149,7 +160,11 @@ class ChatMetadataRepository {
       chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       return chats;
     } catch (e) {
-      debugPrint('[ChatMetadata] Error loading chats: $e');
+      AppLogger.e(
+        '[ChatMetadata] Error loading chats: $e',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
       return [];
     }
   }
@@ -170,7 +185,11 @@ class ChatMetadataRepository {
       final json = jsonDecode(content) as Map<String, dynamic>;
       return _parseJson(uuid, json);
     } catch (e) {
-      debugPrint('[ChatMetadata] Error loading legacy chat $uuid: $e');
+      AppLogger.w(
+        '[ChatMetadata] Error loading legacy chat $uuid: $e',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
       return null;
     }
   }
@@ -213,7 +232,11 @@ class ChatMetadataRepository {
       }
       return null;
     } catch (e) {
-      debugPrint('[ChatMetadata] Error loading chat $uuid: $e');
+      AppLogger.w(
+        '[ChatMetadata] Error loading chat $uuid: $e',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
       return null;
     }
   }
@@ -230,10 +253,17 @@ class ChatMetadataRepository {
       );
       await file.parent.create(recursive: true);
       await file.writeAsString(jsonEncode(_toJson(metadata)), flush: true);
-      debugPrint(
-          '[ChatMetadata] Saved chat: ${metadata.uuid}@${metadata.serverAddress}');
+      AppLogger.i(
+        '[ChatMetadata] Saved chat: ${metadata.uuid}@${metadata.serverAddress}',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
     } catch (e) {
-      debugPrint('[ChatMetadata] Error saving chat: $e');
+      AppLogger.e(
+        '[ChatMetadata] Error saving chat: $e',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
       rethrow;
     }
   }
@@ -242,9 +272,17 @@ class ChatMetadataRepository {
     try {
       final updated = metadata.copyWith(updatedAt: DateTime.now());
       await saveChat(updated);
-      debugPrint('[ChatMetadata] Updated chat: ${metadata.uuid}');
+      AppLogger.i(
+        '[ChatMetadata] Updated chat: ${metadata.uuid}',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
     } catch (e) {
-      debugPrint('[ChatMetadata] Error updating chat: $e');
+      AppLogger.e(
+        '[ChatMetadata] Error updating chat: $e',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
       rethrow;
     }
   }
@@ -278,10 +316,17 @@ class ChatMetadataRepository {
         }
       }
 
-      debugPrint(
-          '[ChatMetadata] Deleted chat: $uuid${server.isNotEmpty ? '@$server' : ''}');
+      AppLogger.i(
+        '[ChatMetadata] Deleted chat: $uuid${server.isNotEmpty ? '@$server' : ''}',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
     } catch (e) {
-      debugPrint('[ChatMetadata] Error deleting chat: $e');
+      AppLogger.e(
+        '[ChatMetadata] Error deleting chat: $e',
+        tag: 'CHATMETA',
+        source: 'ChatMetadataRepository',
+      );
       rethrow;
     }
   }
@@ -313,7 +358,11 @@ class ChatMetadataRepository {
       try {
         avatarBytes = base64Decode(avatarBase64);
       } catch (e) {
-        debugPrint('[ChatMetadata] Failed to decode avatar: $e');
+        AppLogger.w(
+          '[ChatMetadata] Failed to decode avatar: $e',
+          tag: 'CHATMETA',
+          source: 'ChatMetadataRepository',
+        );
       }
     }
 

@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 
+import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
@@ -36,14 +36,22 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
 
     try {
       final chats = await _repository.loadAllChats();
-      debugPrint('[ChatListBloc] Loaded ${chats.length} chats');
+      AppLogger.i(
+        '[ChatListBloc] Loaded ${chats.length} chats',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
 
       emit(state.copyWith(
         status: ChatListStatus.loaded,
         chats: chats,
       ));
     } catch (e) {
-      debugPrint('[ChatListBloc] Error loading chats: $e');
+      AppLogger.e(
+        '[ChatListBloc] Error loading chats: $e',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to load chats: $e',
@@ -70,7 +78,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       );
 
       await _repository.saveChat(newChat);
-      debugPrint('[ChatListBloc] Created chat: $uuid');
+      AppLogger.i(
+        '[ChatListBloc] Created chat: $uuid',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
 
       final updatedChats = [newChat, ...state.chats];
       emit(state.copyWith(
@@ -79,7 +91,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
         selectedChat: newChat,
       ));
     } catch (e) {
-      debugPrint('[ChatListBloc] Error creating chat: $e');
+      AppLogger.e(
+        '[ChatListBloc] Error creating chat: $e',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to create chat: $e',
@@ -107,7 +123,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       );
 
       await _repository.updateChat(updated);
-      debugPrint('[ChatListBloc] Updated chat: ${event.uuid}');
+      AppLogger.i(
+        '[ChatListBloc] Updated chat: ${event.uuid}',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
 
       // Update in list
       final updatedChats =
@@ -124,7 +144,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
             : state.selectedChat,
       ));
     } catch (e) {
-      debugPrint('[ChatListBloc] Error updating chat: $e');
+      AppLogger.e(
+        '[ChatListBloc] Error updating chat: $e',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to update chat: $e',
@@ -139,7 +163,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
   ) async {
     try {
       await _repository.deleteChat(event.uuid);
-      debugPrint('[ChatListBloc] Deleted chat: ${event.uuid}');
+      AppLogger.i(
+        '[ChatListBloc] Deleted chat: ${event.uuid}',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
 
       final updatedChats =
           state.chats.where((c) => c.uuid != event.uuid).toList();
@@ -151,7 +179,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
             state.selectedChat?.uuid == event.uuid ? null : state.selectedChat,
       ));
     } catch (e) {
-      debugPrint('[ChatListBloc] Error deleting chat: $e');
+      AppLogger.e(
+        '[ChatListBloc] Error deleting chat: $e',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to delete chat: $e',
@@ -170,9 +202,17 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
         status: ChatListStatus.loaded,
         chats: chats,
       ));
-      debugPrint('[ChatListBloc] Refreshed chat list');
+      AppLogger.i(
+        '[ChatListBloc] Refreshed chat list',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
     } catch (e) {
-      debugPrint('[ChatListBloc] Error refreshing: $e');
+      AppLogger.e(
+        '[ChatListBloc] Error refreshing: $e',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
     }
   }
 
@@ -182,7 +222,11 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
     Emitter<ChatListState> emit,
   ) async {
     emit(state.copyWith(selectedChat: event.chat));
-    debugPrint('[ChatListBloc] Selected chat: ${event.chat.uuid}');
+    AppLogger.d(
+      '[ChatListBloc] Selected chat: ${event.chat.uuid}',
+      tag: 'CHATLIST',
+      source: 'ChatListBloc',
+    );
   }
 
   /// Update window size (desktop only)
@@ -215,9 +259,17 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
             : state.selectedChat,
       ));
 
-      debugPrint('[ChatListBloc] Updated window size for ${event.chatUUID}');
+      AppLogger.i(
+        '[ChatListBloc] Updated window size for ${event.chatUUID}',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
     } catch (e) {
-      debugPrint('[ChatListBloc] Error updating window size: $e');
+      AppLogger.e(
+        '[ChatListBloc] Error updating window size: $e',
+        tag: 'CHATLIST',
+        source: 'ChatListBloc',
+      );
     }
   }
 
@@ -228,8 +280,14 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
   ) async {
     // This updates local metadata based on what other peers sent
     // Usually you'd merge or ask user to confirm
-    debugPrint('[ChatListBloc] Received metadata from ${event.senderUUID}');
-    debugPrint('  Chat name: ${event.chatName}');
-    debugPrint('  Avatar: ${event.avatarBytes?.length ?? 0} bytes');
+    AppLogger.i(
+      '[ChatListBloc] Received metadata from ${event.senderUUID}',
+      tag: 'CHATLIST',
+      source: 'ChatListBloc',
+      attributes: {
+        'chatName': event.chatName,
+        'avatarBytes': '${event.avatarBytes?.length ?? 0}',
+      },
+    );
   }
 }
