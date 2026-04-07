@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
+import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
@@ -474,6 +475,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   // ── Intent: Delete all data ─────────────────────────────────────────────
 
   Future<void> deleteAllData() async {
+    await NotificationService.cancelAll();
     await _settings.clearAllLocalData();
     _onAllDataDeleted?.call();
   }

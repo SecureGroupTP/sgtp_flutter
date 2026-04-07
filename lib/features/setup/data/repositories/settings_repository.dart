@@ -96,6 +96,64 @@ class SettingsRepository {
         await dir.delete(recursive: true);
       }
     }
+
+    // Remove desktop window state files stored directly in documents root.
+    final docsFiles = <File>[
+      File('${docsDir.path}/.sgtp_window.json'),
+      File('${docsDir.path}/.window_state.json'),
+    ];
+    for (final file in docsFiles) {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+
+    // Best-effort cleanup of temp artifacts created by the app.
+    final tmpDir = await getTemporaryDirectory();
+    final tempDirs = <Directory>{
+      Directory('${tmpDir.path}/sgtp_media_cache'),
+      Directory('${Directory.systemTemp.path}/sgtp_media_cache'),
+    };
+    for (final dir in tempDirs) {
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+    }
+
+    // Remove known temporary file patterns used by playback/notifications.
+    const tempPrefixes = <String>[
+      'sgtp_av_',
+      'voice_play_',
+      'voice_',
+      'vnote_',
+      'videonote_',
+      'videonote_thumb_',
+      'mic_loop_',
+    ];
+    await _deleteTempFilesByPrefix(tmpDir, tempPrefixes);
+    await _deleteTempFilesByPrefix(Directory.systemTemp, tempPrefixes);
+  }
+
+  Future<void> _deleteTempFilesByPrefix(
+    Directory dir,
+    List<String> prefixes,
+  ) async {
+    if (!await dir.exists()) return;
+    await for (final entity in dir.list(recursive: false, followLinks: false)) {
+      if (entity is! File) continue;
+      final name = _basename(entity.path).toLowerCase();
+      final match = prefixes.any((p) => name.startsWith(p));
+      if (!match) continue;
+      try {
+        await entity.delete();
+      } catch (_) {}
+    }
+  }
+
+  String _basename(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final idx = normalized.lastIndexOf('/');
+    return idx >= 0 ? normalized.substring(idx + 1) : normalized;
   }
 
   // ── Server addresses ──────────────────────────────────────────────────────
