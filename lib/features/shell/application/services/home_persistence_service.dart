@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
@@ -90,12 +91,20 @@ class HomePersistenceService {
     final repo = _chatStorageGateway.metadataForAccount(accountId);
     final existing = await repo.loadChat(roomUUID, serverAddress: serverAddress);
     final now = DateTime.now();
+    AppLogger.i(
+      '[HomePersistence] upsertDirectMessageChat room=$roomUUID direct=true '
+      'name="$displayName" avatar=${avatarBytes?.length ?? 0}B',
+      tag: 'DM',
+    );
     await repo.saveChat(
       ChatMetadata(
         uuid: roomUUID,
         name: displayName,
         serverAddress: serverAddress,
-        avatarBytes: avatarBytes ?? existing?.avatarBytes,
+        // DM metadata must mirror the contact profile exactly:
+        // if the friend has no avatar, clear previously saved room avatar.
+        avatarBytes: avatarBytes,
+        isDirectMessage: true,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         windowWidth: existing?.windowWidth,

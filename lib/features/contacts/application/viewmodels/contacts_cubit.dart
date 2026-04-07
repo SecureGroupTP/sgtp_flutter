@@ -255,10 +255,11 @@ class ContactsCubit extends Cubit<ContactsViewState> {
       final profile = _contactProfiles[lowerHex];
       final friendState = _friendStates[lowerHex];
       final username = profile?.username?.trim();
+      final resolvedName = _resolveContactDisplayName(entry.name, profile);
       return ContactsContactUiModel(
         hexKey: entry.hexKey,
         shortKey: _shortKey(entry.hexKey),
-        displayName: entry.name,
+        displayName: resolvedName,
         username: username?.isEmpty ?? true ? null : username,
         avatarBytes: profile?.avatarBytes,
         friendStatus: _mapFriendStatus(
@@ -453,6 +454,28 @@ class ContactsCubit extends Cubit<ContactsViewState> {
 
   String _shortKey(String hex) {
     return '${hex.substring(0, 8)}…${hex.substring(hex.length - 8)}';
+  }
+
+  String _resolveContactDisplayName(String storedName, ContactProfile? profile) {
+    final name = storedName.trim();
+    if (profile == null) return name;
+
+    final full = (profile.fullname ?? '').trim();
+    final user =
+        (profile.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+
+    final hasBetterProfileName = full.isNotEmpty && full.toLowerCase() != 'account';
+    final hasUsername = user.isNotEmpty;
+    final isGenericStored = name.isEmpty ||
+        name.toLowerCase() == 'account' ||
+        name.toLowerCase() == 'friend' ||
+        name.startsWith('peer_');
+
+    if (isGenericStored) {
+      if (hasBetterProfileName) return full;
+      if (hasUsername) return user;
+    }
+    return name;
   }
 
   String? _normalizeSearchUsername(String raw) {

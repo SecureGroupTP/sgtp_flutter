@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:sgtp_camera/sgtp_camera.dart';
 import 'package:image/image.dart' as img;
 import 'package:sgtp_flutter/core/app_logger.dart';
@@ -22,6 +22,7 @@ import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_recorder.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/message_bubble.dart';
+import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_avatar.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
@@ -1283,6 +1284,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context, ChatState state) {
+    final dmDebug = _dmDebugLabel(state);
     return PreferredSize(
       preferredSize: const Size.fromHeight(62),
       child: ClipRect(
@@ -1324,22 +1326,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         onTap: state.status == ChatStatus.ready
                             ? () => _showEditMetadataDialog(context, state)
                             : null,
-                        child: Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF141417),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: const Color(0xFF2C2C30)),
-                          ),
-                          child: ClipOval(
-                            child: state.chatAvatarBytes != null
-                                ? Image.memory(state.chatAvatarBytes!,
-                                    fit: BoxFit.cover)
-                                : const Center(
-                                    child: Text('👽',
-                                        style: TextStyle(fontSize: 18))),
-                          ),
+                        child: RoomAvatar(
+                          avatarBytes: state.chatAvatarBytes,
+                          fallbackName: state.chatName,
+                          size: 38,
                         ),
                       ),
 
@@ -1374,6 +1364,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                                   color: Color(0xFF8E8E93),
                                 ),
                               ),
+                              if (dmDebug != null)
+                                Text(
+                                  dmDebug,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF8E8E93),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                             ],
                           ),
                         ),
@@ -1446,6 +1445,22 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  String? _dmDebugLabel(ChatState state) {
+    if (!kDebugMode) return null;
+    final pubs = state.peerPublicKeys.values.toList(growable: false);
+    final isDirect = state.isDirectChat;
+    final chosenPub = pubs.length == 1 ? pubs.first.toLowerCase() : null;
+    final myPub = state.myPublicKeyHex.toLowerCase();
+    final source = !isDirect
+        ? 'n/a'
+        : (chosenPub == null
+            ? 'pending'
+            : (chosenPub == myPub ? 'self' : 'peer'));
+    final hasAvatar =
+        state.chatAvatarBytes != null && state.chatAvatarBytes!.isNotEmpty;
+    return 'dbg directFlag=$isDirect pubs=${pubs.length} source=$source avatar=${hasAvatar ? 'set' : 'null'}';
   }
 
   Widget _buildStatusBanner(BuildContext context, ChatState state) {

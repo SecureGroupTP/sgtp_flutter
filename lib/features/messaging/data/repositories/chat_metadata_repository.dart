@@ -294,6 +294,7 @@ class ChatMetadataRepository {
       'avatar': metadata.avatarBytes != null
           ? base64Encode(metadata.avatarBytes!)
           : null,
+      'isDirectMessage': metadata.isDirectMessage,
       'createdAt': metadata.createdAt.toIso8601String(),
       'updatedAt': metadata.updatedAt.toIso8601String(),
       'windowWidth': metadata.windowWidth,
@@ -323,6 +324,7 @@ class ChatMetadataRepository {
           (json['serverAddress'] as String? ?? fallbackServerAddress ?? '')
               .trim(),
       avatarBytes: avatarBytes,
+      isDirectMessage: (json['isDirectMessage'] as bool?) ?? false,
       createdAt: DateTime.parse(
           json['createdAt'] as String? ?? DateTime.now().toIso8601String()),
       updatedAt: DateTime.parse(

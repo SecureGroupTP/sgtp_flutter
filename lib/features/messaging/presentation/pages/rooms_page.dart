@@ -344,6 +344,7 @@ class ActiveRoomTile extends StatelessWidget {
           leading: RoomAvatar(
             avatarBytes: chatState.chatAvatarBytes,
             fallbackIcon: Icons.tag,
+            fallbackName: name,
           ),
           title: name,
           subtitle: Row(
@@ -506,6 +507,7 @@ class SavedChatTile extends StatelessWidget {
           ? RoomAvatar(
               avatarBytes: metadata!.avatarBytes,
               fallbackIcon: Icons.bookmark_outlined,
+              fallbackName: title,
             )
           : const SavedChatAvatar(),
       title: title,

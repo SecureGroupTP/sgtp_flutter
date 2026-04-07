@@ -32,6 +32,10 @@ class ChatState extends Equatable {
   /// Current chat avatar bytes (PNG/JPEG, max 4 KB).
   final Uint8List? chatAvatarBytes;
 
+  /// True when this room is explicitly marked as a direct message chat
+  /// (created from Contacts -> Message).
+  final bool isDirectChat;
+
   /// The local user's own avatar bytes (for display next to own messages).
   final Uint8List? userAvatarBytes;
 
@@ -71,6 +75,7 @@ class ChatState extends Equatable {
     this.peerPublicKeys = const {},
     this.chatName = 'Chat',
     this.chatAvatarBytes,
+    this.isDirectChat = false,
     this.userAvatarBytes,
     this.peerAvatars = const {},
     this.readReceipts = const {},
@@ -96,6 +101,7 @@ class ChatState extends Equatable {
     Map<String, String>? peerPublicKeys,
     String? chatName,
     Uint8List? chatAvatarBytes,
+    bool? isDirectChat,
     Uint8List? userAvatarBytes,
     Map<String, Uint8List>? peerAvatars,
     Map<String, Set<String>>? readReceipts,
@@ -126,6 +132,7 @@ class ChatState extends Equatable {
       chatName: chatName ?? this.chatName,
       chatAvatarBytes:
           clearAvatar ? null : (chatAvatarBytes ?? this.chatAvatarBytes),
+      isDirectChat: isDirectChat ?? this.isDirectChat,
       userAvatarBytes:
           clearUserAvatar ? null : (userAvatarBytes ?? this.userAvatarBytes),
       peerAvatars: peerAvatars ?? this.peerAvatars,
@@ -156,6 +163,7 @@ class ChatState extends Equatable {
         peerPublicKeys,
         chatName,
         chatAvatarBytes,
+        isDirectChat,
         userAvatarBytes,
         peerAvatars,
         readReceipts,

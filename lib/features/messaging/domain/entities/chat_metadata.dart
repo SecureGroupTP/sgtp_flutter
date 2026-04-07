@@ -15,6 +15,9 @@ class ChatMetadata extends Equatable {
   /// Avatar image bytes (optional, PNG/JPEG, max 4KB)
   final Uint8List? avatarBytes;
 
+  /// True only for chats created from Contacts -> Message (direct message).
+  final bool isDirectMessage;
+
   /// Creation timestamp
   final DateTime createdAt;
 
@@ -32,6 +35,7 @@ class ChatMetadata extends Equatable {
     required this.name,
     required this.serverAddress,
     this.avatarBytes,
+    this.isDirectMessage = false,
     required this.createdAt,
     required this.updatedAt,
     this.windowWidth,
@@ -44,6 +48,7 @@ class ChatMetadata extends Equatable {
     String? name,
     String? serverAddress,
     Uint8List? avatarBytes,
+    bool? isDirectMessage,
     DateTime? createdAt,
     DateTime? updatedAt,
     int? windowWidth,
@@ -54,6 +59,7 @@ class ChatMetadata extends Equatable {
       name: name ?? this.name,
       serverAddress: serverAddress ?? this.serverAddress,
       avatarBytes: avatarBytes ?? this.avatarBytes,
+      isDirectMessage: isDirectMessage ?? this.isDirectMessage,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       windowWidth: windowWidth ?? this.windowWidth,
@@ -67,6 +73,7 @@ class ChatMetadata extends Equatable {
         name,
         serverAddress,
         avatarBytes,
+        isDirectMessage,
         createdAt,
         updatedAt,
         windowWidth,

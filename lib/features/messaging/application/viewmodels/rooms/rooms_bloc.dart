@@ -235,6 +235,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
             shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
         avatarBytes:
             hasAvatar ? chatState.chatAvatarBytes : existing?.avatarBytes,
+        isDirectMessage: existing?.isDirectMessage ?? chatState.isDirectChat,
         createdAt: existing?.createdAt ?? now,
         updatedAt: existing?.updatedAt ?? now,
         windowWidth: existing?.windowWidth,
@@ -278,6 +279,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           : (existing?.name ?? 'Chat'),
       serverAddress: server,
       avatarBytes: event.avatarBytes ?? existing?.avatarBytes,
+      isDirectMessage: existing?.isDirectMessage ?? false,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       windowWidth: existing?.windowWidth,

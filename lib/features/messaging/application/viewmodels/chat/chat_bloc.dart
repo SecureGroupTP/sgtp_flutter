@@ -96,6 +96,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     // Prefer persisted metadata for title/avatar in offline preview.
     String chatName = event.config.chatName;
     Uint8List? chatAvatar = event.config.chatAvatarBytes;
+    var isDirectChat = false;
     try {
       final saved = await _metaRepo.loadChat(
         roomUUIDHex,
@@ -104,6 +105,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       if (saved != null) {
         chatName = saved.name;
         chatAvatar = saved.avatarBytes;
+        isDirectChat = saved.isDirectMessage;
+        AppLogger.i(
+          '[ChatBloc] OpenOffline room=$roomUUIDHex direct=$isDirectChat '
+          'name="$chatName" avatar=${chatAvatar?.length ?? 0}B',
+          tag: 'DM',
+        );
       }
     } catch (_) {}
 
@@ -140,6 +147,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       nicknames: event.nicknames,
       chatName: chatName,
       chatAvatarBytes: chatAvatar,
+      isDirectChat: isDirectChat,
       clearError: true,
     ));
 
@@ -182,6 +190,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     String chatName = event.config.chatName;
     Uint8List? chatAvatar = event.config.chatAvatarBytes;
+    var isDirectChat = false;
 
     final roomUUIDHex = event.config.roomUUID
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -197,10 +206,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (saved != null) {
           chatName = saved.name;
           chatAvatar = saved.avatarBytes;
+          isDirectChat = saved.isDirectMessage;
           if (saved.serverAddress.trim().isNotEmpty) {
             _activeServerAddress = saved.serverAddress.trim();
           }
-          AppLogger.i('[ChatBloc] Pre-loaded metadata: "${saved.name}"');
+          AppLogger.i(
+            '[ChatBloc] Pre-loaded metadata room=$roomUUIDHex '
+            'direct=$isDirectChat name="${saved.name}" '
+            'avatar=${saved.avatarBytes?.length ?? 0}B',
+            tag: 'DM',
+          );
         }
       } catch (_) {}
     }
@@ -250,6 +265,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       nicknames: event.nicknames,
       chatName: chatName,
       chatAvatarBytes: chatAvatar,
+      isDirectChat: isDirectChat,
       clearError: true,
     ));
 
@@ -309,12 +325,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       state.peerPublicKeys,
       nicknames: newNicknames,
     );
+    final isDirect = state.isDirectChat;
     emit(state.copyWith(
       nicknames: newNicknames,
       peerNicknames: updatedPeerNicks,
       peerNicknamesHistory: updatedHistory,
-      chatName: directDisplay?.name ?? state.chatName,
-      chatAvatarBytes: directDisplay?.avatar ?? state.chatAvatarBytes,
+      chatName:
+          isDirect && directDisplay != null ? directDisplay.name : state.chatName,
+      chatAvatarBytes: isDirect && directDisplay != null
+          ? directDisplay.avatar
+          : state.chatAvatarBytes,
+      clearAvatar:
+          isDirect && directDisplay != null && directDisplay.avatar == null,
     ));
   }
 
@@ -322,10 +344,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       ChatUpdateContactAvatars event, Emitter<ChatState> emit) {
     _contactAvatarsByPub = Map<String, Uint8List>.from(event.avatarsByPubkey);
     final directDisplay = _directChatDisplayFor(state.peerPublicKeys);
+    final isDirect = state.isDirectChat;
     emit(state.copyWith(
       peerAvatars: _peerAvatarsFor(state.peerPublicKeys),
-      chatName: directDisplay?.name ?? state.chatName,
-      chatAvatarBytes: directDisplay?.avatar ?? state.chatAvatarBytes,
+      chatName:
+          isDirect && directDisplay != null ? directDisplay.name : state.chatName,
+      chatAvatarBytes: isDirect && directDisplay != null
+          ? directDisplay.avatar
+          : state.chatAvatarBytes,
+      clearAvatar:
+          isDirect && directDisplay != null && directDisplay.avatar == null,
     ));
   }
 
@@ -347,8 +375,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     if (peerPublicKeys.length != 1) return null;
     final pubHex = peerPublicKeys.values.first;
     final sourceNicknames = nicknames ?? state.nicknames;
-    final name = sourceNicknames[pubHex];
-    if (name == null || name.trim().isEmpty) return null;
+    final rawName = sourceNicknames[pubHex]?.trim() ?? '';
+    final fallbackName =
+        pubHex.length >= 8 ? 'peer_${pubHex.substring(0, 8)}' : 'Direct chat';
+    final name = rawName.isNotEmpty ? rawName : fallbackName;
     final avatar = _contactAvatarsByPub[pubHex];
     return (name: name, avatar: avatar);
   }
@@ -520,6 +550,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         name: name,
         serverAddress: _activeServerAddress,
         avatarBytes: avatar,
+        isDirectMessage: existing?.isDirectMessage ?? state.isDirectChat,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       );
@@ -552,6 +583,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         name: existing?.name ?? state.chatName,
         serverAddress: _activeServerAddress,
         avatarBytes: existing?.avatarBytes ?? state.chatAvatarBytes,
+        isDirectMessage: existing?.isDirectMessage ?? state.isDirectChat,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         windowWidth: existing?.windowWidth,
@@ -648,8 +680,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final updatedPubKeys = Map<String, String>.from(state.peerPublicKeys);
         updatedPubKeys[peerUUID] = ed25519PubHex;
         final directDisplay = _directChatDisplayFor(updatedPubKeys);
-        final nextChatName = directDisplay?.name ?? state.chatName;
-        final nextChatAvatar = directDisplay?.avatar ?? state.chatAvatarBytes;
+        final isDirect = state.isDirectChat;
+        final nextChatName =
+            isDirect && directDisplay != null ? directDisplay.name : state.chatName;
+        final nextChatAvatar =
+            isDirect && directDisplay != null
+                ? directDisplay.avatar
+                : state.chatAvatarBytes;
         if (!state.peerUUIDs.contains(peerUUID)) {
           emit(state.copyWith(
             messages: updatedMessages,
@@ -660,6 +697,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             peerAvatars: _peerAvatarsFor(updatedPubKeys),
             chatName: nextChatName,
             chatAvatarBytes: nextChatAvatar,
+            clearAvatar:
+                isDirect && directDisplay != null && nextChatAvatar == null,
           ));
         } else {
           emit(state.copyWith(
@@ -670,6 +709,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             peerAvatars: _peerAvatarsFor(updatedPubKeys),
             chatName: nextChatName,
             chatAvatarBytes: nextChatAvatar,
+            clearAvatar:
+                isDirect && directDisplay != null && nextChatAvatar == null,
           ));
         }
         final roomUUID = state.roomUUID.isNotEmpty
@@ -689,11 +730,24 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final updatedHistory =
             Map<String, String>.from(state.peerNicknamesHistory);
         if (nick != null) updatedHistory[peerUUID] = nick;
+        final updatedPubKeys = Map<String, String>.from(state.peerPublicKeys)
+          ..remove(peerUUID);
+        final directDisplay = _directChatDisplayFor(updatedPubKeys);
+        final isDirect = state.isDirectChat;
         emit(state.copyWith(
           messages: updatedMessages,
           peerUUIDs: state.peerUUIDs.where((id) => id != peerUUID).toList(),
           peerNicknames: updatedNicknames,
           peerNicknamesHistory: updatedHistory,
+          peerPublicKeys: updatedPubKeys,
+          peerAvatars: _peerAvatarsFor(updatedPubKeys),
+          chatName:
+              isDirect && directDisplay != null ? directDisplay.name : state.chatName,
+          chatAvatarBytes: isDirect && directDisplay != null
+              ? directDisplay.avatar
+              : state.chatAvatarBytes,
+          clearAvatar:
+              isDirect && directDisplay != null && directDisplay.avatar == null,
         ));
 
       case SgtpError(:final error):
@@ -723,13 +777,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final mergedPubKeys = Map<String, String>.from(state.peerPublicKeys)
           ..addAll(_client?.peerPublicKeys ?? const {});
         final directDisplay = _directChatDisplayFor(mergedPubKeys);
-        final effectiveName = directDisplay?.name ?? chatName;
-        final effectiveAvatar = directDisplay?.avatar ?? avatarBytes;
+        final isDirect = state.isDirectChat;
+        final effectiveName =
+            isDirect && directDisplay != null ? directDisplay.name : chatName;
+        final effectiveAvatar =
+            isDirect && directDisplay != null ? directDisplay.avatar : avatarBytes;
         AppLogger.i(
             '[ChatBloc] Got metadata from $senderUUID: "$chatName" -> "$effectiveName"');
         emit(state.copyWith(
           chatName: effectiveName,
           chatAvatarBytes: effectiveAvatar,
+          clearAvatar:
+              isDirect && directDisplay != null && effectiveAvatar == null,
           peerPublicKeys: mergedPubKeys,
           peerAvatars: _peerAvatarsFor(mergedPubKeys),
         ));

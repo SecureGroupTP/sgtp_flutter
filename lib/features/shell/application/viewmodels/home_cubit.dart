@@ -216,6 +216,7 @@ class HomeCubit extends Cubit<HomeViewState> {
   // ── Intent: Open DM room ───────────────────────────────────────────────
 
   void openDm(String roomUUIDHex) {
+    unawaited(_ensureDirectMetadataForRoom(roomUUIDHex));
     _currentTabIndex = 0;
     _buildState();
     _roomsBloc.add(
@@ -224,6 +225,40 @@ class HomeCubit extends Cubit<HomeViewState> {
         serverAddress: _serverAddress,
         openOffline: true,
       ),
+    );
+  }
+
+  Future<void> _ensureDirectMetadataForRoom(String roomUUIDHex) async {
+    final room = roomUUIDHex.trim().toLowerCase().replaceAll('-', '');
+    if (room.length != 32) return;
+
+    String? peerHex;
+    for (final record in _friendStates.values) {
+      final id = (record.roomUUIDHex ?? '').trim().toLowerCase();
+      if (id == room) {
+        peerHex = record.peerPubkeyHex.trim().toLowerCase();
+        break;
+      }
+    }
+    if (peerHex == null || peerHex.isEmpty) return;
+
+    final profile = _contactProfiles[peerHex];
+    final fullName = (profile?.fullname ?? '').trim();
+    final username =
+        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+    final fallback = (_nicknames[peerHex] ?? '').trim();
+    final displayName = fullName.isNotEmpty
+        ? fullName
+        : (username.isNotEmpty
+            ? username
+            : (fallback.isNotEmpty ? fallback : 'Friend'));
+
+    await _homePersistence.upsertDirectMessageChat(
+      accountId: _accountId,
+      roomUUID: room,
+      serverAddress: _serverAddress,
+      displayName: displayName,
+      avatarBytes: profile?.avatarBytes,
     );
   }
 

@@ -341,9 +341,11 @@ class HomeUserDirCoordinator {
     final fullName = (profile?.fullname ?? '').trim();
     final username =
         (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
-    final autoName = fullName.isNotEmpty
-        ? fullName
-        : (username.isNotEmpty ? username : 'peer_${lower.substring(0, 8)}');
+    final autoName = _bestContactName(
+      fullName: fullName,
+      username: username,
+      fallback: 'peer_${lower.substring(0, 8)}',
+    );
 
     _whitelist = [
       ..._whitelist,
@@ -441,9 +443,16 @@ class HomeUserDirCoordinator {
       if (item.status == UserDirFriendStatus.friend &&
           item.roomUUIDHex != null) {
         final profile = _contactProfiles[peerHex];
-        final nickname = _nicknames[peerHex] ?? 'Friend';
+        final nickname = (_nicknames[peerHex] ?? '').trim();
         final fullName = profile?.fullname?.trim() ?? '';
-        final displayName = fullName.isNotEmpty ? fullName : nickname;
+        final username = (profile?.username ?? '')
+            .trim()
+            .replaceFirst(RegExp(r'^@+'), '');
+        final displayName = _bestContactName(
+          fullName: fullName,
+          username: username,
+          fallback: nickname.isNotEmpty ? nickname : 'Friend',
+        );
         await _onDirectMessageReady(
           item.roomUUIDHex!,
           peerHex,
@@ -658,6 +667,20 @@ class HomeUserDirCoordinator {
   bool _isCurrentSession(HomeUserDirSession session) =>
       session.accountId.trim().isNotEmpty &&
       session.accountId.trim() == _activeAccountId;
+
+  String _bestContactName({
+    required String fullName,
+    required String username,
+    required String fallback,
+  }) {
+    final full = fullName.trim();
+    final user = username.trim();
+    // "Account" is onboarding default and often not a meaningful contact label.
+    final fullIsGeneric = full.isEmpty || full.toLowerCase() == 'account';
+    if (!fullIsGeneric) return full;
+    if (user.isNotEmpty) return user;
+    return fallback;
+  }
 
   String _pubkeyHex(Uint8List key) =>
       key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
