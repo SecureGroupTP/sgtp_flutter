@@ -305,18 +305,27 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         updatedHistory[sessionUUID] = nick;
       }
     }
+    final directDisplay = _directChatDisplayFor(
+      state.peerPublicKeys,
+      nicknames: newNicknames,
+    );
     emit(state.copyWith(
       nicknames: newNicknames,
       peerNicknames: updatedPeerNicks,
       peerNicknamesHistory: updatedHistory,
+      chatName: directDisplay?.name ?? state.chatName,
+      chatAvatarBytes: directDisplay?.avatar ?? state.chatAvatarBytes,
     ));
   }
 
   void _onUpdateContactAvatars(
       ChatUpdateContactAvatars event, Emitter<ChatState> emit) {
     _contactAvatarsByPub = Map<String, Uint8List>.from(event.avatarsByPubkey);
+    final directDisplay = _directChatDisplayFor(state.peerPublicKeys);
     emit(state.copyWith(
       peerAvatars: _peerAvatarsFor(state.peerPublicKeys),
+      chatName: directDisplay?.name ?? state.chatName,
+      chatAvatarBytes: directDisplay?.avatar ?? state.chatAvatarBytes,
     ));
   }
 
@@ -332,10 +341,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   ({String name, Uint8List? avatar})? _directChatDisplayFor(
-      Map<String, String> peerPublicKeys) {
+    Map<String, String> peerPublicKeys, {
+    Map<String, String>? nicknames,
+  }) {
     if (peerPublicKeys.length != 1) return null;
     final pubHex = peerPublicKeys.values.first;
-    final name = state.nicknames[pubHex];
+    final sourceNicknames = nicknames ?? state.nicknames;
+    final name = sourceNicknames[pubHex];
     if (name == null || name.trim().isEmpty) return null;
     final avatar = _contactAvatarsByPub[pubHex];
     return (name: name, avatar: avatar);
@@ -710,16 +722,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ):
         final mergedPubKeys = Map<String, String>.from(state.peerPublicKeys)
           ..addAll(_client?.peerPublicKeys ?? const {});
-        final senderPub = mergedPubKeys[senderUUID];
-        final localNick = senderPub == null ? null : state.nicknames[senderPub];
-        final isDirect = mergedPubKeys.length == 1 &&
-            senderPub != null &&
-            localNick != null &&
-            localNick.trim().isNotEmpty;
-        final effectiveName = isDirect ? localNick : chatName;
-        final effectiveAvatar = isDirect
-            ? (_contactAvatarsByPub[senderPub] ?? avatarBytes)
-            : avatarBytes;
+        final directDisplay = _directChatDisplayFor(mergedPubKeys);
+        final effectiveName = directDisplay?.name ?? chatName;
+        final effectiveAvatar = directDisplay?.avatar ?? avatarBytes;
         AppLogger.i(
             '[ChatBloc] Got metadata from $senderUUID: "$chatName" -> "$effectiveName"');
         emit(state.copyWith(
