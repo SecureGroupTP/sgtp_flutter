@@ -247,6 +247,7 @@ class RoomsPageState extends State<RoomsPage> {
       context,
       builder: (_) => _AddRoomSheet(
         roomsBloc: context.read<RoomsBloc>(),
+        defaultServerAddress: widget.serverAddress,
       ),
     );
   }
@@ -793,7 +794,11 @@ class _EmptyState extends StatelessWidget {
 
 class _AddRoomSheet extends StatefulWidget {
   final RoomsBloc roomsBloc;
-  const _AddRoomSheet({required this.roomsBloc});
+  final String defaultServerAddress;
+  const _AddRoomSheet({
+    required this.roomsBloc,
+    required this.defaultServerAddress,
+  });
 
   @override
   State<_AddRoomSheet> createState() => _AddRoomSheetState();
@@ -809,7 +814,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
   late final SettingsManagementService _settingsRepo;
   List<NodeConfig> _nodes = const [];
   String? _selectedNodeId;
-  bool _nodesLoading = true;
 
   @override
   void dispose() {
@@ -831,13 +835,19 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
     if (!mounted) return;
     setState(() {
       _nodes = nodes;
-      _selectedNodeId =
-          preferredNode?.id ?? (nodes.isNotEmpty ? nodes.first.id : null);
-      _nodesLoading = false;
+      final target = widget.defaultServerAddress.trim().toLowerCase();
+      final matchedByAddress = nodes
+          .where((n) => n.chatAddress.trim().toLowerCase() == target)
+          .firstOrNull;
+      _selectedNodeId = matchedByAddress?.id ??
+          preferredNode?.id ??
+          (nodes.isNotEmpty ? nodes.first.id : null);
     });
   }
 
   String? get _selectedChatServer {
+    final explicit = widget.defaultServerAddress.trim();
+    if (explicit.isNotEmpty) return explicit;
     return _selectedNode?.chatAddress;
   }
 
@@ -925,15 +935,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
                   color: AppColors.textPrimary),
             ),
             const SizedBox(height: 24),
-
-            // Node picker
-            _NodePicker(
-              isLoading: _nodesLoading,
-              nodes: _nodes,
-              selectedId: _selectedNodeId,
-              onChanged: (id) => setState(() => _selectedNodeId = id),
-            ),
-            const SizedBox(height: 16),
 
             // Create new
             AppSheetButton(
@@ -1030,102 +1031,6 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
               onTap: _joining ? _joinFromInput : null,
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NodePicker extends StatelessWidget {
-  final bool isLoading;
-  final List<NodeConfig> nodes;
-  final String? selectedId;
-  final ValueChanged<String?> onChanged;
-
-  const _NodePicker({
-    required this.isLoading,
-    required this.nodes,
-    required this.selectedId,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (isLoading) {
-      return Container(
-        height: 52,
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(14),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withAlpha(18)),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: const Row(
-          children: [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            SizedBox(width: 10),
-            Text(
-              'Loading nodes…',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (nodes.isEmpty) {
-      return Container(
-        height: 52,
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(14),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withAlpha(18)),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        alignment: Alignment.centerLeft,
-        child: const Text(
-          'No nodes configured',
-          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-        ),
-      );
-    }
-
-    final value = (selectedId != null && nodes.any((n) => n.id == selectedId))
-        ? selectedId
-        : nodes.first.id;
-
-    return Container(
-      height: 52,
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(14),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withAlpha(18)),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: value,
-          isExpanded: true,
-          dropdownColor: AppColors.bgSurface,
-          iconEnabledColor: AppColors.textSecondary,
-          onChanged: onChanged,
-          items: nodes
-              .map(
-                (n) => DropdownMenuItem(
-                  value: n.id,
-                  child: Text(
-                    n.name,
-                    style: const TextStyle(
-                        fontSize: 14, color: AppColors.textPrimary),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              )
-              .toList(),
         ),
       ),
     );
