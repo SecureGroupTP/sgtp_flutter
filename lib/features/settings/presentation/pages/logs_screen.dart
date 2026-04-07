@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
+import 'package:sgtp_flutter/features/settings/application/viewmodels/logs_cubit.dart';
+import 'package:sgtp_flutter/features/settings/application/viewmodels/logs_view_state.dart';
 
 /// Full-screen log viewer accessible from Settings → Logs.
 ///
@@ -25,56 +28,19 @@ class _LogsScreenState extends State<LogsScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final TextEditingController _searchCtrl = TextEditingController();
 
-  LogLevel? _filterLevel; // null = show all
-  String _searchText = '';
-
   @override
   void initState() {
     super.initState();
-    AppLogger.addListener(_onNewLog);
     _searchCtrl.addListener(() {
-      if (_searchCtrl.text != _searchText) {
-        setState(() => _searchText = _searchCtrl.text);
-      }
+      context.read<LogsCubit>().setSearchText(_searchCtrl.text);
     });
   }
 
   @override
   void dispose() {
-    AppLogger.removeListener(_onNewLog);
     _scrollCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
-  }
-
-  void _onNewLog(LogEntry _) {
-    if (!mounted) return;
-    setState(() {});
-    // Auto-scroll to bottom only if already near the bottom.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        final pos = _scrollCtrl.position;
-        if (pos.maxScrollExtent - pos.pixels < 120) {
-          _scrollCtrl.animateTo(
-            pos.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      }
-    });
-  }
-
-  List<LogEntry> get _filtered {
-    var list = AppLogger.entries;
-    if (_filterLevel != null) {
-      list = list.where((e) => e.level == _filterLevel).toList();
-    }
-    final q = _searchText.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      list = list.where((e) => e.message.toLowerCase().contains(q)).toList();
-    }
-    return list;
   }
 
   Color _levelColor(LogLevel l) => switch (l) {
@@ -86,23 +52,43 @@ class _LogsScreenState extends State<LogsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final entries = _filtered;
-    final totalCount = AppLogger.entries.length;
+    return BlocConsumer<LogsCubit, LogsViewState>(
+      listener: (context, state) {
+        // Auto-scroll to bottom when new entries arrive and already near bottom.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollCtrl.hasClients) {
+            final pos = _scrollCtrl.position;
+            if (pos.maxScrollExtent - pos.pixels < 120) {
+              _scrollCtrl.animateTo(
+                pos.maxScrollExtent,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+              );
+            }
+          }
+        });
+      },
+      builder: (context, state) {
+        final entries = state.entries;
+        final totalCount = state.totalCount;
 
-    return Scaffold(
-      backgroundColor: AppColors.bgMain,
-      appBar: _buildAppBar(context, totalCount, entries.length),
-      body: Column(
-        children: [
-          _buildFilterBar(),
-          const Divider(height: 1, color: Color(0xFF2C2C30)),
-          Expanded(child: _buildLogList(entries)),
-        ],
-      ),
+        return Scaffold(
+          backgroundColor: AppColors.bgMain,
+          appBar: _buildAppBar(context, totalCount, entries.length),
+          body: Column(
+            children: [
+              _buildFilterBar(state),
+              const Divider(height: 1, color: Color(0xFF2C2C30)),
+              Expanded(child: _buildLogList(entries, totalCount)),
+            ],
+          ),
+        );
+      },
     );
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context, int total, int shown) {
+    final cubit = context.read<LogsCubit>();
     return PreferredSize(
       preferredSize: const Size.fromHeight(64),
       child: Container(
@@ -152,7 +138,7 @@ class _LogsScreenState extends State<LogsScreen> {
                       ? null
                       : () {
                           Clipboard.setData(
-                              ClipboardData(text: AppLogger.fullText));
+                              ClipboardData(text: cubit.fullLogText));
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Logs copied to clipboard'),
@@ -192,7 +178,7 @@ class _LogsScreenState extends State<LogsScreen> {
                             confirmLabel: 'Clear',
                             danger: true,
                           );
-                          if (ok) AppLogger.clear();
+                          if (ok) cubit.clearLogs();
                         },
                 ),
               ]),
@@ -203,7 +189,8 @@ class _LogsScreenState extends State<LogsScreen> {
     );
   }
 
-  Widget _buildFilterBar() {
+  Widget _buildFilterBar(LogsViewState state) {
+    final cubit = context.read<LogsCubit>();
     return Container(
       color: AppColors.bgSurface,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -216,8 +203,8 @@ class _LogsScreenState extends State<LogsScreen> {
               label: level == null ? 'All' : level.name.toUpperCase(),
               color:
                   level == null ? const Color(0xFF8E8E93) : _levelColor(level),
-              selected: _filterLevel == level,
-              onTap: () => setState(() => _filterLevel = level),
+              selected: state.filterLevel == level,
+              onTap: () => cubit.setFilterLevel(level),
             ),
           ),
         const SizedBox(width: 4),
@@ -242,11 +229,11 @@ class _LogsScreenState extends State<LogsScreen> {
                 isDense: true,
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                suffixIcon: _searchText.isNotEmpty
+                suffixIcon: state.searchText.isNotEmpty
                     ? GestureDetector(
                         onTap: () {
                           _searchCtrl.clear();
-                          setState(() => _searchText = '');
+                          cubit.setSearchText('');
                         },
                         child: const Icon(Icons.close,
                             size: 16, color: AppColors.textSecondary),
@@ -260,7 +247,7 @@ class _LogsScreenState extends State<LogsScreen> {
     );
   }
 
-  Widget _buildLogList(List<LogEntry> entries) {
+  Widget _buildLogList(List<LogEntry> entries, int totalCount) {
     if (entries.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -268,7 +255,7 @@ class _LogsScreenState extends State<LogsScreen> {
               size: 56, color: Color(0xFF636366)),
           const SizedBox(height: 12),
           Text(
-            AppLogger.entries.isEmpty
+            totalCount == 0
                 ? 'No log entries yet'
                 : 'No entries match the filter',
             style:

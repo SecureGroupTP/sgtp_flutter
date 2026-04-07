@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat_list/chat_list_bloc.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat_list/chat_list_bloc.dart';
 import 'package:sgtp_flutter/features/shell/presentation/widgets/main_bottom_navigation.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/pages/chat_list_screen.dart';
 

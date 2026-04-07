@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
-import 'package:sgtp_flutter/features/messaging/application/blocs/chat/chat_state.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 
 /// Small coloured circle indicating a single room's connection status.
 class RoomStatusDot extends StatelessWidget {
