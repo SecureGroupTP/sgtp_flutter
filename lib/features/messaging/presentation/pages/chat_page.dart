@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
@@ -97,6 +96,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     'mkv',
     'm4v',
     '3gp'
+  };
+  static const _imageExtensions = {
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'bmp',
+    'heic',
+    'heif'
   };
 
   // Quick emoji set for reactions
@@ -387,89 +396,108 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _pickAndSendMedia(BuildContext context) async {
-    final choice = await showAppBottomSheet<String>(context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFF2C2C30),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 8),
-            AppSheetTile(
-                icon: Icons.image_outlined,
-                label: 'Photo / GIF',
-                subtitle: 'Select one or more images',
-                value: 'image',
-                sheetContext: context),
-            AppSheetTile(
-                icon: Icons.videocam_outlined,
-                label: 'Video',
-                subtitle: null,
-                value: 'video',
-                sheetContext: context),
-            AppSheetTile(
-                icon: Icons.radio_button_checked_outlined,
-                label: 'Video note',
-                subtitle: 'Circular video message',
-                value: 'videonote',
-                sheetContext: context),
-            AppSheetTile(
-                icon: Icons.content_paste_outlined,
-                label: 'Paste from clipboard',
-                subtitle: null,
-                value: 'paste',
-                sheetContext: context),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (!context.mounted) return;
-    if (choice == 'image')
-      await _withProgress(() => _pickAndSendImages(context));
-    if (choice == 'video')
-      await _withProgress(() => _pickAndSendVideo(context));
-    if (choice == 'videonote')
-      await _withProgress(() => _pickAndSendVideoNote(context));
-    if (choice == 'paste')
-      await _withProgress(() => _pasteImageFromClipboard(context));
+  Future<void> _pickAndSendMedia() async {
+    await _withProgress(_pickAndSendUnifiedMedia);
   }
 
-  /// Pick one OR multiple images, show caption sheet, then send text+images.
-  Future<void> _pickAndSendImages(BuildContext context) async {
+  Future<void> _pickAndSendUnifiedMedia() async {
     final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
+      type: FileType.media,
       allowMultiple: true,
+      withData: kIsWeb,
     );
     if (result == null || result.files.isEmpty) return;
-    if (!context.mounted) return;
+    if (!mounted) return;
 
-    // Build file list with mime types
-    final files = result.files.where((f) => f.bytes != null).map((f) {
-      final ext = f.name.split('.').last.toLowerCase();
-      final mime = switch (ext) {
-        'png' => 'image/png',
-        'gif' => 'image/gif',
-        'webp' => 'image/webp',
-        _ => 'image/jpeg',
-      };
-      return (bytes: f.bytes!, name: f.name, mime: mime);
-    }).toList();
-    if (files.isEmpty) return;
+    final imageFiles = <({Uint8List bytes, String name, String mime})>[];
+    final videoFiles = <({XFile xFile, String name, String ext})>[];
+    var skipped = 0;
+
+    for (var i = 0; i < result.files.length; i++) {
+      final file = result.files[i];
+      final ext = _fileExtFromName(file.name);
+
+      if (_imageExtensions.contains(ext)) {
+        final bytes = await _bytesFromPlatformFile(file);
+        if (bytes == null || bytes.isEmpty) {
+          skipped++;
+          continue;
+        }
+        imageFiles
+            .add((bytes: bytes, name: file.name, mime: _imageMimeForExt(ext)));
+        continue;
+      }
+
+      if (_videoExtensions.contains(ext)) {
+        XFile? xFile;
+        if (i < result.xFiles.length) {
+          xFile = result.xFiles[i];
+        } else if (file.path != null && file.path!.isNotEmpty) {
+          xFile = XFile(file.path!, name: file.name);
+        } else if (kIsWeb && file.bytes != null && file.bytes!.isNotEmpty) {
+          xFile = XFile.fromData(
+            file.bytes!,
+            name: file.name,
+            mimeType: _videoMimeForExt(ext),
+          );
+        }
+        if (xFile == null) {
+          skipped++;
+          continue;
+        }
+        videoFiles.add((xFile: xFile, name: file.name, ext: ext));
+        continue;
+      }
+
+      skipped++;
+    }
+
+    if (imageFiles.isEmpty && videoFiles.isEmpty) {
+      _showSnack(context, 'No supported media selected');
+      return;
+    }
+
+    final bloc = context.read<ChatBloc>();
+
+    if (imageFiles.isNotEmpty) {
+      await _sendPickedImages(
+        imageFiles: imageFiles,
+        shouldCompressPhotos: mediaSettings.shouldCompressPhotos,
+      );
+      if (!mounted) return;
+    }
+
+    if (videoFiles.isNotEmpty) {
+      if (mediaSettings.shouldCompressVideos) {
+        _showSnack(
+            context, 'Video compression is not available yet in this build');
+      }
+      for (final video in videoFiles) {
+        bloc.add(ChatSendVideo(
+          xFile: video.xFile,
+          name: video.name,
+          mime: _videoMimeForExt(video.ext),
+        ));
+      }
+      _scrollToBottom();
+    }
+
+    if (skipped > 0) {
+      _showSnack(context, 'Skipped $skipped unsupported file(s)');
+    }
+  }
+
+  Future<void> _sendPickedImages(
+    {
+    required List<({Uint8List bytes, String name, String mime})> imageFiles,
+    required bool shouldCompressPhotos,
+  }) async {
+    if (imageFiles.isEmpty) return;
 
     final preparedFiles = <({Uint8List bytes, String name, String mime})>[];
-    for (final file in files) {
-      if (mediaSettings.shouldCompressPhotos) {
+    for (final file in imageFiles) {
+      if (shouldCompressPhotos) {
         preparedFiles.add(await _prepareImageForUpload(
           bytes: file.bytes,
           name: file.name,
@@ -491,7 +519,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         imageCount: preparedFiles.length,
         initialCaption: existingText,
       );
-      if (!context.mounted) return;
+      if (!mounted) return;
       if (captionResult == null) return; // user cancelled
       caption = captionResult;
     } else {
@@ -642,44 +670,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     );
     ctrl.dispose();
     return result;
-  }
-
-  Future<void> _pickAndSendVideoNote(BuildContext context) async {
-    final picked = await _pickVideoFile();
-    if (picked == null) return;
-    final xFile = picked.$1;
-    final ext = picked.$2;
-    if (!_videoExtensions.contains(ext)) {
-      if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
-      return;
-    }
-    if (!context.mounted) return;
-    context
-        .read<ChatBloc>()
-        .add(ChatSendVideoNoteFile(xFile: xFile, mime: _videoMimeForExt(ext)));
-    _scrollToBottom();
-  }
-
-  Future<void> _pickAndSendVideo(BuildContext context) async {
-    final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
-    final picked = await _pickVideoFile();
-    if (picked == null) return;
-    final xFile = picked.$1;
-    final ext = picked.$2;
-    if (!_videoExtensions.contains(ext)) {
-      if (context.mounted) _showSnack(context, 'Unsupported format: .$ext');
-      return;
-    }
-    final mime = _videoMimeForExt(ext);
-    if (!context.mounted) return;
-    if (mediaSettings.shouldCompressVideos) {
-      _showSnack(
-          context, 'Video compression is not available yet in this build');
-    }
-    context
-        .read<ChatBloc>()
-        .add(ChatSendVideo(xFile: xFile, name: xFile.name, mime: mime));
-    _scrollToBottom();
   }
 
   /// Desktop = Windows / macOS / Linux. Mobile = Android / iOS.
@@ -1005,39 +995,32 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     ));
   }
 
-  Future<(XFile, String)?> _pickVideoFile() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.video,
-      withData: kIsWeb,
-    );
-    if (result == null) return null;
-
-    XFile? xFile = result.xFiles.isNotEmpty ? result.xFiles.first : null;
-
-    if (kIsWeb && xFile == null && result.files.isNotEmpty) {
-      final file = result.files.first;
-      final bytes = file.bytes;
-      if (bytes != null && bytes.isNotEmpty) {
-        xFile = XFile.fromData(
-          bytes,
-          name: file.name,
-          mimeType: file.extension != null
-              ? _videoMimeForExt(file.extension!.toLowerCase())
-              : 'video/mp4',
-        );
-      }
-    }
-
-    if (xFile == null) return null;
-
-    final ext = _videoExtFromName(xFile.name);
-    return (xFile, ext);
-  }
-
-  String _videoExtFromName(String name) {
+  String _fileExtFromName(String name) {
     final dot = name.lastIndexOf('.');
     if (dot < 0 || dot >= name.length - 1) return '';
     return name.substring(dot + 1).toLowerCase();
+  }
+
+  String _imageMimeForExt(String ext) => switch (ext.toLowerCase()) {
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'bmp' => 'image/bmp',
+        'heic' => 'image/heic',
+        'heif' => 'image/heif',
+        _ => 'image/jpeg',
+      };
+
+  Future<Uint8List?> _bytesFromPlatformFile(PlatformFile file) async {
+    final bytes = file.bytes;
+    if (bytes != null) return bytes;
+    final path = file.path;
+    if (path == null || path.isEmpty) return null;
+    try {
+      return await XFile(path, name: file.name).readAsBytes();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _handlePasteShortcut(BuildContext context) async {
@@ -1816,7 +1799,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                     padding: const EdgeInsets.only(bottom: 6),
                     child: GestureDetector(
                       onTap: canSend && _uploadProgress == null
-                          ? () => _pickAndSendMedia(context)
+                          ? _pickAndSendMedia
                           : null,
                       child: Padding(
                         padding: const EdgeInsets.all(4),
