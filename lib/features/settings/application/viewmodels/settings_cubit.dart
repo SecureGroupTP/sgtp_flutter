@@ -86,6 +86,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String _standaloneServerAddress = '';
 
   int _accountLoadSeq = 0;
+  int _usernameSaveSeq = 0;
 
   // ── Public getters ──────────────────────────────────────────────────────
   SettingsManagementService get settings => _settings;
@@ -306,9 +307,20 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   Future<void> saveUsername(String sanitized) async {
     final accountId = _activeAccountId();
     if (accountId == null) return;
-    await _settings.saveUserUsernameForNode(accountId, sanitized);
-    final registrationError = await _onUsernameChanged?.call(sanitized);
-    _usernameError = registrationError;
+    final saveSeq = ++_usernameSaveSeq;
+    _username = sanitized;
+    _usernameError = null;
+    _buildState();
+    try {
+      await _settings.saveUserUsernameForNode(accountId, sanitized);
+      final registrationError = await _onUsernameChanged?.call(sanitized);
+      if (saveSeq != _usernameSaveSeq) return;
+      _usernameError = registrationError;
+    } catch (e) {
+      if (saveSeq != _usernameSaveSeq) return;
+      _usernameError = 'Failed to update username';
+      AppLogger.w('Failed to save username: $e', tag: 'SETTINGS');
+    }
     _buildState();
   }
 
