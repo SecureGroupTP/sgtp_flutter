@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
@@ -99,8 +100,18 @@ class _HomeScreenView extends StatefulWidget {
 
 class _HomeScreenViewState extends State<_HomeScreenView> {
   final _roomsPageKey = GlobalKey<RoomsPageState>();
+  late final AppSessionController _appSessionController;
 
   HomeCubit get _cubit => context.read<HomeCubit>();
+
+  @override
+  void initState() {
+    super.initState();
+    _appSessionController = _HomeAppSessionController(
+      homeCubit: _cubit,
+      roomsPageKey: _roomsPageKey,
+    );
+  }
 
   void _showAddSheet() {
     _roomsPageKey.currentState?.showAddSheet();
@@ -118,61 +129,45 @@ class _HomeScreenViewState extends State<_HomeScreenView> {
   Widget build(BuildContext context) {
     return BlocBuilder<HomeCubit, HomeViewState>(
       builder: (context, state) {
-        return BlocProvider.value(
-          value: _cubit.roomsBloc,
-          child: Scaffold(
-            extendBody: true,
-            body: IndexedStack(
-              index: state.currentTabIndex,
-              children: [
-                // 0 — Rooms
-                RoomsPage(
-                  key: _roomsPageKey,
-                  accountId: state.accountId,
-                  serverAddress: state.serverAddress,
-                ),
-                // 1 — Contacts
-                ContactsPage(
-                  accountId: state.accountId,
-                  serverNodeId: state.config.nodeId,
-                  myPubkeyHex: state.myPubkeyHex,
-                  initialEntries: state.whitelist,
-                  onEntriesChanged: _cubit.onWhitelistChanged,
-                  contactProfiles: state.contactProfiles,
-                  friendStates: state.friendStates,
-                  onFriendRespond: (peerHex, accept) =>
-                      _cubit.respondToFriend(peerHex, accept),
-                  onOpenDm: (roomUUIDHex) {
-                    _cubit.openDm(roomUUIDHex);
-                    final roomsPage = _roomsPageKey.currentState;
-                    if (roomsPage != null) {
-                      roomsPage.openRoomByUuid(
-                        roomUUIDHex,
-                        serverAddress: state.serverAddress,
-                        openOffline: true,
-                      );
-                    }
-                  },
-                ),
-                // 2 — Settings
-                SettingsPage(
-                  initialConfig: state.config,
-                  initialNicknames: state.nicknames,
-                  onConfigChanged: _cubit.onConfigChanged,
-                  onUserAvatarChanged: _cubit.onUserAvatarChanged,
-                  onNicknameChanged: _cubit.onNicknameChanged,
-                  onUsernameChanged: _cubit.onUsernameChanged,
-                  onAllDataDeleted: _onAllDataDeleted,
-                  currentUserAvatar: state.userAvatar,
-                ),
-              ],
-            ),
-            floatingActionButton: state.currentTabIndex == 0
-                ? _HomeFab(onPressed: _showAddSheet)
-                : null,
-            bottomNavigationBar: AppNavBar(
-              selectedIndex: state.currentTabIndex,
-              onTap: (i) => _cubit.setTabIndex(i),
+        return RepositoryProvider<AppSessionController>.value(
+          value: _appSessionController,
+          child: BlocProvider.value(
+            value: _cubit.roomsBloc,
+            child: Scaffold(
+              extendBody: true,
+              body: IndexedStack(
+                index: state.currentTabIndex,
+                children: [
+                  // 0 — Rooms
+                  RoomsPage(
+                    key: _roomsPageKey,
+                    accountId: state.accountId,
+                    serverAddress: state.serverAddress,
+                  ),
+                  // 1 — Contacts
+                  ContactsPage(
+                    accountId: state.accountId,
+                    serverNodeId: state.config.nodeId,
+                    myPubkeyHex: state.myPubkeyHex,
+                    initialEntries: state.whitelist,
+                    contactProfiles: state.contactProfiles,
+                    friendStates: state.friendStates,
+                  ),
+                  // 2 — Settings
+                  SettingsPage(
+                    initialConfig: state.config,
+                    onAllDataDeleted: _onAllDataDeleted,
+                    currentUserAvatar: state.userAvatar,
+                  ),
+                ],
+              ),
+              floatingActionButton: state.currentTabIndex == 0
+                  ? _HomeFab(onPressed: _showAddSheet)
+                  : null,
+              bottomNavigationBar: AppNavBar(
+                selectedIndex: state.currentTabIndex,
+                onTap: (i) => _cubit.setTabIndex(i),
+              ),
             ),
           ),
         );
@@ -184,6 +179,72 @@ class _HomeScreenViewState extends State<_HomeScreenView> {
 // ─────────────────────────────────────────────────────────────────────────────
 // FAB
 // ─────────────────────────────────────────────────────────────────────────────
+
+class _HomeAppSessionController implements AppSessionController {
+  _HomeAppSessionController({
+    required HomeCubit homeCubit,
+    required GlobalKey<RoomsPageState> roomsPageKey,
+  })  : _homeCubit = homeCubit,
+        _roomsPageKey = roomsPageKey;
+
+  final HomeCubit _homeCubit;
+  final GlobalKey<RoomsPageState> _roomsPageKey;
+
+  @override
+  void applyAccountConfig({
+    required String accountId,
+    required SgtpConfig config,
+    required Map<String, String> nicknames,
+    required String serverAddress,
+    required List<WhitelistEntry> whitelistEntries,
+  }) {
+    _homeCubit.onConfigChanged(
+      accountId,
+      config,
+      nicknames,
+      serverAddress,
+      whitelistEntries,
+    );
+  }
+
+  @override
+  void setCurrentUserAvatar(Uint8List? avatar) {
+    _homeCubit.onUserAvatarChanged(avatar);
+  }
+
+  @override
+  void setCurrentNickname(String nickname) {
+    _homeCubit.onNicknameChanged(nickname);
+  }
+
+  @override
+  Future<String?> setCurrentUsername(String username) {
+    return _homeCubit.onUsernameChanged(username);
+  }
+
+  @override
+  void setWhitelistEntries(List<WhitelistEntry> entries) {
+    _homeCubit.onWhitelistChanged(entries);
+  }
+
+  @override
+  Future<bool> respondToFriend(String peerPubkeyHex, bool accept) {
+    return _homeCubit.respondToFriend(peerPubkeyHex, accept);
+  }
+
+  @override
+  void openDirectMessage(String roomUUIDHex) {
+    _homeCubit.openDm(roomUUIDHex);
+    final roomsPage = _roomsPageKey.currentState;
+    if (roomsPage != null) {
+      roomsPage.openRoomByUuid(
+        roomUUIDHex,
+        serverAddress: _homeCubit.state.serverAddress,
+        openOffline: true,
+      );
+    }
+  }
+}
 
 class _HomeFab extends StatelessWidget {
   final VoidCallback onPressed;

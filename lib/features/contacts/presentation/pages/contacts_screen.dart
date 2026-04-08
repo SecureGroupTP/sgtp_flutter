@@ -13,15 +13,7 @@ import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.
 /// Contacts screen — shows the trusted-peer whitelist.
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
 class ContactsScreen extends StatefulWidget {
-  final Future<bool> Function(String peerPubkeyHex, bool accept)?
-      onFriendRespond;
-  final void Function(String roomUUIDHex)? onOpenDm;
-
-  const ContactsScreen({
-    super.key,
-    this.onFriendRespond,
-    this.onOpenDm,
-  });
+  const ContactsScreen({super.key});
 
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
@@ -30,6 +22,14 @@ class ContactsScreen extends StatefulWidget {
 class _ContactsScreenState extends State<ContactsScreen> {
   final _searchCtrl = TextEditingController();
   ContactsCubit get _cubit => context.read<ContactsCubit>();
+
+  void _respondToFriend(String peerPubkeyHex, bool accept) {
+    _cubit.respondToFriend(peerPubkeyHex, accept);
+  }
+
+  void _openDirectMessage(String roomUUIDHex) {
+    _cubit.openDirectMessage(roomUUIDHex);
+  }
 
   void _disposeControllerNextFrame(TextEditingController controller) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -690,7 +690,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
               ),
               ...state.incomingRequests.map((request) => _IncomingFriendTile(
                     request: request,
-                    onRespond: widget.onFriendRespond,
+                    onReject: () => _respondToFriend(request.peerHex, false),
+                    onAccept: () => _respondToFriend(request.peerHex, true),
                   )),
             ],
 
@@ -711,8 +712,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           onTap: () => _editContact(contact),
                           onShare: () => _shareContact(contact),
                           onDelete: () => _deleteContact(contact),
-                          onFriendRespond: widget.onFriendRespond,
-                          onOpenDm: widget.onOpenDm,
+                          onReject: () =>
+                              _respondToFriend(contact.hexKey, false),
+                          onAccept: () =>
+                              _respondToFriend(contact.hexKey, true),
+                          onMessage: contact.roomUUIDHex == null ||
+                                  contact.roomUUIDHex!.isEmpty
+                              ? null
+                              : () => _openDirectMessage(contact.roomUUIDHex!),
                         );
                       },
                     ),
@@ -880,17 +887,18 @@ class _ContactTile extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onShare;
   final VoidCallback onDelete;
-  final Future<bool> Function(String peerPubkeyHex, bool accept)?
-      onFriendRespond;
-  final void Function(String roomUUIDHex)? onOpenDm;
+  final VoidCallback? onReject;
+  final VoidCallback? onAccept;
+  final VoidCallback? onMessage;
 
   const _ContactTile({
     required this.contact,
     required this.onTap,
     required this.onShare,
     required this.onDelete,
-    this.onFriendRespond,
-    this.onOpenDm,
+    this.onReject,
+    this.onAccept,
+    this.onMessage,
   });
 
   @override
@@ -954,31 +962,31 @@ class _ContactTile extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (status == ContactsFriendStatus.pendingIncoming &&
-                    onFriendRespond != null)
+                    onReject != null)
                   _MiniTextBtn(
                     label: 'NO',
                     color: AppColors.statusRed,
-                    onTap: () => onFriendRespond!(contact.hexKey, false),
+                    onTap: onReject!,
                   ),
                 if (status == ContactsFriendStatus.pendingIncoming &&
-                    onFriendRespond != null)
+                    onReject != null)
                   const SizedBox(width: 4),
                 if (status == ContactsFriendStatus.pendingIncoming &&
-                    onFriendRespond != null)
+                    onAccept != null)
                   _MiniTextBtn(
                     label: 'YES',
                     color: const Color(0xFF2E7D32),
-                    onTap: () => onFriendRespond!(contact.hexKey, true),
+                    onTap: onAccept!,
                   ),
                 if (status == ContactsFriendStatus.friend &&
                     roomUUID != null &&
                     roomUUID.isNotEmpty &&
-                    onOpenDm != null)
+                    onMessage != null)
                   _MiniTextBtn(
                     label: 'Message',
                     color: AppColors.accent,
                     textColor: Colors.black,
-                    onTap: () => onOpenDm!(roomUUID),
+                    onTap: onMessage!,
                   ),
                 _ActionBtn(
                   icon: Icons.ios_share_outlined,
@@ -1002,11 +1010,13 @@ class _ContactTile extends StatelessWidget {
 
 class _IncomingFriendTile extends StatelessWidget {
   final ContactsIncomingRequestUiModel request;
-  final Future<bool> Function(String peerPubkeyHex, bool accept)? onRespond;
+  final VoidCallback? onReject;
+  final VoidCallback? onAccept;
 
   const _IncomingFriendTile({
     required this.request,
-    required this.onRespond,
+    this.onReject,
+    this.onAccept,
   });
 
   @override
@@ -1069,17 +1079,13 @@ class _IncomingFriendTile extends StatelessWidget {
               _MiniTextBtn(
                 label: 'NO',
                 color: AppColors.statusRed,
-                onTap: onRespond == null
-                    ? () {}
-                    : () => onRespond!(request.peerHex, false),
+                onTap: onReject ?? () {},
               ),
               const SizedBox(width: 4),
               _MiniTextBtn(
                 label: 'YES',
                 color: const Color(0xFF2E7D32),
-                onTap: onRespond == null
-                    ? () {}
-                    : () => onRespond!(request.peerHex, true),
+                onTap: onAccept ?? () {},
               ),
             ],
           ),

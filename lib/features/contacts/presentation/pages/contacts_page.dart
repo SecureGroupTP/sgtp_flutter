@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/contacts/application/viewmodels/contacts_cubit.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/pages/contacts_screen.dart';
@@ -13,11 +14,8 @@ class ContactsPage extends StatefulWidget {
     this.serverNodeId,
     this.myPubkeyHex,
     required this.initialEntries,
-    required this.onEntriesChanged,
     this.contactProfiles = const {},
     this.friendStates = const {},
-    this.onFriendRespond,
-    this.onOpenDm,
   });
 
   final String accountId;
@@ -26,10 +24,6 @@ class ContactsPage extends StatefulWidget {
   final List<WhitelistEntry> initialEntries;
   final Map<String, ContactProfile> contactProfiles;
   final Map<String, FriendStateRecord> friendStates;
-  final void Function(List<WhitelistEntry> entries) onEntriesChanged;
-  final Future<bool> Function(String peerPubkeyHex, bool accept)?
-      onFriendRespond;
-  final void Function(String roomUUIDHex)? onOpenDm;
 
   @override
   State<ContactsPage> createState() => _ContactsPageState();
@@ -43,7 +37,7 @@ class _ContactsPageState extends State<ContactsPage> {
     super.initState();
     _contactsCubit = ContactsCubit(
       directoryService: context.read<ContactsDirectoryService>(),
-      onEntriesChanged: widget.onEntriesChanged,
+      appSessionController: context.read<AppSessionController>(),
       accountId: widget.accountId,
       serverNodeId: widget.serverNodeId,
       myPubkeyHex: widget.myPubkeyHex,
@@ -76,10 +70,7 @@ class _ContactsPageState extends State<ContactsPage> {
   Widget build(BuildContext context) {
     return BlocProvider.value(
       value: _contactsCubit,
-      child: ContactsScreen(
-        onFriendRespond: widget.onFriendRespond,
-        onOpenDm: widget.onOpenDm,
-      ),
+      child: const ContactsScreen(),
     );
   }
 }

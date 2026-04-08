@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/features/contacts/application/models/contacts_models.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
@@ -12,7 +13,7 @@ import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_mo
 class ContactsCubit extends Cubit<ContactsViewState> {
   ContactsCubit({
     required ContactsDirectoryService directoryService,
-    required void Function(List<WhitelistEntry> entries) onEntriesChanged,
+    required AppSessionController appSessionController,
     required String accountId,
     required String? serverNodeId,
     required String? myPubkeyHex,
@@ -20,7 +21,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     required Map<String, ContactProfile> contactProfiles,
     required Map<String, FriendStateRecord> friendStates,
   })  : _directoryService = directoryService,
-        _onEntriesChanged = onEntriesChanged,
+        _appSessionController = appSessionController,
         _accountId = accountId,
         _serverNodeId = serverNodeId,
         _myPubkeyHex = myPubkeyHex,
@@ -39,7 +40,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
   }
 
   final ContactsDirectoryService _directoryService;
-  final void Function(List<WhitelistEntry> entries) _onEntriesChanged;
+  final AppSessionController _appSessionController;
 
   String _accountId;
   String? _serverNodeId;
@@ -211,6 +212,14 @@ class ContactsCubit extends Cubit<ContactsViewState> {
         .where((entry) => entry.hexKey.toLowerCase() != hexKey.toLowerCase())
         .toList(growable: false);
     return _persistEntries(nextEntries);
+  }
+
+  Future<bool> respondToFriend(String peerPubkeyHex, bool accept) {
+    return _appSessionController.respondToFriend(peerPubkeyHex, accept);
+  }
+
+  void openDirectMessage(String roomUUIDHex) {
+    _appSessionController.openDirectMessage(roomUUIDHex);
   }
 
   @override
@@ -385,7 +394,9 @@ class ContactsCubit extends Cubit<ContactsViewState> {
         _resetSearch(clearBanner: false);
       }
       _recentlyAddedUsername = recentlyAddedUsername;
-      _onEntriesChanged(List<WhitelistEntry>.from(sanitized));
+      _appSessionController.setWhitelistEntries(
+        List<WhitelistEntry>.from(sanitized),
+      );
       emit(_buildState());
       return null;
     } catch (_) {
@@ -456,7 +467,8 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     return '${hex.substring(0, 8)}…${hex.substring(hex.length - 8)}';
   }
 
-  String _resolveContactDisplayName(String storedName, ContactProfile? profile) {
+  String _resolveContactDisplayName(
+      String storedName, ContactProfile? profile) {
     final name = storedName.trim();
     if (profile == null) return name;
 
@@ -464,7 +476,8 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     final user =
         (profile.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
 
-    final hasBetterProfileName = full.isNotEmpty && full.toLowerCase() != 'account';
+    final hasBetterProfileName =
+        full.isNotEmpty && full.toLowerCase() != 'account';
     final hasUsername = user.isNotEmpty;
     final isGenericStored = name.isEmpty ||
         name.toLowerCase() == 'account' ||

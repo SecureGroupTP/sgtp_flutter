@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
@@ -12,30 +13,15 @@ import 'package:sgtp_flutter/features/settings/application/models/settings_model
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
 
-typedef ConfigChangedCallback = void Function(
-    String accountId,
-    SgtpConfig config,
-    Map<String, String> nicknames,
-    String serverAddress,
-    List<WhitelistEntry> whitelistEntries);
-typedef UserAvatarChangedCallback = void Function(Uint8List? avatar);
-
 class SettingsCubit extends Cubit<SettingsViewState> {
   SettingsCubit({
     required SettingsManagementService settings,
+    required AppSessionController appSessionController,
     required SgtpConfig? initialConfig,
-    required Map<String, String>? initialNicknames,
     required Uint8List? currentUserAvatar,
-    required ConfigChangedCallback? onConfigChanged,
-    required UserAvatarChangedCallback? onUserAvatarChanged,
-    required void Function(String nickname)? onNicknameChanged,
-    required Future<String?> Function(String username)? onUsernameChanged,
     required void Function()? onAllDataDeleted,
   })  : _settings = settings,
-        _onConfigChanged = onConfigChanged,
-        _onUserAvatarChanged = onUserAvatarChanged,
-        _onNicknameChanged = onNicknameChanged,
-        _onUsernameChanged = onUsernameChanged,
+        _appSessionController = appSessionController,
         _onAllDataDeleted = onAllDataDeleted,
         super(const SettingsViewState()) {
     _userAvatar = currentUserAvatar;
@@ -47,10 +33,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   }
 
   final SettingsManagementService _settings;
-  final ConfigChangedCallback? _onConfigChanged;
-  final UserAvatarChangedCallback? _onUserAvatarChanged;
-  final void Function(String nickname)? _onNicknameChanged;
-  final Future<String?> Function(String username)? _onUsernameChanged;
+  final AppSessionController _appSessionController;
   final void Function()? _onAllDataDeleted;
 
   String? _privateKeyPath;
@@ -205,12 +188,12 @@ class SettingsCubit extends Cubit<SettingsViewState> {
         pingIntervalSeconds: _pingIntervalSeconds,
         mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
-      _onConfigChanged?.call(
-        applied.accountId,
-        applied.config,
-        applied.nicknames,
-        applied.serverAddress,
-        applied.whitelistEntries,
+      _appSessionController.applyAccountConfig(
+        accountId: applied.accountId,
+        config: applied.config,
+        nicknames: applied.nicknames,
+        serverAddress: applied.serverAddress,
+        whitelistEntries: applied.whitelistEntries,
       );
     } catch (_) {}
   }
@@ -325,7 +308,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     await _settings.saveUserNicknameForNode(accountId, next);
     _nicknamesByNodeId[accountId] = next;
     _buildState();
-    _onNicknameChanged?.call(next);
+    _appSessionController.setCurrentNickname(next);
   }
 
   // ── Intent: Save username ───────────────────────────────────────────────
@@ -339,7 +322,8 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _buildState();
     try {
       await _settings.saveUserUsernameForNode(accountId, sanitized);
-      final registrationError = await _onUsernameChanged?.call(sanitized);
+      final registrationError =
+          await _appSessionController.setCurrentUsername(sanitized);
       if (saveSeq != _usernameSaveSeq) return;
       _usernameError = registrationError;
     } catch (e) {
@@ -363,7 +347,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _userAvatar = bytes;
     _avatarsByNodeId[accountId] = bytes;
     _buildState();
-    _onUserAvatarChanged?.call(bytes);
+    _appSessionController.setCurrentUserAvatar(bytes);
   }
 
   // ── Intent: Key management ──────────────────────────────────────────────
@@ -556,15 +540,4 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   }
 
   // ── Sync callbacks ──────────────────────────────────────────────────────
-
-  void syncCallbacks({
-    ConfigChangedCallback? onConfigChanged,
-    UserAvatarChangedCallback? onUserAvatarChanged,
-    void Function(String nickname)? onNicknameChanged,
-    Future<String?> Function(String username)? onUsernameChanged,
-    void Function()? onAllDataDeleted,
-  }) {
-    // Callbacks are set once via constructor; this method is for future use
-    // if we need to update them from didUpdateWidget.
-  }
 }
