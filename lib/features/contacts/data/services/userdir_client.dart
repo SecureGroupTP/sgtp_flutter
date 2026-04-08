@@ -42,6 +42,48 @@ String _msgName(int t) => switch (t) {
       _ => '0x${t.toRadixString(16).padLeft(2, '0')}',
     };
 
+String _logQuote(String value) {
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll('"', r'\"')
+      .replaceAll('\n', r'\n');
+  return '"$escaped"';
+}
+
+String _logStringValue(String value, {int maxBytes = 120}) {
+  final bytes = utf8.encode(value);
+  if (bytes.length > maxBytes) {
+    return '<${bytes.length} bytes>';
+  }
+  return _logQuote(value);
+}
+
+String _logHex(Uint8List bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+String _logValue(Object? value) {
+  if (value == null) return 'null';
+  if (value is String) return _logStringValue(value);
+  if (value is Uint8List) return '<${value.length} bytes>';
+  if (value is bool || value is num) return '$value';
+  if (value is Iterable) {
+    final items = value.toList(growable: false);
+    if (items.length > 5) return '<${items.length} items>';
+    return '[${items.map(_logValue).join(', ')}]';
+  }
+  return _logStringValue(value.toString());
+}
+
+void _logCall(String method, [Map<String, Object?> args = const {}]) {
+  if (args.isEmpty) {
+    AppLogger.d('$method()', tag: _tag);
+    return;
+  }
+  final formatted =
+      args.entries.map((e) => '${e.key}=${_logValue(e.value)}').join(', ');
+  AppLogger.d('$method($formatted)', tag: _tag);
+}
+
 /// Binary protocol client for the SGTP user directory service.
 ///
 /// Transport-agnostic: works over any [SgtpTransport] (TCP, WebSocket, …).
@@ -122,6 +164,7 @@ class UserDirClient implements IUserDirClient {
   /// prefix that signals userdir intent to the relay server.
   @override
   Future<void> connect() async {
+    _logCall('connect', {'label': label});
     AppLogger.i('Connecting to $label', tag: _tag);
     await _transport.connect();
 
@@ -147,8 +190,6 @@ class UserDirClient implements IUserDirClient {
   }
 
   void _onData(Uint8List data) {
-    final hex = data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-    AppLogger.d('← RAW  ${data.length}B: $hex', tag: _tag);
     _buf.addAll(data);
     _processBuffer();
   }
@@ -310,6 +351,12 @@ class UserDirClient implements IUserDirClient {
     required Uint8List avatarBytes,
     required SimpleKeyPairData identityKeyPair,
   }) async {
+    _logCall('registerWithResult', {
+      'username': username ?? '',
+      'fullname': fullname,
+      'pubkey': _logHex(pubkey),
+      'avatarBytes': avatarBytes,
+    });
     final usernameBytes = utf8.encode(username ?? '');
     final fullnameBytes = utf8.encode(fullname);
     final avatarLen = avatarBytes.length;
@@ -378,6 +425,7 @@ class UserDirClient implements IUserDirClient {
   /// Returns null on error or if the profile is not found.
   @override
   Future<UserDirMeta?> getMeta(Uint8List pubkey) async {
+    _logCall('getMeta', {'pubkey': _logHex(pubkey)});
     final pk8 = pubkey
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
         .join()
@@ -399,6 +447,7 @@ class UserDirClient implements IUserDirClient {
   /// Fetches the full profile including avatar bytes for [pubkey].
   @override
   Future<UserDirProfile?> getProfile(Uint8List pubkey) async {
+    _logCall('getProfile', {'pubkey': _logHex(pubkey)});
     final pk8 = pubkey
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
         .join()
@@ -428,6 +477,7 @@ class UserDirClient implements IUserDirClient {
   /// The server will send NOTIFY frames when any subscribed profile is updated.
   @override
   Future<bool> subscribe(List<Uint8List> pubkeys) async {
+    _logCall('subscribe', {'pubkeysCount': pubkeys.length});
     if (pubkeys.isEmpty) return true;
     AppLogger.i('SUBSCRIBE to ${pubkeys.length} contact(s)', tag: _tag);
     final count = pubkeys.length;
@@ -456,6 +506,7 @@ class UserDirClient implements IUserDirClient {
   /// Returns zero or more lightweight metadata entries.
   @override
   Future<List<UserDirMeta>> search(String query, {int limit = 20}) async {
+    _logCall('search', {'query': query, 'limit': limit});
     final q = query.trim();
     if (q.isEmpty) return const [];
     final qBytes = utf8.encode(q);
@@ -499,6 +550,10 @@ class UserDirClient implements IUserDirClient {
     required Uint8List peerPubkey,
     required SimpleKeyPairData identityKeyPair,
   }) async {
+    _logCall('sendFriendRequest', {
+      'myPubkey': _logHex(myPubkey),
+      'peerPubkey': _logHex(peerPubkey),
+    });
     final payload = Uint8List(1 + 32 + 32 + 1 + 64);
     payload[0] = 1;
     payload.setRange(1, 33, myPubkey);
@@ -521,6 +576,11 @@ class UserDirClient implements IUserDirClient {
     required bool accept,
     required SimpleKeyPairData identityKeyPair,
   }) async {
+    _logCall('sendFriendResponse', {
+      'myPubkey': _logHex(myPubkey),
+      'requesterPubkey': _logHex(requesterPubkey),
+      'accept': accept,
+    });
     final payload = Uint8List(1 + 32 + 32 + 1 + 1 + 64);
     payload[0] = 1;
     payload.setRange(1, 33, myPubkey);
@@ -543,6 +603,10 @@ class UserDirClient implements IUserDirClient {
     required Uint8List peerPubkey,
     required SimpleKeyPairData identityKeyPair,
   }) async {
+    _logCall('sendFriendDelete', {
+      'myPubkey': _logHex(myPubkey),
+      'peerPubkey': _logHex(peerPubkey),
+    });
     final payload = Uint8List(1 + 32 + 32 + 1 + 64);
     payload[0] = 1;
     payload.setRange(1, 33, myPubkey);
@@ -563,6 +627,7 @@ class UserDirClient implements IUserDirClient {
     required Uint8List myPubkey,
     required SimpleKeyPairData identityKeyPair,
   }) async {
+    _logCall('friendSync', {'myPubkey': _logHex(myPubkey)});
     final payload = Uint8List(1 + 32 + 1 + 64);
     payload[0] = 1;
     payload.setRange(1, 33, myPubkey);
@@ -799,6 +864,7 @@ class UserDirClient implements IUserDirClient {
   @override
   void close() {
     if (_closed) return;
+    _logCall('close');
     AppLogger.i('$label — closed by client', tag: _tag);
     _closed = true;
     _sub?.cancel();

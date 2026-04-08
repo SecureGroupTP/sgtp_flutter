@@ -35,6 +35,52 @@ import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_sessi
 
 export 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
+const _sgtpTag = 'SGTP';
+
+String _sgtpLogQuote(String value) {
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll('"', r'\"')
+      .replaceAll('\n', r'\n');
+  return '"$escaped"';
+}
+
+String _sgtpLogStringValue(String value, {int maxBytes = 120}) {
+  final bytes = utf8.encode(value);
+  if (bytes.length > maxBytes) {
+    return '<${bytes.length} bytes>';
+  }
+  return _sgtpLogQuote(value);
+}
+
+String _sgtpLogValue(Object? value) {
+  if (value == null) return 'null';
+  if (value is String) return _sgtpLogStringValue(value);
+  if (value is Uint8List) return '<${value.length} bytes>';
+  if (value is bool || value is num) return '$value';
+  if (value is Iterable) {
+    final items = value.toList(growable: false);
+    if (items.length > 5) return '<${items.length} items>';
+    return '[${items.map(_sgtpLogValue).join(', ')}]';
+  }
+  return _sgtpLogStringValue(value.toString());
+}
+
+void _sgtpLogCall(String method, [Map<String, Object?> args = const {}]) {
+  if (args.isEmpty) {
+    AppLogger.d('$method()', tag: _sgtpTag);
+    return;
+  }
+  final formatted =
+      args.entries.map((e) => '${e.key}=${_sgtpLogValue(e.value)}').join(', ');
+  AppLogger.d('$method($formatted)', tag: _sgtpTag);
+}
+
+String? _sgtpVideoNoteMetadataSummary(VideoNoteMetadata? metadata) {
+  if (metadata == null) return null;
+  return '${metadata.width}x${metadata.height}/${metadata.durationMs}ms';
+}
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -304,6 +350,7 @@ class SgtpClient implements ISgtpSession {
   }
 
   Future<int> persistedHistoryCount() async {
+    _sgtpLogCall('persistedHistoryCount');
     final repo = _historyRepository;
     if (repo == null) return 0;
     return repo.count();
@@ -314,6 +361,10 @@ class SgtpClient implements ISgtpSession {
     required int offsetFromEnd,
     int limit = 100,
   }) async {
+    _sgtpLogCall('replayPersistedHistoryBatch', {
+      'offsetFromEnd': offsetFromEnd,
+      'limit': limit,
+    });
     final repo = _historyRepository;
     if (repo == null) {
       return const PersistedHistoryBatchResult(loaded: 0, total: 0);
@@ -372,13 +423,16 @@ class SgtpClient implements ISgtpSession {
 
   /// User avatar is local UI-only and is not exchanged in SGTP MESSAGE payloads.
   @override
-  void setUserAvatar(Uint8List? avatar) {}
+  void setUserAvatar(Uint8List? avatar) {
+    _sgtpLogCall('setUserAvatar', {'avatar': avatar});
+  }
 
   /// Hot-update the peer whitelist without reconnecting.
   /// Newly added keys are accepted on the next ping/pong; removed keys are
   /// dropped at the next prune cycle.
   @override
   void updateWhitelist(Set<String> whitelist) {
+    _sgtpLogCall('updateWhitelist', {'whitelistCount': whitelist.length});
     _whitelist = Set.unmodifiable(whitelist);
   }
 
@@ -388,6 +442,11 @@ class SgtpClient implements ISgtpSession {
 
   @override
   Future<void> connect() async {
+    _sgtpLogCall('connect', {
+      'serverAddress': _config.serverAddr,
+      'transport': _config.transport.name,
+      'useTls': _config.useTls,
+    });
     if (_state != _ClientState.disconnected) return;
     _state = _ClientState.connecting;
     _eventController.add(SgtpConnecting());
@@ -543,6 +602,12 @@ class SgtpClient implements ISgtpSession {
     String? replyToContent,
     String? replyToSender,
   }) async {
+    _sgtpLogCall('sendMessage', {
+      'text': text,
+      if (replyToId != null) 'replyToId': replyToId,
+      if (replyToContent != null) 'replyToContent': replyToContent,
+      if (replyToSender != null) 'replyToSender': replyToSender,
+    });
     if (_state != _ClientState.ready || _chatKey == null) return;
     final msgUUID = generateUUIDv7();
     final nonce = _myNonce++;
@@ -591,6 +656,11 @@ class SgtpClient implements ISgtpSession {
   /// Send an emoji reaction on a message. Peers receive it and update their UI.
   @override
   Future<void> sendReaction(String messageId, String emoji, bool add) async {
+    _sgtpLogCall('sendReaction', {
+      'messageId': messageId,
+      'emoji': emoji,
+      'add': add,
+    });
     if (_state != _ClientState.ready || _chatKey == null) return;
     try {
       final payload = <String, dynamic>{
@@ -614,6 +684,7 @@ class SgtpClient implements ISgtpSession {
   /// Send a read receipt for a given message ID.
   @override
   Future<void> sendMessageRead(String messageId) async {
+    _sgtpLogCall('sendMessageRead', {'messageId': messageId});
     if (_state != _ClientState.ready || _chatKey == null) return;
     try {
       final payload = <String, dynamic>{
@@ -635,6 +706,7 @@ class SgtpClient implements ISgtpSession {
   /// Broadcast updated chat name/avatar to all peers via encrypted message.
   @override
   Future<void> sendChatMeta(String name, Uint8List? avatar) async {
+    _sgtpLogCall('sendChatMeta', {'name': name, 'avatar': avatar});
     _currentChatName = name;
     _currentChatAvatar = avatar;
     if (_state != _ClientState.ready || _chatKey == null) return;
@@ -833,22 +905,39 @@ class SgtpClient implements ISgtpSession {
   }
 
   @override
-  Future<void> sendImage(Uint8List bytes, String name, String mime) =>
-      _sendMedia(bytes, name, mime, mime == 'image/gif' ? 'gif' : 'image',
-          echoMessage: ChatMessage(
-              id: uuidBytesToHex(generateUUIDv7()),
-              senderUUID: uuidBytesToHex(_myUUID),
-              content: name,
-              imageBytes: bytes,
-              mediaMime: mime,
-              mediaName: name,
-              type: mime == 'image/gif' ? MessageType.gif : MessageType.image,
-              receivedAt: DateTime.now(),
-              isFromHistory: false,
-              isFromMe: true));
+  Future<void> sendImage(Uint8List bytes, String name, String mime) async {
+    _sgtpLogCall('sendImage', {
+      'bytes': bytes,
+      'name': name,
+      'mime': mime,
+    });
+    return _sendMedia(
+      bytes,
+      name,
+      mime,
+      mime == 'image/gif' ? 'gif' : 'image',
+      echoMessage: ChatMessage(
+        id: uuidBytesToHex(generateUUIDv7()),
+        senderUUID: uuidBytesToHex(_myUUID),
+        content: name,
+        imageBytes: bytes,
+        mediaMime: mime,
+        mediaName: name,
+        type: mime == 'image/gif' ? MessageType.gif : MessageType.image,
+        receivedAt: DateTime.now(),
+        isFromHistory: false,
+        isFromMe: true,
+      ),
+    );
+  }
 
   @override
   Future<void> sendVideo(XFile xFile, String name, String mime) async {
+    _sgtpLogCall('sendVideo', {
+      'filePath': xFile.path,
+      'name': name,
+      'mime': mime,
+    });
     final echoId = uuidBytesToHex(generateUUIDv7());
     final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
     return _sendMediaFromXFile(
@@ -873,6 +962,7 @@ class SgtpClient implements ISgtpSession {
 
   @override
   Future<void> sendVoice(Uint8List bytes, String mime) {
+    _sgtpLogCall('sendVoice', {'bytes': bytes, 'mime': mime});
     final name = 'voice_${DateTime.now().millisecondsSinceEpoch}.${_ext(mime)}';
     return () async {
       final echoId = uuidBytesToHex(generateUUIDv7());
@@ -906,6 +996,11 @@ class SgtpClient implements ISgtpSession {
     String mime, {
     VideoNoteMetadata? metadata,
   }) {
+    _sgtpLogCall('sendVideoNote', {
+      'bytes': bytes,
+      'mime': mime,
+      'metadata': _sgtpVideoNoteMetadataSummary(metadata),
+    });
     final name =
         'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     return () async {
@@ -943,6 +1038,11 @@ class SgtpClient implements ISgtpSession {
     String mime, {
     VideoNoteMetadata? metadata,
   }) async {
+    _sgtpLogCall('sendVideoNoteFromXFile', {
+      'filePath': xFile.path,
+      'mime': mime,
+      'metadata': _sgtpVideoNoteMetadataSummary(metadata),
+    });
     AppLogger.i(
       'sendVideoNoteFromXFile start: path=${xFile.path}, mime=$mime, '
       'meta=${metadata?.width}x${metadata?.height}, duration=${metadata?.durationMs}',
@@ -990,6 +1090,7 @@ class SgtpClient implements ISgtpSession {
 
   @override
   Future<void> disconnect() async {
+    _sgtpLogCall('disconnect');
     if (_state == _ClientState.disconnected) return;
     try {
       if (_chatKey != null) {
@@ -1007,6 +1108,7 @@ class SgtpClient implements ISgtpSession {
   /// application-level keepalive and the socket's onDone/onError callbacks.
   @override
   Future<void> probeConnection() async {
+    _sgtpLogCall('probeConnection');
     if (_state == _ClientState.disconnected) return;
     try {
       if (_state == _ClientState.ready) {
@@ -2503,6 +2605,7 @@ class SgtpClient implements ISgtpSession {
 
   @override
   Future<void> close() async {
+    _sgtpLogCall('close');
     await _cleanup();
     await _eventController.close();
   }

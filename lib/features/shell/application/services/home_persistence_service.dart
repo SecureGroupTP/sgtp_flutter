@@ -21,6 +21,7 @@ class HomePersistenceService {
     return HomeAccountState(
       nickname: await _settings.loadUserNicknameForNode(accountId),
       username: await _settings.loadUserUsernameForNode(accountId),
+      userAvatar: await _settings.loadUserAvatarForNode(accountId),
       friendStates: await _settings.loadFriendStates(accountId),
       suppressedContacts: await _settings.loadSuppressedContacts(accountId),
     );
@@ -89,7 +90,8 @@ class HomePersistenceService {
     required Uint8List? avatarBytes,
   }) async {
     final repo = _chatStorageGateway.metadataForAccount(accountId);
-    final existing = await repo.loadChat(roomUUID, serverAddress: serverAddress);
+    final existing =
+        await repo.loadChat(roomUUID, serverAddress: serverAddress);
     final now = DateTime.now();
     AppLogger.i(
       '[HomePersistence] upsertDirectMessageChat room=$roomUUID direct=true '

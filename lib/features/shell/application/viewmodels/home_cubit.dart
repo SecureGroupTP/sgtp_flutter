@@ -121,6 +121,9 @@ class HomeCubit extends Cubit<HomeViewState> {
     _whitelist = List.from(whitelistEntries);
     _nicknames = {for (final e in whitelistEntries) e.hexKey: e.name};
     _serverAddress = newServer;
+    _userAvatar = null;
+    _nickname = '';
+    _username = '';
     _contactProfiles = {};
     _friendStates = {};
 
@@ -133,7 +136,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       settingsRepository: _settingsManagementService,
       chatStorage: _chatStorageGateway,
       serverAddress: newServer,
-      userAvatar: _userAvatar,
+      userAvatar: null,
       sessionFactory: _sessionFactory,
     );
     _pushContactAvatarsToRooms();
@@ -289,17 +292,25 @@ class HomeCubit extends Cubit<HomeViewState> {
   }
 
   Future<void> _loadNicknameAndInitUserDir() async {
-    if (_accountId.trim().isNotEmpty) {
-      final accountState = await _homePersistence.loadAccountState(_accountId);
+    final targetAccountId = _accountId.trim();
+    if (targetAccountId.isNotEmpty) {
+      final accountState = await _homePersistence.loadAccountState(
+        targetAccountId,
+      );
+      if (targetAccountId != _accountId.trim()) return;
       _nickname = accountState.nickname;
       final rawUsername = accountState.username;
       final normalized = _userDirSupport.normalizeUsername(rawUsername);
       _username = normalized ?? '';
+      _userAvatar = accountState.userAvatar;
+      _roomsBloc.setUserAvatar(_userAvatar);
       if (rawUsername.trim() != _username) {
-        await _homePersistence.saveUsername(_accountId, _username);
+        await _homePersistence.saveUsername(targetAccountId, _username);
+        if (targetAccountId != _accountId.trim()) return;
       }
       _buildState();
     }
+    if (targetAccountId != _accountId.trim()) return;
     await _userDirCoordinator.start(_buildUserDirSession());
   }
 
@@ -355,8 +366,8 @@ class HomeCubit extends Cubit<HomeViewState> {
     _config = _config.copyWith(
       whitelist: _whitelist.map((entry) => entry.hexKey).toSet(),
     );
-    _roomsBloc.add(
-        RoomsUpdateWhitelist(_whitelist.map((e) => e.hexKey).toSet()));
+    _roomsBloc
+        .add(RoomsUpdateWhitelist(_whitelist.map((e) => e.hexKey).toSet()));
     _roomsBloc.add(RoomsUpdateNicknames(_nicknames));
     _pushContactAvatarsToRooms();
     _buildState();

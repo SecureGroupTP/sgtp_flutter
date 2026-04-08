@@ -162,7 +162,6 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _wlEntries = snapshot.whitelistEntries;
     _buildState();
 
-    _onUserAvatarChanged?.call(snapshot.avatar);
     if (applyConfig) tryApplyConfig();
   }
 
