@@ -86,7 +86,48 @@
 
 - `Provider + ChangeNotifier + Bloc + globals` для одной и той же сущности
 
-### 4. Сеть, кэш, сокеты и storage не видны из UI
+### 4. Callback не заменяют state management и orchestration
+
+Callback допустим как механизм локальной композиции UI:
+
+- `onTap`
+- `onClose`
+- `onRetry`
+- `onSelected`
+- уведомление родителя о чисто визуальном или локальном событии
+
+Но callback не должен использоваться как основной канал:
+
+- синхронизации бизнес-состояния между feature
+- передачи session/app state между экранами
+- orchestration цепочки `feature -> parent widget -> другая feature`
+- запуска сетевых, storage или realtime side effects в обход общего state owner
+
+Если состояние или intent нужны нескольким feature, должен существовать единый владелец этого состояния:
+
+- app-scoped или session-scoped `Cubit/Bloc`
+- application service / coordinator
+- общий контракт в `core` или `domain`, получаемый через DI
+
+Правильный поток в таких случаях:
+
+```text
+View -> ViewModel -> shared state owner / contract -> state update -> View
+```
+
+А не:
+
+```text
+Feature A widget -> callback в parent -> callback в Feature B -> side effect
+```
+
+Иными словами:
+
+- callback хорош для локального UI-взаимодействия
+- для shared business state нужен единый source of truth
+- cross-feature коммуникация должна идти через state owner, application service или абстрактный контракт, а не через прокидывание callback по дереву
+
+### 5. Сеть, кэш, сокеты и storage не видны из UI
 
 UI работает только с:
 
@@ -105,7 +146,7 @@ UI не должен знать:
 - token refresh
 - websocket event names
 
-### 5. Доменные модели не равны API DTO
+### 6. Доменные модели не равны API DTO
 
 Нужно разделять:
 
@@ -119,7 +160,7 @@ UI не должен знать:
 - внутренняя сущность
 - модель виджета
 
-### 6. Все side effects централизуются
+### 7. Все side effects централизуются
 
 К side effects относятся:
 
