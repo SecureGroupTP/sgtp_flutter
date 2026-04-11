@@ -39,7 +39,8 @@ class SgtpRpcClient {
   /// Register a callback for server-initiated events (not RPC responses).
   /// Stub — not yet implemented; events are silently ignored.
   // ignore: avoid_unused_parameters
-  void registerEventsCallback(void Function(Map<String, dynamic> event) callback) {}
+  void registerEventsCallback(
+      void Function(Map<String, dynamic> event) callback) {}
 
   /// Encode and send a typed RPC request; returns the decoded [parameters] map
   /// from the matching response.
@@ -90,7 +91,8 @@ class SgtpRpcClient {
       const Duration(seconds: 30),
       onTimeout: () {
         _pending.remove(requestIdHex);
-        throw TimeoutException('RPC timeout: ${request.method}', const Duration(seconds: 30));
+        throw TimeoutException(
+            'RPC timeout: ${request.method}', const Duration(seconds: 30));
       },
     );
   }
@@ -100,33 +102,56 @@ class SgtpRpcClient {
   void _onPacket(Uint8List bytes) {
     try {
       final decoded = cbor.decode(bytes);
-      if (decoded is! CborMap) return;
-
-      final replyToIdValue = decoded[CborString('replyToRequestId')];
-      if (replyToIdValue == null || replyToIdValue is CborNull) {
-        // Server-initiated event — ignored until events callback is wired.
-        return;
-      }
-
-      final replyIdBytes = (replyToIdValue as CborBytes).bytes;
-      final replyIdHex =
-          replyIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-      final completer = _pending.remove(replyIdHex);
-      if (completer == null) return;
-
-      final paramsValue = decoded[CborString('parameters')];
-      if (paramsValue is CborMap) {
-        completer.complete(_fromCborMap(paramsValue));
-      } else {
-        completer.completeError(
-          StateError('Invalid RPC response parameters for reply $replyIdHex'),
-        );
+      final packets = switch (decoded) {
+        CborMap() => [decoded],
+        CborList() => decoded.whereType<CborMap>().toList(),
+        _ => const <CborMap>[],
+      };
+      for (final packet in packets) {
+        _onResponsePacket(packet);
       }
     } catch (e, st) {
       // Packet parse error — silently discard to not break other pending calls.
       // ignore: avoid_print
       Zone.current.handleUncaughtError(e, st);
+    }
+  }
+
+  void _onResponsePacket(CborMap decoded) {
+    final replyToIdValue = decoded[CborString('replyToRequestId')];
+    if (replyToIdValue == null || replyToIdValue is CborNull) {
+      // Server-initiated event — ignored until events callback is wired.
+      return;
+    }
+
+    final replyIdBytes = switch (replyToIdValue) {
+      CborBytes() => replyToIdValue.bytes,
+      CborString() => hexToBytes(replyToIdValue.toString().replaceAll('-', '')),
+      _ => null,
+    };
+    if (replyIdBytes == null) return;
+    final replyIdHex =
+        replyIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+    final completer = _pending.remove(replyIdHex);
+    if (completer == null) return;
+
+    final paramsValue = decoded[CborString('parameters')];
+    if (paramsValue is CborMap) {
+      final params = _fromCborMap(paramsValue);
+      final error = params['error'];
+      if (error is Map<String, dynamic>) {
+        completer.completeError(
+          StateError(
+              '${error['code'] ?? 'rpc_error'}: ${error['message'] ?? ''}'),
+        );
+      } else {
+        completer.complete(params);
+      }
+    } else {
+      completer.completeError(
+        StateError('Invalid RPC response parameters for reply $replyIdHex'),
+      );
     }
   }
 

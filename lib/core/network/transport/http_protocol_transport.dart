@@ -5,9 +5,8 @@ import 'package:http/http.dart' as http;
 
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 
-/// Stateless HTTP transport for CBOR-RPC: each [send] is a single POST to
-/// `/rpc`, and the response bytes are immediately delivered to the registered
-/// packet callback. No session, no polling.
+/// Stateless HTTP transport for server_v2 CBOR-RPC: each [send] is a single
+/// POST to `/api/v1/client`, and the response bytes are immediately delivered.
 class HttpProtocolTransport implements IProtocolTransport {
   final String host;
   final int port;
@@ -32,7 +31,7 @@ class HttpProtocolTransport implements IProtocolTransport {
         scheme: useTls ? 'https' : 'http',
         host: host,
         port: port,
-        path: '/rpc',
+        path: '/api/v1/client',
       );
 
   @override

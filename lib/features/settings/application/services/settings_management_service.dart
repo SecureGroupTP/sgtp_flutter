@@ -105,12 +105,17 @@ class SettingsManagementService {
     try {
       final normalizedHost = normalizeNodeHost(node.host);
       if (normalizedHost.isEmpty) return null;
-      final result = await SgtpServerDiscovery.discover(normalizedHost);
+      final parsed = parseHostPort(normalizedHost);
+      final result = await SgtpServerDiscovery.discover(
+        parsed?.$1 ?? normalizedHost,
+        preferredPort: parsed?.$2,
+      );
       return result.opts;
     } catch (_) {
       return null;
     }
   }
+
   Future<DateTime?> loadNodeServerOptionsSavedAt(String nodeId) async => null;
   Future<void> saveNodeEditorAdvancedExpanded(bool expanded) =>
       _settings.saveNodeEditorAdvancedExpanded(expanded);
@@ -558,7 +563,11 @@ class SettingsManagementService {
   }
 
   Future<void> discoverNodeAndCache(NodeConfig node) async {
-    final (:opts, :port, :tls) = await SgtpServerDiscovery.discover(node.host);
+    final (:opts, :port, :tls) = await SgtpServerDiscovery.discover(
+      node.host,
+      preferredPort: node.chatPort,
+      preferredTls: node.useTls,
+    );
     final labels = [
       if (opts.tcp) 'TCP:${opts.tcpPort}',
       if (opts.tcpTls) 'TCP+TLS:${opts.tcpTlsPort}',
@@ -578,7 +587,8 @@ class SettingsManagementService {
       AppLogger.i('Discovery: no accounts configured', tag: 'DISC');
       return;
     }
-    AppLogger.i('Discovery cache is disabled; using live discovery', tag: 'DISC');
+    AppLogger.i('Discovery cache is disabled; using live discovery',
+        tag: 'DISC');
   }
 
   String normalizeNodeHost(String raw) => raw
@@ -596,8 +606,11 @@ class SettingsManagementService {
       throw const FormatException('Host is empty');
     }
 
-    final (:opts, :port, :tls) =
-        await SgtpServerDiscovery.discover(normalizedHost);
+    final parsed = parseHostPort(normalizedHost);
+    final (:opts, :port, :tls) = await SgtpServerDiscovery.discover(
+      parsed?.$1 ?? normalizedHost,
+      preferredPort: parsed?.$2,
+    );
     final savedAt = DateTime.now();
     final labels = [
       if (opts.tcp) 'TCP:${opts.tcpPort}',
@@ -615,9 +628,15 @@ class SettingsManagementService {
   }
 
   Future<({SgtpServerOptions opts, int port, bool tls})> discoverServer(
-    String host,
-  ) =>
-      SgtpServerDiscovery.discover(host);
+    String host, {
+    int? preferredPort,
+    bool? preferredTls,
+  }) =>
+      SgtpServerDiscovery.discover(
+        host,
+        preferredPort: preferredPort,
+        preferredTls: preferredTls,
+      );
 
   (String, int?)? parseHostPort(String raw) {
     final normalized = normalizeNodeHost(raw);

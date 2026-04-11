@@ -13,6 +13,7 @@ import 'package:sgtp_flutter/core/network/rpc_models/friend_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_request_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
+import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
@@ -40,16 +41,8 @@ class UserDirClient implements IUserDirClient {
   // ── Factory ──────────────────────────────────────────────────────────────
 
   static IUserDirClient? forNode(NodeConfig node, SgtpServerOptions opts) {
-    final bool useTls;
-    final int port;
-
-    if (opts.httpTls && opts.httpTlsPort > 0) {
-      useTls = true;
-      port = opts.httpTlsPort;
-    } else if (opts.http && opts.httpPort > 0) {
-      useTls = false;
-      port = opts.httpPort;
-    } else {
+    final endpoint = _pickHttpEndpoint(node, opts);
+    if (endpoint == null) {
       AppLogger.w(
         'No HTTP endpoint available for user-directory on ${node.host}',
         tag: _tag,
@@ -59,12 +52,39 @@ class UserDirClient implements IUserDirClient {
 
     final transport = HttpProtocolTransport(
       host: node.host,
-      port: port,
-      useTls: useTls,
+      port: endpoint.port,
+      useTls: endpoint.useTls,
     );
     final rpc = SgtpRpcClient(transport);
-    final scheme = useTls ? 'https' : 'http';
-    return UserDirClient(rpc: rpc, label: '$scheme://${node.host}:$port');
+    final scheme = endpoint.useTls ? 'https' : 'http';
+    return UserDirClient(
+      rpc: rpc,
+      label: '$scheme://${node.host}:${endpoint.port}',
+    );
+  }
+
+  static ({int port, bool useTls})? _pickHttpEndpoint(
+    NodeConfig node,
+    SgtpServerOptions opts,
+  ) {
+    if ((node.transport == SgtpTransportFamily.http ||
+            node.transport == SgtpTransportFamily.websocket) &&
+        node.chatPort > 0) {
+      return (port: node.chatPort, useTls: node.useTls);
+    }
+    if (node.useTls && opts.httpTls && opts.httpTlsPort > 0) {
+      return (port: opts.httpTlsPort, useTls: true);
+    }
+    if (!node.useTls && opts.http && opts.httpPort > 0) {
+      return (port: opts.httpPort, useTls: false);
+    }
+    if (opts.http && opts.httpPort > 0) {
+      return (port: opts.httpPort, useTls: false);
+    }
+    if (opts.httpTls && opts.httpTlsPort > 0) {
+      return (port: opts.httpTlsPort, useTls: true);
+    }
+    return null;
   }
 
   // ── IUserDirClient ───────────────────────────────────────────────────────
@@ -377,9 +397,8 @@ class UserDirClient implements IUserDirClient {
   static UserDirMeta _profileToMeta(ProfileData p) => UserDirMeta(
         pubkey: p.publicKey,
         username: p.username,
-        fullname: (p.displayName?.isNotEmpty == true)
-            ? p.displayName!
-            : p.username,
+        fullname:
+            (p.displayName?.isNotEmpty == true) ? p.displayName! : p.username,
         avatarSha256: Uint8List(0),
         updatedAt: p.lastSeenAtUs ~/ 1000000,
       );
@@ -403,7 +422,9 @@ class UserDirClient implements IUserDirClient {
 
   static Uint8List _randomBytes(int length) {
     final bytes = Uint8List(length);
-    for (int i = 0; i < length; i++) bytes[i] = _rng.nextInt(256);
+    for (int i = 0; i < length; i++) {
+      bytes[i] = _rng.nextInt(256);
+    }
     return bytes;
   }
 }

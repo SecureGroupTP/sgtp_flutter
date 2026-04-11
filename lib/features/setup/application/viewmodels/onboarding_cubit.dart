@@ -36,8 +36,13 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
     ));
     try {
       final (host, explicitPort) = _parseHostPort(rawAddress);
-      final result = await _settings.discoverServer(host);
-      final picked = _pickTransport(result.opts);
+      final result = await _settings.discoverServer(
+        host,
+        preferredPort: explicitPort,
+      );
+      final picked = explicitPort == null
+          ? _pickTransport(result.opts)
+          : (SgtpTransportFamily.http, result.tls, result.port);
       final port = explicitPort ?? picked.$3;
 
       emit(OnboardingViewState(
@@ -291,18 +296,18 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
 
   (SgtpTransportFamily family, bool tls, int port) _pickTransport(
       SgtpServerOptions opts) {
-    if (opts.supports(SgtpTransportFamily.tcp, tls: true)) {
+    if (opts.supports(SgtpTransportFamily.http, tls: true)) {
       return (
-        SgtpTransportFamily.tcp,
+        SgtpTransportFamily.http,
         true,
-        opts.portFor(SgtpTransportFamily.tcp, tls: true)
+        opts.portFor(SgtpTransportFamily.http, tls: true)
       );
     }
-    if (opts.supports(SgtpTransportFamily.tcp, tls: false)) {
+    if (opts.supports(SgtpTransportFamily.http, tls: false)) {
       return (
-        SgtpTransportFamily.tcp,
+        SgtpTransportFamily.http,
         false,
-        opts.portFor(SgtpTransportFamily.tcp, tls: false)
+        opts.portFor(SgtpTransportFamily.http, tls: false)
       );
     }
     if (opts.supports(SgtpTransportFamily.websocket, tls: true)) {
@@ -319,17 +324,17 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         opts.portFor(SgtpTransportFamily.websocket, tls: false)
       );
     }
-    if (opts.supports(SgtpTransportFamily.http, tls: true)) {
+    if (opts.supports(SgtpTransportFamily.tcp, tls: true)) {
       return (
-        SgtpTransportFamily.http,
+        SgtpTransportFamily.tcp,
         true,
-        opts.portFor(SgtpTransportFamily.http, tls: true)
+        opts.portFor(SgtpTransportFamily.tcp, tls: true)
       );
     }
     return (
-      SgtpTransportFamily.http,
+      SgtpTransportFamily.tcp,
       false,
-      opts.portFor(SgtpTransportFamily.http, tls: false)
+      opts.portFor(SgtpTransportFamily.tcp, tls: false)
     );
   }
 

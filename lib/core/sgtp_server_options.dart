@@ -37,6 +37,29 @@ class SgtpServerOptions {
   static const int wireBytesLength = 25;
 
   static SgtpServerOptions fromJson(Map<String, dynamic> json) {
+    if (_hasFlatDiscoveryPorts(json)) {
+      final tcpPort = _flatPort(json, 'tcp_port');
+      final tcpTlsPort = _flatPort(json, 'tcp_tls_port');
+      final httpPort = _flatPort(json, 'http_port');
+      final httpTlsPort = _flatPort(json, 'https_port');
+      final websocketPort = _flatPort(json, 'ws_port');
+      final websocketTlsPort = _flatPort(json, 'wss_port');
+      return SgtpServerOptions(
+        tcp: tcpPort > 0,
+        tcpTls: tcpTlsPort > 0,
+        http: httpPort > 0,
+        httpTls: httpTlsPort > 0,
+        websocket: websocketPort > 0,
+        websocketTls: websocketTlsPort > 0,
+        tcpPort: tcpPort,
+        tcpTlsPort: tcpTlsPort,
+        httpPort: httpPort,
+        httpTlsPort: httpTlsPort,
+        websocketPort: websocketPort,
+        websocketTlsPort: websocketTlsPort,
+      );
+    }
+
     final ports = (json['ports'] as Map<String, dynamic>?) ?? {};
     final enabled = (json['enabled'] as Map<String, dynamic>?) ?? {};
 
@@ -58,6 +81,18 @@ class SgtpServerOptions {
       websocketTlsPort: p('ws_tls'),
     );
   }
+
+  static bool _hasFlatDiscoveryPorts(Map<String, dynamic> json) {
+    return json.containsKey('tcp_port') ||
+        json.containsKey('tcp_tls_port') ||
+        json.containsKey('http_port') ||
+        json.containsKey('https_port') ||
+        json.containsKey('ws_port') ||
+        json.containsKey('wss_port');
+  }
+
+  static int _flatPort(Map<String, dynamic> json, String key) =>
+      (json[key] as num?)?.toInt() ?? 0;
 
   static SgtpServerOptions fromJsonString(String body) =>
       fromJson(json.decode(body) as Map<String, dynamic>);
@@ -95,7 +130,8 @@ class SgtpServerOptions {
 
   static SgtpServerOptions fromBytes(Uint8List bytes) {
     if (bytes.length != wireBytesLength) {
-      throw ArgumentError('Expected $wireBytesLength bytes, got ${bytes.length}');
+      throw ArgumentError(
+          'Expected $wireBytesLength bytes, got ${bytes.length}');
     }
 
     final flags = bytes[0];
@@ -185,7 +221,5 @@ class SgtpServerOptions {
   }
 
   @override
-  String toString() =>
-      'SgtpServerOptions(${availableLabels().join(", ")})';
+  String toString() => 'SgtpServerOptions(${availableLabels().join(", ")})';
 }
-
