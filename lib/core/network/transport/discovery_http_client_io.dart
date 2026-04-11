@@ -1,12 +1,18 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/io_client.dart';
 
 class DiscoveryHttpResponse {
   final int statusCode;
-  final String body;
+  final Uint8List body;
+  final String contentType;
 
-  const DiscoveryHttpResponse({required this.statusCode, required this.body});
+  const DiscoveryHttpResponse({
+    required this.statusCode,
+    required this.body,
+    required this.contentType,
+  });
 }
 
 Future<DiscoveryHttpResponse> httpGetDiscovery(
@@ -19,9 +25,13 @@ Future<DiscoveryHttpResponse> httpGetDiscovery(
   final client = IOClient(ioHttpClient);
   try {
     final res = await client
-        .get(uri, headers: const {'Accept': 'application/json'})
+        .get(uri, headers: const {'Accept': 'application/cbor, application/json'})
         .timeout(timeout);
-    return DiscoveryHttpResponse(statusCode: res.statusCode, body: res.body);
+    return DiscoveryHttpResponse(
+      statusCode: res.statusCode,
+      body: res.bodyBytes,
+      contentType: res.headers['content-type'] ?? '',
+    );
   } finally {
     client.close();
   }

@@ -5,12 +5,12 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/http_client_factory.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
 
 const _tag = 'HTTP';
 
-class HttpSgtpTransport implements SgtpTransport {
+class HttpSgtpTransport implements IProtocolTransport {
   final String host;
   final int port;
   final bool useTls;
@@ -19,6 +19,7 @@ class HttpSgtpTransport implements SgtpTransport {
   late final http.Client _client;
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
+  void Function(Uint8List)? _packetCallback;
 
   String? _sidHex;
   bool _closing = false;
@@ -55,6 +56,11 @@ class HttpSgtpTransport implements SgtpTransport {
   bool get isConnected => _sidHex != null;
 
   @override
+  void registerPacketCallback(void Function(Uint8List bytes) callback) {
+    _packetCallback = callback;
+  }
+
+  @override
   Future<void> connect() async {
     if (_sidHex != null) return;
     final tlsSni = (fakeSni ?? '').trim();
@@ -78,7 +84,6 @@ class HttpSgtpTransport implements SgtpTransport {
           'HTTP session create failed: ${res.statusCode} ${res.reasonPhrase ?? ''}');
     }
 
-    // Spec: 16 raw bytes. Also accept JSON {"sid":"..."} for flexibility.
     final ct = (res.headers['content-type'] ?? '').toLowerCase();
     if (ct.contains('json')) {
       final decoded = json.decode(utf8.decode(body)) as Map<String, dynamic>;
@@ -117,7 +122,9 @@ class HttpSgtpTransport implements SgtpTransport {
         await for (final chunk in res.stream) {
           if (_closing) break;
           if (chunk.isEmpty) continue;
-          _inbound.add(Uint8List.fromList(chunk));
+          final bytes = Uint8List.fromList(chunk);
+          _inbound.add(bytes);
+          _packetCallback?.call(bytes);
         }
       } catch (e, st) {
         if (_closing) return;

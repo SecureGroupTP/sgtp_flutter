@@ -5,11 +5,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/app_logger.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
+import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 
 const _tag = 'WS';
 
-class WebSocketSgtpTransport implements SgtpTransport {
+class WebSocketSgtpTransport implements IProtocolTransport {
   final String host;
   final int port;
   final bool useTls;
@@ -17,25 +17,21 @@ class WebSocketSgtpTransport implements SgtpTransport {
 
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
+  void Function(Uint8List)? _packetCallback;
 
   Socket? _socket;
   StreamSubscription? _sub;
 
-  // Single buffer for all incoming bytes (upgrade headers + WS frames)
   final _buf = <int>[];
   bool _upgraded = false;
   final _upgradeCompleter = Completer<void>();
 
-  // WS frame decode state machine
-  //   0 = waiting for first 2 header bytes
-  //   1 = waiting for extended-length bytes
-  //   2 = accumulating payload
   int _frmState = 0;
   int _frmOpcode = 0;
   int _frmPayloadLen = 0;
-  int _frmExtLenBytes = 0; // 0, 2, or 8
+  int _frmExtLenBytes = 0;
   int _frmExtLenRead = 0;
-  Uint8List? _frmPayload; // preallocated to _frmPayloadLen
+  Uint8List? _frmPayload;
   int _frmPayloadRead = 0;
 
   static final _rng = Random.secure();
@@ -53,7 +49,10 @@ class WebSocketSgtpTransport implements SgtpTransport {
   @override
   bool get isConnected => _socket != null;
 
-  // ── connect ───────────────────────────────────────────────────────────────
+  @override
+  void registerPacketCallback(void Function(Uint8List bytes) callback) {
+    _packetCallback = callback;
+  }
 
   @override
   Future<void> connect() async {
@@ -69,7 +68,6 @@ class WebSocketSgtpTransport implements SgtpTransport {
 
     _socket = sock;
 
-    // Subscribe once — handles both the upgrade response and WS frames.
     _sub = sock.listen(
       _onRawData,
       onError: (e, st) {
@@ -117,17 +115,13 @@ class WebSocketSgtpTransport implements SgtpTransport {
     return SecureSocket.connect(host, port, onBadCertificate: (_) => true);
   }
 
-  // ── send ──────────────────────────────────────────────────────────────────
-
   @override
   Future<void> send(Uint8List bytes) async {
     final sock = _socket;
     if (sock == null) throw StateError('Not connected');
     sock.add(_encodeFrame(bytes));
-    await sock.flush(); // real backpressure: blocks until OS accepts the data
+    await sock.flush();
   }
-
-  // ── close ─────────────────────────────────────────────────────────────────
 
   @override
   Future<void> close() async {
@@ -146,8 +140,6 @@ class WebSocketSgtpTransport implements SgtpTransport {
     } catch (_) {}
     if (!_inbound.isClosed) await _inbound.close();
   }
-
-  // ── raw data handler ──────────────────────────────────────────────────────
 
   void _onRawData(List<int> data) {
     _buf.addAll(data);
@@ -183,15 +175,12 @@ class WebSocketSgtpTransport implements SgtpTransport {
     }
   }
 
-  // ── WS frame parser ───────────────────────────────────────────────────────
-
   void _parseFrames() {
     int pos = 0;
     final buf = _buf;
 
     while (pos < buf.length) {
       if (_frmState == 0) {
-        // Need 2 bytes for the base header
         if (buf.length - pos < 2) break;
 
         final b0 = buf[pos];
@@ -199,9 +188,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
         pos += 2;
 
         _frmOpcode = b0 & 0x0F;
-        // b0 bit7 = FIN (we ignore continuation frames — SGTP doesn't fragment)
         final lenByte = b1 & 0x7F;
-        // b1 bit7 = MASK (server→client must NOT mask, so we ignore)
 
         if (lenByte <= 125) {
           _frmPayloadLen = lenByte;
@@ -224,13 +211,12 @@ class WebSocketSgtpTransport implements SgtpTransport {
       }
 
       if (_frmState == 1) {
-        // Read extended length bytes one at a time (at most 8 bytes total)
         while (_frmExtLenRead < _frmExtLenBytes && pos < buf.length) {
           _frmPayloadLen = (_frmPayloadLen << 8) | buf[pos];
           pos++;
           _frmExtLenRead++;
         }
-        if (_frmExtLenRead < _frmExtLenBytes) break; // need more data
+        if (_frmExtLenRead < _frmExtLenBytes) break;
 
         _frmPayload = Uint8List(_frmPayloadLen);
         _frmPayloadRead = 0;
@@ -239,7 +225,6 @@ class WebSocketSgtpTransport implements SgtpTransport {
       }
 
       if (_frmState == 2) {
-        // Accumulate payload into pre-allocated buffer
         final need = _frmPayloadLen - _frmPayloadRead;
         final have = buf.length - pos;
         final take = need < have ? need : have;
@@ -261,39 +246,33 @@ class WebSocketSgtpTransport implements SgtpTransport {
         continue;
       }
 
-      break; // unreachable
+      break;
     }
 
-    // Discard consumed bytes
     if (pos > 0) buf.removeRange(0, pos);
   }
 
   void _dispatchFrame(int opcode, Uint8List payload) {
     switch (opcode) {
-      case 0x0: // continuation
-      case 0x2: // binary
+      case 0x0:
+      case 0x2:
+      case 0x1:
         if (!_inbound.isClosed) _inbound.add(payload);
+        _packetCallback?.call(payload);
         break;
-      case 0x1: // text
-        if (!_inbound.isClosed) _inbound.add(payload);
-        break;
-      case 0x9: // ping → send pong
+      case 0x9:
         final sock = _socket;
         if (sock != null && payload.length <= 125) {
           sock.add(_encodePong(payload));
-          // fire-and-forget flush for control frames
           sock.flush();
         }
         break;
-      case 0x8: // close
+      case 0x8:
         close();
         break;
     }
   }
 
-  // ── frame encoder ─────────────────────────────────────────────────────────
-
-  /// Masked binary frame (opcode 0x2). Client→server frames MUST be masked.
   static Uint8List _encodeFrame(Uint8List payload) {
     final len = payload.length;
     final mask = _randomMask();
@@ -314,7 +293,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
     final frame = Uint8List(headerLen + len);
     int off = 0;
 
-    frame[off++] = 0x82; // FIN=1, opcode=binary
+    frame[off++] = 0x82;
     if (extLen == 0) {
       frame[off++] = 0x80 | len;
     } else if (extLen == 2) {
@@ -349,7 +328,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
     final mask = _randomMask();
     final len = pingPayload.length;
     final frame = Uint8List(2 + 4 + len);
-    frame[0] = 0x8A; // FIN + pong
+    frame[0] = 0x8A;
     frame[1] = 0x80 | len;
     frame[2] = mask[0];
     frame[3] = mask[1];

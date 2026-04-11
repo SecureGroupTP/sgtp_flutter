@@ -3,12 +3,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
 
 const _tag = 'TCP';
 
-class TcpSgtpTransport implements SgtpTransport {
+class TcpSgtpTransport implements IProtocolTransport {
   final String host;
   final int port;
   final bool useTls;
@@ -16,6 +16,7 @@ class TcpSgtpTransport implements SgtpTransport {
 
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
+  void Function(Uint8List)? _packetCallback;
   Socket? _socket;
   StreamSubscription? _sub;
 
@@ -31,6 +32,11 @@ class TcpSgtpTransport implements SgtpTransport {
 
   @override
   bool get isConnected => _socket != null;
+
+  @override
+  void registerPacketCallback(void Function(Uint8List bytes) callback) {
+    _packetCallback = callback;
+  }
 
   @override
   Future<void> connect() async {
@@ -94,12 +100,10 @@ class TcpSgtpTransport implements SgtpTransport {
     }
     AppLogger.d('Socket established $host:$port (tls=$useTls)', tag: _tag);
 
-    // Reduce latency: send small frames immediately without Nagle buffering.
     try {
       s.setOption(SocketOption.tcpNoDelay, true);
     } catch (_) {}
 
-    // Best-effort keepalive.
     try {
       s.setRawOption(RawSocketOption(
         RawSocketOption.levelSocket,
@@ -110,45 +114,28 @@ class TcpSgtpTransport implements SgtpTransport {
 
     _socket = s;
 
-    // ── Read the 25-byte discovery header ─────────────────────────────────
-    // The server (serveTCP in multi.go) sends the 25-byte discovery payload
-    // immediately after accepting every TCP relay connection.  We must
-    // consume exactly those bytes before feeding data to the relay loop;
-    // otherwise the frame parser sees 25 bytes of garbage at the front of
-    // the stream and corrupts subsequent SGTP frames.
-    //
-    // Discovery clients (SgtpServerDiscovery / "Fetch server options") also
-    // connect to the TCP relay port, read the same 25 bytes, and close —
-    // so both use-cases are served by the same server-side change.
-    const int discoveryHeaderLen = SgtpServerOptions.wireBytesLength; // 25
+    const int discoveryHeaderLen = SgtpServerOptions.wireBytesLength;
     final headerBuf = BytesBuilder();
     final headerDone = Completer<void>();
 
     _sub = s.listen(
       (chunk) {
         if (!headerDone.isCompleted) {
-          // Still accumulating the discovery header.
           headerBuf.add(chunk);
-
           if (headerBuf.length >= discoveryHeaderLen) {
-            // Full 25-byte header received (chunk may also contain relay bytes).
             final all = headerBuf.toBytes();
-
-            // Bytes past the header belong to the relay stream.
-            // Inject them BEFORE completing the future so they are always
-            // the first bytes the relay loop processes. (Dart is single-
-            // threaded; no other stream event fires until this callback
-            // returns, guaranteeing correct ordering.)
             if (all.length > discoveryHeaderLen) {
-              _inbound.add(Uint8List.fromList(all.sublist(discoveryHeaderLen)));
+              final bytes =
+                  Uint8List.fromList(all.sublist(discoveryHeaderLen));
+              _inbound.add(bytes);
+              _packetCallback?.call(bytes);
             }
-
             headerDone.complete();
           }
-          // Haven't accumulated 25 bytes yet — keep buffering.
         } else {
-          // Header consumed — forward relay data directly.
-          _inbound.add(Uint8List.fromList(chunk));
+          final bytes = Uint8List.fromList(chunk);
+          _inbound.add(bytes);
+          _packetCallback?.call(bytes);
         }
       },
       onError: (e, st) {
@@ -168,7 +155,6 @@ class TcpSgtpTransport implements SgtpTransport {
       cancelOnError: false,
     );
 
-    // Wait up to 3 s for the server to send its discovery header.
     try {
       await headerDone.future.timeout(
         const Duration(seconds: 3),
@@ -191,7 +177,6 @@ class TcpSgtpTransport implements SgtpTransport {
       s.add(bytes);
       await s.flush();
     } on StateError {
-      // Socket sink became unusable (usually after remote close/race).
       _socket = null;
       rethrow;
     } on SocketException {

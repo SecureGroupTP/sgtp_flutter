@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
@@ -24,7 +23,14 @@ abstract class IUserDirClient {
   Future<void> connect();
   void close();
 
-  Future<({bool ok, int? errorCode, String? errorMessage})> registerWithResult({
+  // ── Auth + profile ───────────────────────────────────────────────────────
+
+  /// Authenticates with the server and updates the user's profile.
+  ///
+  /// Internally performs the auth-challenge flow, then calls updateProfile.
+  /// Returns `{ok: true}` on success, or `{ok: false, errorMessage: ...}` on
+  /// failure.
+  Future<({bool ok, String? errorMessage})> registerWithResult({
     required String username,
     required String fullname,
     required Uint8List pubkey,
@@ -32,10 +38,24 @@ abstract class IUserDirClient {
     required SimpleKeyPairData identityKeyPair,
   });
 
+  // ── Profile lookup ───────────────────────────────────────────────────────
+
+  /// Lightweight profile metadata (no avatar bytes).
   Future<UserDirMeta?> getMeta(Uint8List pubkey);
+
+  /// Full profile including avatar bytes.
   Future<UserDirProfile?> getProfile(Uint8List pubkey);
-  Future<bool> subscribe(List<Uint8List> pubkeys);
+
+  /// Search profiles by username / display name substring.
   Future<List<UserDirMeta>> search(String query, {int limit = 20});
+
+  // ── Event subscriptions ──────────────────────────────────────────────────
+
+  /// Subscribe to real-time server events for the given public keys.
+  /// Returns false if the subscription could not be established.
+  Future<bool> subscribe(List<Uint8List> pubkeys);
+
+  // ── Friend operations ────────────────────────────────────────────────────
 
   Future<bool> sendFriendRequest({
     required Uint8List myPubkey,

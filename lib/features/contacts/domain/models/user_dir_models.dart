@@ -10,12 +10,14 @@ class UserDirFriendStatus {
 class UserDirFriendState {
   final Uint8List peerPubkey;
   final int status;
+
+  /// Always null in the new protocol (DM rooms managed separately).
   final Uint8List? roomUUID;
 
   const UserDirFriendState({
     required this.peerPubkey,
     required this.status,
-    required this.roomUUID,
+    this.roomUUID,
   });
 
   String get peerPubkeyHex =>
@@ -36,20 +38,27 @@ class UserDirFriendNotify {
     required this.eventType,
     required this.status,
     required this.actorPubkey,
-    required this.roomUUID,
+    this.roomUUID,
   });
 
   String get actorPubkeyHex =>
       actorPubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
-/// Lightweight profile data returned by GET_META / NOTIFY.
+/// Lightweight profile metadata.
 class UserDirMeta {
   final Uint8List pubkey;
   final String username;
+
+  /// Mapped from [displayName]; falls back to [username] when null.
   final String fullname;
-  final Uint8List avatarSha256; // 32 bytes
-  final int updatedAt; // unix seconds
+
+  /// Not available from the new protocol; kept for API compatibility.
+  /// Always empty (zero-length) in new implementations.
+  final Uint8List avatarSha256;
+
+  /// Unix seconds derived from lastSeenAt (microseconds ÷ 1000000).
+  final int updatedAt;
 
   const UserDirMeta({
     required this.pubkey,
@@ -66,7 +75,7 @@ class UserDirMeta {
       avatarSha256.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
-/// Full profile including avatar bytes, returned by GET_PROFILE.
+/// Full profile including raw avatar bytes.
 class UserDirProfile extends UserDirMeta {
   final Uint8List avatarBytes;
 

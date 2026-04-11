@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cbor/cbor.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 
 class SgtpServerOptions {
@@ -60,6 +61,37 @@ class SgtpServerOptions {
 
   static SgtpServerOptions fromJsonString(String body) =>
       fromJson(json.decode(body) as Map<String, dynamic>);
+
+  /// Parse from CBOR-encoded bytes.
+  /// Expects a CBOR map with the same structure as the JSON format:
+  /// `{ports: {tcp: int, ...}, enabled: {tcp: bool, ...}}`.
+  static SgtpServerOptions fromCbor(Uint8List bytes) {
+    final decoded = cbor.decode(bytes);
+    if (decoded is! CborMap) {
+      throw FormatException('Discovery response is not a CBOR map');
+    }
+
+    Map<String, dynamic> cborMapToJson(CborMap map) {
+      final result = <String, dynamic>{};
+      for (final entry in map.entries) {
+        final key = entry.key;
+        final value = entry.value;
+        final keyStr = key is CborString ? key.toString() : key.toString();
+        result[keyStr] = switch (value) {
+          CborString() => value.toString(),
+          CborSmallInt() => value.value,
+          CborInt() => value.toInt(),
+          CborBool() => value.value,
+          CborMap() => cborMapToJson(value),
+          CborNull() => null,
+          _ => null,
+        };
+      }
+      return result;
+    }
+
+    return fromJson(cborMapToJson(decoded));
+  }
 
   static SgtpServerOptions fromBytes(Uint8List bytes) {
     if (bytes.length != wireBytesLength) {

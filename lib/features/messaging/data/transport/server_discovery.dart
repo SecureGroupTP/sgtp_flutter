@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery_http_client.dart';
+import 'package:sgtp_flutter/core/network/transport/discovery_http_client.dart';
 
 class SgtpServerDiscovery {
   /// Discovers server options via HTTP(S) GET `/sgtp/discovery`.
@@ -48,6 +49,12 @@ class SgtpServerDiscovery {
     if (res.statusCode != 200) {
       throw StateError('Discovery HTTP ${res.statusCode} for $uri');
     }
-    return SgtpServerOptions.fromJsonString(res.body);
+
+    final ct = res.contentType.toLowerCase();
+    if (ct.contains('cbor')) {
+      return SgtpServerOptions.fromCbor(res.body);
+    }
+    // Fallback: treat as JSON
+    return SgtpServerOptions.fromJsonString(utf8.decode(res.body));
   }
 }

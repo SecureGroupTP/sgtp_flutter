@@ -317,10 +317,6 @@ class SettingsManagementService {
           return 'Username already taken';
         }
         if (msg.isNotEmpty) return msg;
-        final code = result.errorCode;
-        if (code != null) {
-          return 'Username update failed (code: 0x${code.toRadixString(16)})';
-        }
         return 'Profile registration failed';
       } finally {
         client.close();

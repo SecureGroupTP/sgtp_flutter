@@ -3,9 +3,9 @@ import 'dart:typed_data';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
+import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 
-class WebSocketSgtpTransport implements SgtpTransport {
+class WebSocketSgtpTransport implements IProtocolTransport {
   final String host;
   final int port;
   final bool useTls;
@@ -13,6 +13,7 @@ class WebSocketSgtpTransport implements SgtpTransport {
 
   final StreamController<Uint8List> _inbound =
       StreamController<Uint8List>.broadcast();
+  void Function(Uint8List)? _packetCallback;
   WebSocketChannel? _ws;
   StreamSubscription? _sub;
 
@@ -30,6 +31,11 @@ class WebSocketSgtpTransport implements SgtpTransport {
   bool get isConnected => _ws != null;
 
   @override
+  void registerPacketCallback(void Function(Uint8List bytes) callback) {
+    _packetCallback = callback;
+  }
+
+  @override
   Future<void> connect() async {
     if (_ws != null) return;
     final scheme = useTls ? 'wss' : 'ws';
@@ -39,13 +45,16 @@ class WebSocketSgtpTransport implements SgtpTransport {
     _ws = ws;
     _sub = ws.stream.listen(
       (event) {
+        Uint8List bytes;
         if (event is Uint8List) {
-          _inbound.add(event);
+          bytes = event;
+        } else if (event is List<int>) {
+          bytes = Uint8List.fromList(event);
+        } else {
           return;
         }
-        if (event is List<int>) {
-          _inbound.add(Uint8List.fromList(event));
-        }
+        _inbound.add(bytes);
+        _packetCallback?.call(bytes);
       },
       onError: (e, st) => _inbound.addError(e, st),
       onDone: () {

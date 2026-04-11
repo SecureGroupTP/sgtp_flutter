@@ -26,6 +26,7 @@ dependencies:
   image: ^4.5.4
   image_picker: ^1.1.2
   http: ^1.2.2
+  cbor: ^6.3.2
   web_socket_channel: ^3.0.1
   window_manager: ^0.4.3
   url_launcher: ^6.3.0

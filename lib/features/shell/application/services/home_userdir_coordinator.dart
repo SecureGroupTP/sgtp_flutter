@@ -109,7 +109,7 @@ class HomeUserDirCoordinator {
     );
     if (!force && _lastRegisteredFingerprint == fp) return null;
 
-    Future<({bool ok, int? errorCode, String? errorMessage})> doRegister(
+    Future<({bool ok, String? errorMessage})> doRegister(
       IUserDirClient client,
     ) {
       return client.registerWithResult(
@@ -131,9 +131,7 @@ class HomeUserDirCoordinator {
     }
 
     var result = await doRegister(client);
-    if (!result.ok &&
-        result.errorCode == null &&
-        (result.errorMessage ?? '').trim().isEmpty) {
+    if (!result.ok && (result.errorMessage ?? '').trim().isEmpty) {
       await _initUserDir(session);
       final retry = _client;
       if (retry != null && retry.isConnected) {
@@ -146,7 +144,6 @@ class HomeUserDirCoordinator {
       return null;
     }
 
-    final code = result.errorCode;
     final msg = (result.errorMessage ?? '').trim();
     final lower = msg.toLowerCase();
     final isTaken = lower.contains('taken') ||
@@ -155,9 +152,6 @@ class HomeUserDirCoordinator {
         lower.contains('already');
     if (isTaken) return 'Username already taken';
     if (msg.isNotEmpty) return msg;
-    if (code != null) {
-      return 'Username update failed (code: 0x${code.toRadixString(16)})';
-    }
     return 'Username update failed';
   }
 

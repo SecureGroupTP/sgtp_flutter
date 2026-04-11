@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/uint64_utils.dart';
+import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/crypto/chacha20_utils.dart';
 import 'package:sgtp_flutter/core/crypto/ed25519_utils.dart';
@@ -24,7 +25,6 @@ import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/http_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
@@ -243,7 +243,7 @@ class SgtpClient implements ISgtpSession {
   @override
   Stream<SgtpEvent> get events => _eventController.stream;
 
-  SgtpTransport? _transport;
+  IProtocolTransport? _transport;
   final List<int> _receiveBuffer = [];
   _ClientState _state = _ClientState.disconnected;
 
@@ -566,7 +566,7 @@ class SgtpClient implements ISgtpSession {
     return (host, port);
   }
 
-  SgtpTransport _buildTransport({
+  IProtocolTransport _buildTransport({
     required String host,
     required int port,
     required SgtpTransportFamily family,
