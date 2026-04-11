@@ -1,13 +1,19 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
+
 // ── listFriends ─────────────────────────────────────────────────────────────
 
-class ListFriendsRequest {
+class ListFriendsRequest extends RpcRequest {
   final int? limit;
   final String? cursor;
 
   const ListFriendsRequest({this.limit, this.cursor});
 
+  @override
+  String get method => 'listFriends';
+
+  @override
   Map<String, dynamic> toMap() => {
         if (limit != null) 'limit': limit,
         if (cursor != null) 'cursor': cursor,
@@ -58,11 +64,15 @@ class ListFriendsResponse {
 
 // ── removeFriend ────────────────────────────────────────────────────────────
 
-class RemoveFriendRequest {
+class RemoveFriendRequest extends RpcRequest {
   final Uint8List friendPublicKey;
 
   const RemoveFriendRequest({required this.friendPublicKey});
 
+  @override
+  String get method => 'removeFriend';
+
+  @override
   Map<String, dynamic> toMap() => {'friendPublicKey': friendPublicKey};
 }
 

@@ -1,14 +1,19 @@
 import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
+import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
 
 // ── sendFriendRequest ───────────────────────────────────────────────────────
 
-class SendFriendRequestRequest {
+class SendFriendRequestRequest extends RpcRequest {
   final Uint8List receiverPublicKey;
 
   const SendFriendRequestRequest({required this.receiverPublicKey});
 
+  @override
+  String get method => 'sendFriendRequest';
+
+  @override
   Map<String, dynamic> toMap() => {'receiverPublicKey': receiverPublicKey};
 }
 
@@ -33,11 +38,15 @@ class SendFriendRequestResponse {
 
 // ── acceptFriendRequest ─────────────────────────────────────────────────────
 
-class AcceptFriendRequestRequest {
+class AcceptFriendRequestRequest extends RpcRequest {
   final Uint8List requestId; // UUID bytes
 
   const AcceptFriendRequestRequest({required this.requestId});
 
+  @override
+  String get method => 'acceptFriendRequest';
+
+  @override
   Map<String, dynamic> toMap() => {'requestId': requestId};
 }
 
@@ -59,11 +68,15 @@ class AcceptFriendRequestResponse {
 
 // ── declineFriendRequest ────────────────────────────────────────────────────
 
-class DeclineFriendRequestRequest {
+class DeclineFriendRequestRequest extends RpcRequest {
   final Uint8List requestId;
 
   const DeclineFriendRequestRequest({required this.requestId});
 
+  @override
+  String get method => 'declineFriendRequest';
+
+  @override
   Map<String, dynamic> toMap() => {'requestId': requestId};
 }
 
@@ -85,11 +98,15 @@ class DeclineFriendRequestResponse {
 
 // ── cancelFriendRequest ─────────────────────────────────────────────────────
 
-class CancelFriendRequestRequest {
+class CancelFriendRequestRequest extends RpcRequest {
   final Uint8List requestId;
 
   const CancelFriendRequestRequest({required this.requestId});
 
+  @override
+  String get method => 'cancelFriendRequest';
+
+  @override
   Map<String, dynamic> toMap() => {'requestId': requestId};
 }
 
@@ -104,13 +121,17 @@ class CancelFriendRequestResponse {
 
 // ── listFriendRequests ──────────────────────────────────────────────────────
 
-class ListFriendRequestsRequest {
+class ListFriendRequestsRequest extends RpcRequest {
   final String? direction; // 'incoming' | 'outgoing' | null
   final int? limit;
   final String? cursor;
 
   const ListFriendRequestsRequest({this.direction, this.limit, this.cursor});
 
+  @override
+  String get method => 'listFriendRequests';
+
+  @override
   Map<String, dynamic> toMap() => {
         if (direction != null) 'direction': direction,
         if (limit != null) 'limit': limit,

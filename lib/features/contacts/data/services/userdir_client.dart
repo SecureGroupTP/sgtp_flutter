@@ -113,7 +113,7 @@ class UserDirClient implements IUserDirClient {
         username: username.trim().isEmpty ? null : username.trim(),
         displayName: fullname.trim().isEmpty ? null : fullname.trim(),
       );
-      final raw = await _rpc.callRpc('updateProfile', req.toMap());
+      final raw = await _rpc.callRpc(req);
       UpdateProfileResponse.fromMap(raw);
       AppLogger.d('Profile updated for ${_hexShort(pubkey)}', tag: _tag);
       return (ok: true, errorMessage: null);
@@ -127,7 +127,7 @@ class UserDirClient implements IUserDirClient {
   Future<UserDirMeta?> getMeta(Uint8List pubkey) async {
     try {
       final req = GetProfileRequest(userPublicKey: pubkey);
-      final raw = await _rpc.callRpc('getProfile', req.toMap());
+      final raw = await _rpc.callRpc(req);
       final res = GetProfileResponse.fromMap(raw);
       return _profileToMeta(res.profile);
     } catch (e) {
@@ -140,14 +140,13 @@ class UserDirClient implements IUserDirClient {
   Future<UserDirProfile?> getProfile(Uint8List pubkey) async {
     try {
       final req = GetProfileRequest(userPublicKey: pubkey);
-      final profileRaw = await _rpc.callRpc('getProfile', req.toMap());
+      final profileRaw = await _rpc.callRpc(req);
       final profileRes = GetProfileResponse.fromMap(profileRaw);
 
       Uint8List avatarBytes = Uint8List(0);
       try {
         final avatarReq = GetProfileAvatarRequest(userPublicKey: pubkey);
-        final avatarRaw =
-            await _rpc.callRpc('getProfileAvatar', avatarReq.toMap());
+        final avatarRaw = await _rpc.callRpc(avatarReq);
         final avatarRes = GetProfileAvatarResponse.fromMap(avatarRaw);
         avatarBytes = avatarRes.avatarBytes;
       } catch (_) {}
@@ -171,7 +170,7 @@ class UserDirClient implements IUserDirClient {
   Future<List<UserDirMeta>> search(String query, {int limit = 20}) async {
     try {
       final req = SearchProfilesRequest(query: query, limit: limit);
-      final raw = await _rpc.callRpc('searchProfiles', req.toMap());
+      final raw = await _rpc.callRpc(req);
       final res = SearchProfilesResponse.fromMap(raw);
       return res.items.map(_searchItemToMeta).toList();
     } catch (e) {
@@ -186,7 +185,7 @@ class UserDirClient implements IUserDirClient {
       final req = SubscribeToEventsRequest(
         requestedAtUs: DateTime.now().microsecondsSinceEpoch,
       );
-      await _rpc.callRpc('subscribeToEvents', req.toMap());
+      await _rpc.callRpc(req);
       return true;
     } catch (e) {
       AppLogger.w('subscribe failed: $e', tag: _tag);
@@ -205,7 +204,7 @@ class UserDirClient implements IUserDirClient {
     _ensureCredentials(myPubkey, identityKeyPair);
     try {
       final req = SendFriendRequestRequest(receiverPublicKey: peerPubkey);
-      await _rpc.callRpc('sendFriendRequest', req.toMap());
+      await _rpc.callRpc(req);
       return true;
     } catch (e) {
       AppLogger.w('sendFriendRequest failed: $e', tag: _tag);
@@ -244,11 +243,9 @@ class UserDirClient implements IUserDirClient {
   Future<bool> _doRespondToRequest(Uint8List requestId, bool accept) async {
     try {
       if (accept) {
-        final req = AcceptFriendRequestRequest(requestId: requestId);
-        await _rpc.callRpc('acceptFriendRequest', req.toMap());
+        await _rpc.callRpc(AcceptFriendRequestRequest(requestId: requestId));
       } else {
-        final req = DeclineFriendRequestRequest(requestId: requestId);
-        await _rpc.callRpc('declineFriendRequest', req.toMap());
+        await _rpc.callRpc(DeclineFriendRequestRequest(requestId: requestId));
       }
       return true;
     } catch (e) {
@@ -266,7 +263,7 @@ class UserDirClient implements IUserDirClient {
     _ensureCredentials(myPubkey, identityKeyPair);
     try {
       final req = RemoveFriendRequest(friendPublicKey: peerPubkey);
-      await _rpc.callRpc('removeFriend', req.toMap());
+      await _rpc.callRpc(req);
       return true;
     } catch (e) {
       AppLogger.w('sendFriendDelete failed: $e', tag: _tag);
@@ -283,8 +280,7 @@ class UserDirClient implements IUserDirClient {
     try {
       final states = <String, UserDirFriendState>{};
 
-      final friendsRaw =
-          await _rpc.callRpc('listFriends', ListFriendsRequest().toMap());
+      final friendsRaw = await _rpc.callRpc(ListFriendsRequest());
       final friendsRes = ListFriendsResponse.fromMap(friendsRaw);
       for (final item in friendsRes.items) {
         final hex = _pubkeyHex(item.friendPublicKey);
@@ -295,10 +291,7 @@ class UserDirClient implements IUserDirClient {
       }
 
       _incomingRequestIds.clear();
-      final reqRaw = await _rpc.callRpc(
-        'listFriendRequests',
-        ListFriendRequestsRequest().toMap(),
-      );
+      final reqRaw = await _rpc.callRpc(ListFriendRequestsRequest());
       final reqRes = ListFriendRequestsResponse.fromMap(reqRaw);
       final myHex = _pubkeyHex(myPubkey);
 
@@ -347,8 +340,7 @@ class UserDirClient implements IUserDirClient {
         deviceId: 'flutter-client',
         clientNonce: _randomBytes(32),
       );
-      final challengeRaw =
-          await _rpc.callRpc('requestAuthChallenge', challengeReq.toMap());
+      final challengeRaw = await _rpc.callRpc(challengeReq);
       final challengeRes = RequestAuthChallengeResponse.fromMap(challengeRaw);
 
       final algorithm = Ed25519();
@@ -361,8 +353,7 @@ class UserDirClient implements IUserDirClient {
         sessionId: challengeRes.sessionId,
         signature: Uint8List.fromList(sig.bytes),
       );
-      final solveRaw =
-          await _rpc.callRpc('solveAuthChallenge', solveReq.toMap());
+      final solveRaw = await _rpc.callRpc(solveReq);
       final solveRes = SolveAuthChallengeResponse.fromMap(solveRaw);
 
       if (!solveRes.isAuthenticated) {

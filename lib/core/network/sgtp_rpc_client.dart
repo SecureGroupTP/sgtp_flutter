@@ -5,6 +5,7 @@ import 'package:cbor/cbor.dart';
 import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
+import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 
 /// CBOR-RPC caller that sits on top of [IProtocolTransport].
@@ -40,24 +41,21 @@ class SgtpRpcClient {
   // ignore: avoid_unused_parameters
   void registerEventsCallback(void Function(Map<String, dynamic> event) callback) {}
 
-  /// Encode and send an RPC request; returns the decoded [parameters] map
+  /// Encode and send a typed RPC request; returns the decoded [parameters] map
   /// from the matching response.
   ///
   /// Throws [TimeoutException] if no response arrives within 30 seconds.
-  Future<Map<String, dynamic>> callRpc(
-    String method,
-    Map<String, dynamic> parameters,
-  ) async {
+  Future<Map<String, dynamic>> callRpc(RpcRequest request) async {
     final requestId = generateUUIDv7();
     final requestIdHex = uuidBytesToHex(requestId);
 
     final payloadMap = CborMap({
       CborString('requestId'): CborBytes(requestId),
-      CborString('rpcCall'): CborString(method),
+      CborString('rpcCall'): CborString(request.method),
       CborString('timestamp'):
           CborSmallInt(DateTime.now().millisecondsSinceEpoch),
       CborString('version'): CborSmallInt(1),
-      CborString('parameters'): _toCborValue(parameters),
+      CborString('parameters'): _toCborValue(request.toMap()),
     });
 
     final payloadBytes = cbor.encode(payloadMap);
@@ -92,7 +90,7 @@ class SgtpRpcClient {
       const Duration(seconds: 30),
       onTimeout: () {
         _pending.remove(requestIdHex);
-        throw TimeoutException('RPC timeout: $method', const Duration(seconds: 30));
+        throw TimeoutException('RPC timeout: ${request.method}', const Duration(seconds: 30));
       },
     );
   }

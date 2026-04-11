@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
+
 // ── requestAuthChallenge ────────────────────────────────────────────────────
 
-class RequestAuthChallengeRequest {
+class RequestAuthChallengeRequest extends RpcRequest {
   final Uint8List userPublicKey;
   final String publicIp;
   final String deviceId;
@@ -15,6 +17,10 @@ class RequestAuthChallengeRequest {
     required this.clientNonce,
   });
 
+  @override
+  String get method => 'requestAuthChallenge';
+
+  @override
   Map<String, dynamic> toMap() => {
         'userPublicKey': userPublicKey,
         'publicIp': publicIp,
@@ -44,7 +50,7 @@ class RequestAuthChallengeResponse {
 
 // ── solveAuthChallenge ──────────────────────────────────────────────────────
 
-class SolveAuthChallengeRequest {
+class SolveAuthChallengeRequest extends RpcRequest {
   final String sessionId;
   final Uint8List signature;
 
@@ -53,6 +59,10 @@ class SolveAuthChallengeRequest {
     required this.signature,
   });
 
+  @override
+  String get method => 'solveAuthChallenge';
+
+  @override
   Map<String, dynamic> toMap() => {
         'sessionId': sessionId,
         'signature': signature,
@@ -80,11 +90,15 @@ class SolveAuthChallengeResponse {
 
 // ── subscribeToEvents ───────────────────────────────────────────────────────
 
-class SubscribeToEventsRequest {
+class SubscribeToEventsRequest extends RpcRequest {
   final int requestedAtUs; // microseconds since epoch
 
   const SubscribeToEventsRequest({required this.requestedAtUs});
 
+  @override
+  String get method => 'subscribeToEvents';
+
+  @override
   Map<String, dynamic> toMap() => {'requestedAt': requestedAtUs};
 }
 

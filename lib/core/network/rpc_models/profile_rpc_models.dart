@@ -1,12 +1,18 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
+
 // ── getProfile ──────────────────────────────────────────────────────────────
 
-class GetProfileRequest {
+class GetProfileRequest extends RpcRequest {
   final Uint8List userPublicKey;
 
   const GetProfileRequest({required this.userPublicKey});
 
+  @override
+  String get method => 'getProfile';
+
+  @override
   Map<String, dynamic> toMap() => {'userPublicKey': userPublicKey};
 }
 
@@ -47,7 +53,7 @@ class GetProfileResponse {
 
 // ── updateProfile ───────────────────────────────────────────────────────────
 
-class UpdateProfileRequest {
+class UpdateProfileRequest extends RpcRequest {
   final String? username;
   final String? displayName;
   final String? avatarHash;
@@ -60,6 +66,10 @@ class UpdateProfileRequest {
     this.bio,
   });
 
+  @override
+  String get method => 'updateProfile';
+
+  @override
   Map<String, dynamic> toMap() => {
         if (username != null) 'username': username,
         if (displayName != null) 'displayName': displayName,
@@ -79,13 +89,17 @@ class UpdateProfileResponse {
 
 // ── searchProfiles ──────────────────────────────────────────────────────────
 
-class SearchProfilesRequest {
+class SearchProfilesRequest extends RpcRequest {
   final String query;
   final int? limit;
   final String? cursor;
 
   const SearchProfilesRequest({required this.query, this.limit, this.cursor});
 
+  @override
+  String get method => 'searchProfiles';
+
+  @override
   Map<String, dynamic> toMap() => {
         'query': query,
         if (limit != null) 'limit': limit,
@@ -130,11 +144,15 @@ class SearchProfilesResponse {
 
 // ── getProfileAvatar ────────────────────────────────────────────────────────
 
-class GetProfileAvatarRequest {
+class GetProfileAvatarRequest extends RpcRequest {
   final Uint8List userPublicKey;
 
   const GetProfileAvatarRequest({required this.userPublicKey});
 
+  @override
+  String get method => 'getProfileAvatar';
+
+  @override
   Map<String, dynamic> toMap() => {'userPublicKey': userPublicKey};
 }
 
