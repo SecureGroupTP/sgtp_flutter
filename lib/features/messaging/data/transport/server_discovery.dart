@@ -5,7 +5,7 @@ import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/network/transport/discovery_http_client.dart';
 
 class SgtpServerDiscovery {
-  /// Discovers server options via HTTP(S) GET `/sgtp/discovery`.
+  /// Discovers server options via HTTP(S) GET `/api/v1/discovery`.
   ///
   /// Tries the default discovery ports in strict order:
   /// 1) HTTPS 443
@@ -43,7 +43,7 @@ class SgtpServerDiscovery {
       scheme: tls ? 'https' : 'http',
       host: host,
       port: port,
-      path: '/sgtp/discovery',
+      path: '/api/v1/discovery',
     );
     final res = await httpGetDiscovery(uri, timeout: timeout);
     if (res.statusCode != 200) {
