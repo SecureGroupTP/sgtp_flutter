@@ -261,7 +261,7 @@ class HomeUserDirCoordinator {
       );
       AppLogger.i(
         'FRIEND_DELETE ${ok ? 'sent' : 'failed'} peer=${peerHex.substring(0, 8)}',
-        tag: 'UDIR',
+        tag: 'RPC',
       );
       if (ok) {
         await _syncFriendStates(session, client);
@@ -296,7 +296,7 @@ class HomeUserDirCoordinator {
       );
       AppLogger.i(
         'FRIEND_REQUEST ${ok ? 'sent' : 'failed'} peer=${hex.substring(0, 8)}',
-        tag: 'UDIR',
+        tag: 'RPC',
       );
       await _syncFriendStates(session, client);
     } catch (_) {}
@@ -364,7 +364,7 @@ class HomeUserDirCoordinator {
       identityKeyPair: session.config.identityKeyPair,
     );
     if (snapshot == null) {
-      AppLogger.w('FRIEND_SYNC skipped: no response', tag: 'UDIR');
+      AppLogger.w('FRIEND_SYNC skipped: no response', tag: 'RPC');
       return;
     }
 
@@ -469,17 +469,10 @@ class HomeUserDirCoordinator {
 
   Future<void> _initUserDir(HomeUserDirSession session) async {
     if (!_isCurrentSession(session)) return;
-    if (session.accountId.trim().isEmpty) {
-      AppLogger.w('UDIR skip: no accountId', tag: 'UDIR');
-      return;
-    }
-    final currentNodeId = (session.config.nodeId ?? '').trim();
-    final resolved = await _persistence.resolveUserDirNode(
-      accountId: session.accountId,
-      currentNodeId: session.config.nodeId,
-    );
+    if (session.accountId.trim().isEmpty) return;
+    final resolved = session.resolvedNode;
     if (resolved == null) {
-      AppLogger.w('UDIR skip: node not found (nodeId=$currentNodeId)', tag: 'UDIR');
+      AppLogger.w('RPC skip: server options not yet discovered', tag: 'RPC');
       return;
     }
     _friendSyncTimer?.cancel();
@@ -495,13 +488,13 @@ class HomeUserDirCoordinator {
     final client = _clientFactory(resolved.node, resolved.options);
     if (client == null) {
       AppLogger.w(
-        'UDIR skip: no usable transport (opts=${resolved.options})',
-        tag: 'UDIR',
+        'RPC skip: no HTTP endpoint on node (opts=${resolved.options})',
+        tag: 'RPC',
       );
       return;
     }
 
-    AppLogger.i('UDIR connecting via ${client.label}', tag: 'UDIR');
+    AppLogger.i('RPC connecting via ${client.label}', tag: 'RPC');
     try {
       await client.connect();
       _client = client;
@@ -537,7 +530,7 @@ class HomeUserDirCoordinator {
       // Requests are sent explicitly when the user adds a contact
       // (see applyWhitelistChanges -> _sendFriendRequestFor).
     } catch (e, st) {
-      AppLogger.e('UDIR init failed: $e\n$st', tag: 'UDIR');
+      AppLogger.e('RPC init failed: $e\n$st', tag: 'RPC');
     }
   }
 

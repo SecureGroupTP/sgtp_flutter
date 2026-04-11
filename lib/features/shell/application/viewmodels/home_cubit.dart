@@ -9,6 +9,7 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/shell/application/models/home_models.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_persistence_service.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_userdir_coordinator.dart';
@@ -89,6 +90,7 @@ class HomeCubit extends Cubit<HomeViewState> {
   String _serverAddress;
   Uint8List? _userAvatar;
   List<WhitelistEntry> _whitelist;
+  ResolvedUserDirNode? _resolvedNode;
   Map<String, ContactProfile> _contactProfiles = {};
   Map<String, FriendStateRecord> _friendStates = {};
   String _nickname = '';
@@ -311,6 +313,10 @@ class HomeCubit extends Cubit<HomeViewState> {
       _buildState();
     }
     if (targetAccountId != _accountId.trim()) return;
+    _resolvedNode = await _homePersistence.resolveUserDirNode(
+      accountId: _accountId,
+      currentNodeId: _config.nodeId,
+    );
     await _userDirCoordinator.start(_buildUserDirSession());
   }
 
@@ -352,6 +358,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       username: _username,
       userAvatar: _userAvatar,
       serverAddress: _serverAddress,
+      resolvedNode: _resolvedNode,
     );
   }
 

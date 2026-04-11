@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
+import 'package:sgtp_flutter/features/shell/application/models/home_models.dart';
 
 class HomeUserDirSession {
   const HomeUserDirSession({
@@ -13,6 +14,7 @@ class HomeUserDirSession {
     required this.username,
     required this.userAvatar,
     required this.serverAddress,
+    this.resolvedNode,
   });
 
   final String accountId;
@@ -23,6 +25,10 @@ class HomeUserDirSession {
   final String username;
   final Uint8List? userAvatar;
   final String serverAddress;
+
+  /// The resolved server node used to create the RPC client.
+  /// Null if the server options have not been discovered yet.
+  final ResolvedUserDirNode? resolvedNode;
 }
 
 class HomeUserDirState {
