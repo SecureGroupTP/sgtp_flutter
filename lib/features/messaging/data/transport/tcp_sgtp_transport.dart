@@ -157,9 +157,9 @@ class TcpSgtpTransport implements IProtocolTransport {
 
     try {
       await headerDone.future.timeout(
-        const Duration(seconds: 3),
+        const Duration(seconds: 15),
         onTimeout: () => throw TimeoutException(
-            'Banner timeout on $host:$port (tls=$useTls) after 3s'),
+            'Banner timeout on $host:$port (tls=$useTls) after 15s'),
       );
     } catch (e) {
       AppLogger.e('Banner wait failed on $host:$port (tls=$useTls): $e',

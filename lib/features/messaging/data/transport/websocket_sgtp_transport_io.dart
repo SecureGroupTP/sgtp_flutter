@@ -88,7 +88,7 @@ class WebSocketSgtpTransport implements IProtocolTransport {
 
     final key = _generateWsKey();
     sock.write(
-      'GET / HTTP/1.1\r\n'
+      'GET /api/v1/client HTTP/1.1\r\n'
       'Host: $host:$port\r\n'
       'Upgrade: websocket\r\n'
       'Connection: Upgrade\r\n'

@@ -1,21 +1,16 @@
 import 'dart:async';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
-import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/profile_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_request_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
-import 'package:sgtp_flutter/core/sgtp_server_options.dart';
-import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
-import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 export 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 
@@ -37,55 +32,6 @@ class UserDirClient implements IUserDirClient {
   final Map<String, Uint8List> _incomingRequestIds = {};
 
   UserDirClient({required SgtpRpcClient rpc, required this.label}) : _rpc = rpc;
-
-  // ── Factory ──────────────────────────────────────────────────────────────
-
-  static IUserDirClient? forNode(NodeConfig node, SgtpServerOptions opts) {
-    final endpoint = _pickHttpEndpoint(node, opts);
-    if (endpoint == null) {
-      AppLogger.w(
-        'No HTTP endpoint available for user-directory on ${node.host}',
-        tag: _tag,
-      );
-      return null;
-    }
-
-    final transport = HttpProtocolTransport(
-      host: node.host,
-      port: endpoint.port,
-      useTls: endpoint.useTls,
-    );
-    final rpc = SgtpRpcClient(transport);
-    final scheme = endpoint.useTls ? 'https' : 'http';
-    return UserDirClient(
-      rpc: rpc,
-      label: '$scheme://${node.host}:${endpoint.port}',
-    );
-  }
-
-  static ({int port, bool useTls})? _pickHttpEndpoint(
-    NodeConfig node,
-    SgtpServerOptions opts,
-  ) {
-    if ((node.transport == SgtpTransportFamily.http ||
-            node.transport == SgtpTransportFamily.websocket) &&
-        node.chatPort > 0) {
-      return (port: node.chatPort, useTls: node.useTls);
-    }
-    if (node.useTls && opts.httpTls && opts.httpTlsPort > 0) {
-      return (port: opts.httpTlsPort, useTls: true);
-    }
-    if (!node.useTls && opts.http && opts.httpPort > 0) {
-      return (port: opts.httpPort, useTls: false);
-    }
-    if (opts.http && opts.httpPort > 0) {
-      return (port: opts.httpPort, useTls: false);
-    }
-    if (opts.httpTls && opts.httpTlsPort > 0) {
-      return (port: opts.httpTlsPort, useTls: true);
-    }
-    return null;
-  }
 
   // ── IUserDirClient ───────────────────────────────────────────────────────
 
@@ -126,7 +72,7 @@ class UserDirClient implements IUserDirClient {
     required SimpleKeyPairData identityKeyPair,
   }) async {
     try {
-      final authError = await _authenticate(pubkey, identityKeyPair);
+      final authError = await _rpc.authenticate(pubkey, identityKeyPair);
       if (authError != null) return (ok: false, errorMessage: authError);
 
       final req = UpdateProfileRequest(
@@ -221,7 +167,6 @@ class UserDirClient implements IUserDirClient {
     required Uint8List peerPubkey,
     required SimpleKeyPairData identityKeyPair,
   }) async {
-    _ensureCredentials(myPubkey, identityKeyPair);
     try {
       final req = SendFriendRequestRequest(receiverPublicKey: peerPubkey);
       await _rpc.callRpc(req);
@@ -239,7 +184,6 @@ class UserDirClient implements IUserDirClient {
     required bool accept,
     required SimpleKeyPairData identityKeyPair,
   }) async {
-    _ensureCredentials(myPubkey, identityKeyPair);
     final requesterHex = _pubkeyHex(requesterPubkey);
     var requestId = _incomingRequestIds[requesterHex];
 
@@ -280,7 +224,6 @@ class UserDirClient implements IUserDirClient {
     required Uint8List peerPubkey,
     required SimpleKeyPairData identityKeyPair,
   }) async {
-    _ensureCredentials(myPubkey, identityKeyPair);
     try {
       final req = RemoveFriendRequest(friendPublicKey: peerPubkey);
       await _rpc.callRpc(req);
@@ -296,7 +239,6 @@ class UserDirClient implements IUserDirClient {
     required Uint8List myPubkey,
     required SimpleKeyPairData identityKeyPair,
   }) async {
-    _ensureCredentials(myPubkey, identityKeyPair);
     try {
       final states = <String, UserDirFriendState>{};
 
@@ -349,51 +291,6 @@ class UserDirClient implements IUserDirClient {
 
   // ── Private helpers ──────────────────────────────────────────────────────
 
-  Future<String?> _authenticate(
-    Uint8List pubkey,
-    SimpleKeyPairData keyPair,
-  ) async {
-    try {
-      final challengeReq = RequestAuthChallengeRequest(
-        userPublicKey: pubkey,
-        publicIp: '',
-        deviceId: 'flutter-client',
-        clientNonce: _randomBytes(32),
-      );
-      final challengeRaw = await _rpc.callRpc(challengeReq);
-      final challengeRes = RequestAuthChallengeResponse.fromMap(challengeRaw);
-
-      final algorithm = Ed25519();
-      final sig = await algorithm.sign(
-        challengeRes.challengePayload,
-        keyPair: keyPair,
-      );
-
-      final solveReq = SolveAuthChallengeRequest(
-        sessionId: challengeRes.sessionId,
-        signature: Uint8List.fromList(sig.bytes),
-      );
-      final solveRaw = await _rpc.callRpc(solveReq);
-      final solveRes = SolveAuthChallengeResponse.fromMap(solveRaw);
-
-      if (!solveRes.isAuthenticated) {
-        return 'Authentication rejected by server';
-      }
-
-      _rpc.setCredentials(pubkey, keyPair);
-      AppLogger.d('Authenticated as ${_hexShort(pubkey)}', tag: _tag);
-      return null;
-    } catch (e) {
-      return 'Authentication failed: $e';
-    }
-  }
-
-  void _ensureCredentials(Uint8List pubkey, SimpleKeyPairData keyPair) {
-    if (!_rpc.hasCredentials) {
-      _rpc.setCredentials(pubkey, keyPair);
-    }
-  }
-
   static UserDirMeta _profileToMeta(ProfileData p) => UserDirMeta(
         pubkey: p.publicKey,
         username: p.username,
@@ -418,13 +315,4 @@ class UserDirClient implements IUserDirClient {
 
   static String _hexShort(Uint8List key) => _pubkeyHex(key).substring(0, 8);
 
-  static final _rng = Random.secure();
-
-  static Uint8List _randomBytes(int length) {
-    final bytes = Uint8List(length);
-    for (int i = 0; i < length; i++) {
-      bytes[i] = _rng.nextInt(256);
-    }
-    return bytes;
-  }
 }

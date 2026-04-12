@@ -39,7 +39,7 @@ class WebSocketSgtpTransport implements IProtocolTransport {
   Future<void> connect() async {
     if (_ws != null) return;
     final scheme = useTls ? 'wss' : 'ws';
-    final uri = Uri.parse('$scheme://$host:$port/');
+    final uri = Uri.parse('$scheme://$host:$port/api/v1/client');
     final ws = WebSocketChannel.connect(uri);
     await ws.ready;
     _ws = ws;

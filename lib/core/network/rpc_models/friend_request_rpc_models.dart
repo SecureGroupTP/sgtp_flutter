@@ -31,8 +31,8 @@ class SendFriendRequestResponse {
   static SendFriendRequestResponse fromMap(Map<String, dynamic> m) =>
       SendFriendRequestResponse(
         requestId: m['requestId'] as Uint8List? ?? Uint8List(16),
-        state: FriendRequestStateEnum.fromValue((m['state'] as int?) ?? 1),
-        createdAtUs: (m['createdAt'] as int?) ?? 0,
+        state: FriendRequestStateEnum.fromValue(m['state'] is int ? m['state'] as int : 1),
+        createdAtUs: parseTimestampUs(m['createdAt']),
       );
 }
 
@@ -62,7 +62,7 @@ class AcceptFriendRequestResponse {
   static AcceptFriendRequestResponse fromMap(Map<String, dynamic> m) =>
       AcceptFriendRequestResponse(
         friendId: m['friendId'] as Uint8List? ?? Uint8List(16),
-        acceptedAtUs: (m['acceptedAt'] as int?) ?? 0,
+        acceptedAtUs: parseTimestampUs(m['acceptedAt']),
       );
 }
 
@@ -92,7 +92,7 @@ class DeclineFriendRequestResponse {
   static DeclineFriendRequestResponse fromMap(Map<String, dynamic> m) =>
       DeclineFriendRequestResponse(
         requestId: m['requestId'] as Uint8List? ?? Uint8List(16),
-        declinedAtUs: (m['declinedAt'] as int?) ?? 0,
+        declinedAtUs: parseTimestampUs(m['declinedAt']),
       );
 }
 
@@ -116,7 +116,7 @@ class CancelFriendRequestResponse {
   const CancelFriendRequestResponse({required this.canceledAtUs});
 
   static CancelFriendRequestResponse fromMap(Map<String, dynamic> m) =>
-      CancelFriendRequestResponse(canceledAtUs: (m['canceledAt'] as int?) ?? 0);
+      CancelFriendRequestResponse(canceledAtUs: parseTimestampUs(m['canceledAt']));
 }
 
 // ── listFriendRequests ──────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ class FriendRequestItem {
         senderPublicKey: m['senderPublicKey'] as Uint8List? ?? Uint8List(32),
         receiverPublicKey:
             m['receiverPublicKey'] as Uint8List? ?? Uint8List(32),
-        state: FriendRequestStateEnum.fromValue((m['state'] as int?) ?? 1),
+        state: FriendRequestStateEnum.fromValue(m['state'] is int ? m['state'] as int : 1),
       );
 }
 

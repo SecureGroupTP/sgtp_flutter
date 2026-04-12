@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
+import 'package:sgtp_flutter/core/uuid_v7.dart';
 
 // ── requestAuthChallenge ────────────────────────────────────────────────────
 
@@ -19,6 +20,9 @@ class RequestAuthChallengeRequest extends RpcRequest {
 
   @override
   String get method => 'requestAuthChallenge';
+
+  @override
+  bool get requiresAuth => false;
 
   @override
   Map<String, dynamic> toMap() => {
@@ -44,7 +48,7 @@ class RequestAuthChallengeResponse {
       RequestAuthChallengeResponse(
         sessionId: m['sessionId'] as String,
         challengePayload: m['challengePayload'] as Uint8List,
-        expiresAtUs: (m['expiresAt'] as int?) ?? 0,
+        expiresAtUs: parseTimestampUs(m['expiresAt']),
       );
 }
 
@@ -63,8 +67,11 @@ class SolveAuthChallengeRequest extends RpcRequest {
   String get method => 'solveAuthChallenge';
 
   @override
+  bool get requiresAuth => false;
+
+  @override
   Map<String, dynamic> toMap() => {
-        'sessionId': sessionId,
+        'sessionId': hexToBytes(sessionId.replaceAll('-', '')),
         'signature': signature,
       };
 }
@@ -84,7 +91,7 @@ class SolveAuthChallengeResponse {
       SolveAuthChallengeResponse(
         isAuthenticated: (m['isAuthenticated'] as bool?) ?? false,
         userPublicKey: m['userPublicKey'] as Uint8List,
-        serverTimeUs: (m['serverTime'] as int?) ?? 0,
+        serverTimeUs: parseTimestampUs(m['serverTime']),
       );
 }
 
@@ -114,6 +121,6 @@ class SubscribeToEventsResponse {
   static SubscribeToEventsResponse fromMap(Map<String, dynamic> m) =>
       SubscribeToEventsResponse(
         subscriptionId: m['subscriptionId'] as String? ?? '',
-        subscribedAtUs: (m['subscribedAt'] as int?) ?? 0,
+        subscribedAtUs: parseTimestampUs(m['subscribedAt']),
       );
 }

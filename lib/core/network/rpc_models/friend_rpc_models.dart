@@ -35,7 +35,7 @@ class FriendItem {
   static FriendItem fromMap(Map<String, dynamic> m) => FriendItem(
         id: m['id'] as Uint8List? ?? Uint8List(16),
         friendPublicKey: m['friendId'] as Uint8List? ?? Uint8List(32),
-        acceptedAtUs: (m['acceptedAt'] as int?) ?? 0,
+        acceptedAtUs: parseTimestampUs(m['acceptedAt']),
       );
 }
 
@@ -82,5 +82,5 @@ class RemoveFriendResponse {
   const RemoveFriendResponse({required this.removedAtUs});
 
   static RemoveFriendResponse fromMap(Map<String, dynamic> m) =>
-      RemoveFriendResponse(removedAtUs: (m['removedAt'] as int?) ?? 0);
+      RemoveFriendResponse(removedAtUs: parseTimestampUs(m['removedAt']));
 }

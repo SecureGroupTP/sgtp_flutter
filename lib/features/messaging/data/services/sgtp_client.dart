@@ -464,11 +464,11 @@ class SgtpClient implements ISgtpSession {
       }
 
       final family = SgtpTransportFamilyCodec.resolve(_config.transport);
-      var tls = _config.useTls;
-      if (tls && !options.supports(family, tls: true)) tls = false;
+      final tls = _config.useTls;
       if (!options.supports(family, tls: tls)) {
         throw StateError(
-          'Transport not supported by server. Available: ${options.availableLabels().join(", ")}',
+          'Selected transport (${family.name}, tls=$tls) not supported by server. '
+          'Available: ${options.availableLabels().join(", ")}',
         );
       }
       final port = options.portFor(family, tls: tls);

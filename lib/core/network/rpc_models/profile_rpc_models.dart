@@ -36,7 +36,7 @@ class ProfileData {
         username: m['username'] as String? ?? '',
         displayName: m['displayName'] as String?,
         bio: m['bio'] as String?,
-        lastSeenAtUs: (m['lastSeenAt'] as int?) ?? 0,
+        lastSeenAtUs: parseTimestampUs(m['lastSeenAt']),
       );
 }
 
@@ -84,7 +84,7 @@ class UpdateProfileResponse {
   const UpdateProfileResponse({required this.updatedAtUs});
 
   static UpdateProfileResponse fromMap(Map<String, dynamic> m) =>
-      UpdateProfileResponse(updatedAtUs: (m['updatedAt'] as int?) ?? 0);
+      UpdateProfileResponse(updatedAtUs: parseTimestampUs(m['updatedAt']));
 }
 
 // ── searchProfiles ──────────────────────────────────────────────────────────

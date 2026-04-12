@@ -1,13 +1,20 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
+import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
+import 'package:sgtp_flutter/core/sgtp_server_options.dart';
+import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/sgtp_client.dart';
+import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
+import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
 import 'package:sgtp_flutter/features/shell/application/services/app_startup_service.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_userdir_coordinator.dart';
@@ -50,10 +57,41 @@ class AppInjector {
   static Future<AppDependencies> build() async {
     final settingsRepository = SettingsRepository();
     final appBackupRepository = AppBackupRepository();
+
+    UserDirClientFactory userDirClientFactory =
+        (NodeConfig node, SgtpServerOptions opts) {
+      if (!opts.supports(node.transport, tls: node.useTls)) return null;
+      final port = opts.portFor(node.transport, tls: node.useTls);
+      if (port <= 0) return null;
+      final fakeSni = node.fakeSni.trim().isEmpty ? null : node.fakeSni.trim();
+      final transport = switch (node.transport) {
+        SgtpTransportFamily.tcp => TcpSgtpTransport(
+            host: node.host,
+            port: port,
+            useTls: node.useTls,
+            fakeSni: fakeSni,
+          ),
+        SgtpTransportFamily.websocket => WebSocketSgtpTransport(
+            host: node.host,
+            port: port,
+            useTls: node.useTls,
+            fakeSni: fakeSni,
+          ),
+        SgtpTransportFamily.http => HttpProtocolTransport(
+            host: node.host,
+            port: port,
+            useTls: node.useTls,
+          ),
+      };
+      final label =
+          '${node.transport.name}${node.useTls ? '+tls' : ''}://${node.host}:$port';
+      return UserDirClient(rpc: SgtpRpcClient(transport), label: label);
+    };
+
     final settingsManagementService = SettingsManagementService(
       settingsRepository: settingsRepository,
       appBackupRepository: appBackupRepository,
-      userDirClientFactory: UserDirClient.forNode,
+      userDirClientFactory: userDirClientFactory,
     );
     const chatStorageGateway = DefaultChatStorageGateway();
     final homePersistenceService = HomePersistenceService(
@@ -62,8 +100,7 @@ class AppInjector {
     );
     final homeUserDirSupportService = HomeUserDirSupportService();
 
-    SgtpSessionFactory sgtpSessionFactory = (config) => SgtpClient(config);
-    UserDirClientFactory userDirClientFactory = UserDirClient.forNode;
+    final SgtpSessionFactory sgtpSessionFactory = (config) => SgtpClient(config);
 
     final contactsDirectoryService = ContactsDirectoryService(
       settingsManagementService: settingsManagementService,
