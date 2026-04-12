@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app/app_session_controller.dart';
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
@@ -12,6 +12,8 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
+
+final _log = AppLog('SettingsCubit');
 
 class SettingsCubit extends Cubit<SettingsViewState> {
   SettingsCubit({
@@ -167,7 +169,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     try {
       await _settings.discoverNodeAndCache(node);
     } catch (e) {
-      AppLogger.w('Discovery failed for ${node.name}: $e', tag: 'DISC');
+      _log.warning('Discovery failed for {node}: {error}', parameters: {'node': node.name, 'error': e});
     }
   }
 
@@ -329,7 +331,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     } catch (e) {
       if (saveSeq != _usernameSaveSeq) return;
       _usernameError = 'Failed to update username';
-      AppLogger.w('Failed to save username: $e', tag: 'SETTINGS');
+      _log.warning('Failed to save username: {error}', parameters: {'error': e});
     }
     _buildState();
   }

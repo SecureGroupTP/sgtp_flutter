@@ -9,8 +9,10 @@ import 'package:image/image.dart' as img;
 import 'package:media_kit/media_kit.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metadata.dart';
+
+final _log = AppLog('VideoNotePipeline');
 
 class PreparedVideoNote {
   final XFile xFile;
@@ -31,7 +33,7 @@ class VideoNotePipeline {
   static Future<PreparedVideoNote> prepare({
     required XFile sourceFile,
   }) async {
-    AppLogger.i('Preparing video note from ${sourceFile.path}', tag: 'VIDEO');
+    _log.info('Preparing video note from {path}', parameters: {'path': sourceFile.path});
     if (kIsWeb) {
       throw UnsupportedError('Video note processing is not supported on web.');
     }
@@ -126,10 +128,7 @@ class VideoNotePipeline {
     final info = await _probeWithMediaKit(sourceFile.path);
     final file = File(sourceFile.path);
     final fileSize = await file.length();
-    AppLogger.i(
-      'Using mobile passthrough video note: ${sourceFile.path}, ${info.width}x${info.height}, ${info.durationMs}ms',
-      tag: 'VIDEO',
-    );
+    _log.info('Using mobile passthrough video note: {path}, {width}x{height}, {duration}ms', parameters: {'path': sourceFile.path, 'width': info.width, 'height': info.height, 'duration': info.durationMs});
     return PreparedVideoNote(
       xFile: sourceFile,
       mime: _mimeForPath(sourceFile.path),
@@ -144,10 +143,10 @@ class VideoNotePipeline {
   }
 
   static Future<void> _runDesktopFfmpeg(List<String> arguments) async {
-    AppLogger.d('Desktop ffmpeg: ${arguments.join(' ')}', tag: 'VIDEO');
+    _log.debug('Desktop ffmpeg: {args}', parameters: {'args': arguments.join(' ')});
     final result = await Process.run('ffmpeg', arguments);
     if (result.exitCode != 0) {
-      AppLogger.e('Desktop ffmpeg failed: ${result.stderr}', tag: 'VIDEO');
+      _log.error('Desktop ffmpeg failed: {stderr}', parameters: {'stderr': result.stderr});
       throw StateError('ffmpeg normalize failed: ${result.stderr}');
     }
   }
@@ -175,10 +174,7 @@ class VideoNotePipeline {
         (((hours * 60 + minutes) * 60) + seconds) * 1000 + fractionMs;
     final hasAudio =
         RegExp(r'Stream #.*Audio:', caseSensitive: false).hasMatch(logs);
-    AppLogger.d(
-      'Desktop probe result: duration=${durationMs}ms, hasAudio=$hasAudio',
-      tag: 'VIDEO',
-    );
+    _log.debug('Desktop probe result: duration={duration}ms, hasAudio={hasAudio}', parameters: {'duration': durationMs, 'hasAudio': hasAudio});
     return _MediaProbeResult(durationMs: durationMs, hasAudio: hasAudio);
   }
 
@@ -278,7 +274,7 @@ class VideoNotePipeline {
   static Future<_PassthroughProbeResult> _probeWithMediaKit(String path) async {
     final player = Player();
     try {
-      AppLogger.d('MediaKit probe start: $path', tag: 'VIDEO');
+      _log.debug('MediaKit probe start: {path}', parameters: {'path': path});
       await player.open(Media(Uri.file(path).toString()), play: false);
       final stopwatch = Stopwatch()..start();
       while (stopwatch.elapsed < const Duration(seconds: 3)) {
@@ -302,8 +298,7 @@ class VideoNotePipeline {
           width = player.state.videoParams.dw ?? player.state.width ?? 0;
           height = player.state.videoParams.dh ?? player.state.height ?? 0;
         } catch (e) {
-          AppLogger.w('MediaKit probe play/pause fallback failed: $e',
-              tag: 'VIDEO');
+          _log.warning('MediaKit probe play/pause fallback failed: {error}', parameters: {'error': e});
         }
       }
 
@@ -311,10 +306,7 @@ class VideoNotePipeline {
         width = targetSize;
         height = targetSize;
       }
-      AppLogger.d(
-        'MediaKit probe result: ${player.state.duration.inMilliseconds}ms, ${width}x$height',
-        tag: 'VIDEO',
-      );
+      _log.debug('MediaKit probe result: {duration}ms, {width}x{height}', parameters: {'duration': player.state.duration.inMilliseconds, 'width': width, 'height': height});
       return _PassthroughProbeResult(
         durationMs: player.state.duration.inMilliseconds,
         width: width,

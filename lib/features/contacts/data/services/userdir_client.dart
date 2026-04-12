@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/profile_rpc_models.dart';
@@ -13,8 +13,6 @@ import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 
 export 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
-
-const _tag = 'UDIR';
 
 class UserDirClient implements IUserDirClient {
   final SgtpRpcClient _rpc;
@@ -30,6 +28,8 @@ class UserDirClient implements IUserDirClient {
 
   /// Cache of pending incoming friend requests: senderPubkeyHex → requestId.
   final Map<String, Uint8List> _incomingRequestIds = {};
+
+  final _log = AppLog('UserDirClient');
 
   UserDirClient({required SgtpRpcClient rpc, required this.label}) : _rpc = rpc;
 
@@ -50,7 +50,7 @@ class UserDirClient implements IUserDirClient {
     if (_connected) return;
     await _rpc.transport.connect();
     _connected = true;
-    AppLogger.d('Connected via $label', tag: _tag);
+    _log.debug('Connected via {label}', parameters: {'label': label});
   }
 
   @override
@@ -81,10 +81,10 @@ class UserDirClient implements IUserDirClient {
       );
       final raw = await _rpc.callRpc(req);
       UpdateProfileResponse.fromMap(raw);
-      AppLogger.d('Profile updated for ${_hexShort(pubkey)}', tag: _tag);
+      _log.debug('Profile updated for {pubkey}', parameters: {'pubkey': _hexShort(pubkey)});
       return (ok: true, errorMessage: null);
     } catch (e) {
-      AppLogger.e('registerWithResult failed: $e', tag: _tag);
+      _log.error('registerWithResult failed: {error}', parameters: {'error': e});
       return (ok: false, errorMessage: e.toString());
     }
   }
@@ -97,7 +97,7 @@ class UserDirClient implements IUserDirClient {
       final res = GetProfileResponse.fromMap(raw);
       return _profileToMeta(res.profile);
     } catch (e) {
-      AppLogger.w('getMeta failed for ${_hexShort(pubkey)}: $e', tag: _tag);
+      _log.warning('getMeta failed for {pubkey}: {error}', parameters: {'pubkey': _hexShort(pubkey), 'error': e});
       return null;
     }
   }
@@ -127,7 +127,7 @@ class UserDirClient implements IUserDirClient {
         avatarBytes: avatarBytes,
       );
     } catch (e) {
-      AppLogger.w('getProfile failed for ${_hexShort(pubkey)}: $e', tag: _tag);
+      _log.warning('getProfile failed for {pubkey}: {error}', parameters: {'pubkey': _hexShort(pubkey), 'error': e});
       return null;
     }
   }
@@ -140,7 +140,7 @@ class UserDirClient implements IUserDirClient {
       final res = SearchProfilesResponse.fromMap(raw);
       return res.items.map(_searchItemToMeta).toList();
     } catch (e) {
-      AppLogger.w('search failed for "$query": $e', tag: _tag);
+      _log.warning('search failed for "{query}": {error}', parameters: {'query': query, 'error': e});
       return [];
     }
   }
@@ -154,7 +154,7 @@ class UserDirClient implements IUserDirClient {
       await _rpc.callRpc(req);
       return true;
     } catch (e) {
-      AppLogger.w('subscribe failed: $e', tag: _tag);
+      _log.warning('subscribe failed: {error}', parameters: {'error': e});
       return false;
     }
   }
@@ -172,7 +172,7 @@ class UserDirClient implements IUserDirClient {
       await _rpc.callRpc(req);
       return true;
     } catch (e) {
-      AppLogger.w('sendFriendRequest failed: $e', tag: _tag);
+      _log.warning('sendFriendRequest failed: {error}', parameters: {'error': e});
       return false;
     }
   }
@@ -188,16 +188,13 @@ class UserDirClient implements IUserDirClient {
     var requestId = _incomingRequestIds[requesterHex];
 
     if (requestId == null) {
-      AppLogger.w(
-        'sendFriendResponse: no cached requestId for $requesterHex — syncing',
-        tag: _tag,
-      );
+      _log.warning('sendFriendResponse: no cached requestId for {requester} — syncing', parameters: {'requester': requesterHex});
       await friendSync(myPubkey: myPubkey, identityKeyPair: identityKeyPair);
       requestId = _incomingRequestIds[requesterHex];
     }
 
     if (requestId == null) {
-      AppLogger.e('sendFriendResponse: requestId not found', tag: _tag);
+      _log.error('sendFriendResponse: requestId not found');
       return false;
     }
 
@@ -213,7 +210,7 @@ class UserDirClient implements IUserDirClient {
       }
       return true;
     } catch (e) {
-      AppLogger.w('friendResponse(accept=$accept) failed: $e', tag: _tag);
+      _log.warning('friendResponse(accept={accept}) failed: {error}', parameters: {'accept': accept, 'error': e});
       return false;
     }
   }
@@ -229,7 +226,7 @@ class UserDirClient implements IUserDirClient {
       await _rpc.callRpc(req);
       return true;
     } catch (e) {
-      AppLogger.w('sendFriendDelete failed: $e', tag: _tag);
+      _log.warning('sendFriendDelete failed: {error}', parameters: {'error': e});
       return false;
     }
   }
@@ -284,7 +281,7 @@ class UserDirClient implements IUserDirClient {
 
       return states.values.toList();
     } catch (e) {
-      AppLogger.w('friendSync failed: $e', tag: _tag);
+      _log.warning('friendSync failed: {error}', parameters: {'error': e});
       return null;
     }
   }

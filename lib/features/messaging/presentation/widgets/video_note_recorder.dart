@@ -11,7 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sgtp_camera/sgtp_camera.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 
@@ -46,6 +46,7 @@ class VideoNoteRecorderPage extends StatefulWidget {
 
 class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     with WidgetsBindingObserver {
+  final _log = AppLog('VideoNoteRecorder');
   static const _maxDuration = Duration(seconds: 60);
   static const _minDuration = Duration(milliseconds: 400);
 
@@ -117,7 +118,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     try {
       SgtpCamera.close();
       final cameras = SgtpCamera.enumerate();
-      AppLogger.i('Desktop cameras: ${cameras.length}', tag: 'VIDEO');
+      _log.info('Desktop cameras: {count}', parameters: {'count': cameras.length});
       if (cameras.isEmpty) {
         setState(() { _initializing = false; _error = 'No cameras found'; });
         return;
@@ -144,7 +145,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       if (!mounted) { SgtpCamera.close(); return; }
       setState(() { _initializing = false; });
     } catch (e) {
-      AppLogger.e('Desktop camera init failed: $e', tag: 'VIDEO');
+      _log.error('Desktop camera init failed: {error}', parameters: {'error': e});
       if (!mounted) return;
       setState(() { _initializing = false; _error = 'Failed to open camera: $e'; });
     }
@@ -195,7 +196,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         _initializing = false;
       });
     } catch (e) {
-      AppLogger.e('Mobile camera init failed: $e', tag: 'VIDEO');
+      _log.error('Mobile camera init failed: {error}', parameters: {'error': e});
       if (!mounted) return;
       setState(() { _initializing = false; _error = 'Failed to open camera: $e'; });
     }
@@ -265,7 +266,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       });
       setState(() { _isRecording = true; _elapsed = Duration.zero; });
     } catch (e) {
-      AppLogger.e('Start recording failed: $e', tag: 'VIDEO');
+      _log.error('Start recording failed: {error}', parameters: {'error': e});
       _showSnack('Failed to start recording: $e');
     }
   }
@@ -289,7 +290,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
         await _stopMobile(elapsed);
       }
     } catch (e) {
-      AppLogger.e('Recorder finalize failed: $e', tag: 'VIDEO');
+      _log.error('Recorder finalize failed: {error}', parameters: {'error': e});
       if (!mounted) return;
       setState(() { _isProcessing = false; _isRecording = false; });
       _showSnack('Failed to finalize video note: $e');
@@ -315,8 +316,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     final fileSize = await file.length();
     final actualDurationMs = durationMs > 0 ? durationMs : elapsed.inMilliseconds;
 
-    AppLogger.i('Desktop recording done: $path, ${actualDurationMs}ms, ${fileSize}B',
-        tag: 'VIDEO');
+    _log.info('Desktop recording done: {path}, {duration}ms, {size}B', parameters: {'path': path, 'duration': actualDurationMs, 'size': fileSize});
 
     if (!mounted) return;
     setState(() => _isProcessing = false);
@@ -338,7 +338,7 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     if (ctrl == null) return;
 
     final recorded = await ctrl.stopVideoRecording();
-    AppLogger.i('Mobile recording done: ${recorded.path}', tag: 'VIDEO');
+    _log.info('Mobile recording done: {path}', parameters: {'path': recorded.path});
 
     if (elapsed < _minDuration) {
       await _deleteFile(recorded.path);

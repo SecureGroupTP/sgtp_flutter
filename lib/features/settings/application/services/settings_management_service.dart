@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/crypto/ed25519_utils.dart';
 import 'package:sgtp_flutter/core/openssh_parser.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
@@ -18,6 +18,8 @@ import 'package:sgtp_flutter/features/setup/data/repositories/settings_repositor
 import 'package:sgtp_flutter/features/settings/application/models/settings_management_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
+
+final _log = AppLog('SettingsManagementService');
 
 class SettingsManagementService {
   SettingsManagementService({
@@ -576,19 +578,15 @@ class SettingsManagementService {
       if (opts.websocket) 'WebSocket:${opts.websocketPort}',
       if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
     ];
-    AppLogger.i(
-      'Discovery [${node.name}] ${node.host} via ${tls ? 'https' : 'http'}:$port: ${labels.join(", ")}',
-      tag: 'DISC',
-    );
+    _log.info('Discovery [{nodeName}] {host} via {scheme}:{port}: {labels}', parameters: {'nodeName': node.name, 'host': node.host, 'scheme': tls ? 'https' : 'http', 'port': port, 'labels': labels.join(', ')});
   }
 
   Future<void> logCachedDiscovery(List<NodeConfig> nodes) async {
     if (nodes.isEmpty) {
-      AppLogger.i('Discovery: no accounts configured', tag: 'DISC');
+      _log.info('Discovery: no accounts configured');
       return;
     }
-    AppLogger.i('Discovery cache is disabled; using live discovery',
-        tag: 'DISC');
+    _log.info('Discovery cache is disabled; using live discovery');
   }
 
   String normalizeNodeHost(String raw) => raw
@@ -620,10 +618,7 @@ class SettingsManagementService {
       if (opts.websocket) 'WebSocket:${opts.websocketPort}',
       if (opts.websocketTls) 'WebSocket+TLS:${opts.websocketTlsPort}',
     ];
-    AppLogger.i(
-      'Discovery [$nodeId] $normalizedHost via ${tls ? 'https' : 'http'}:$port: ${labels.join(", ")}',
-      tag: 'DISC',
-    );
+    _log.info('Discovery [{nodeId}] {host} via {scheme}:{port}: {labels}', parameters: {'nodeId': nodeId, 'host': normalizedHost, 'scheme': tls ? 'https' : 'http', 'port': port, 'labels': labels.join(', ')});
     return SettingsNodeServerOptionsState(options: opts, savedAt: savedAt);
   }
 

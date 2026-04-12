@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
+
+final _log = AppLog('WindowSizeService');
 
 /// Saves and restores desktop window size between launches.
 /// Uses window_manager package (Windows / macOS / Linux only).
@@ -30,17 +32,9 @@ class WindowSizeService {
       await windowManager.show();
       await windowManager.focus();
 
-      AppLogger.i(
-        '[Window] Restored size: ${size.width.toInt()}x${size.height.toInt()}',
-        tag: 'WINDOW',
-        source: 'WindowSizeService',
-      );
+      _log.info('[Window] Restored size: {width}x{height}', parameters: {'width': size.width.toInt(), 'height': size.height.toInt()});
     } catch (e) {
-      AppLogger.w(
-        '[Window] restoreSize error: $e',
-        tag: 'WINDOW',
-        source: 'WindowSizeService',
-      );
+      _log.warning('[Window] restoreSize error: {error}', parameters: {'error': e});
     }
   }
 
@@ -51,11 +45,7 @@ class WindowSizeService {
       final size = await windowManager.getSize();
       await _saveSize(size);
     } catch (e) {
-      AppLogger.w(
-        '[Window] saveCurrentSize error: $e',
-        tag: 'WINDOW',
-        source: 'WindowSizeService',
-      );
+      _log.warning('[Window] saveCurrentSize error: {error}', parameters: {'error': e});
     }
   }
 
@@ -92,11 +82,7 @@ class WindowSizeService {
         'height': size.height.toInt(),
         'savedAt': DateTime.now().toIso8601String(),
       }));
-      AppLogger.d(
-        '[Window] Saved: ${size.width.toInt()}x${size.height.toInt()}',
-        tag: 'WINDOW',
-        source: 'WindowSizeService',
-      );
+      _log.debug('[Window] Saved: {width}x{height}', parameters: {'width': size.width.toInt(), 'height': size.height.toInt()});
     } catch (_) {}
   }
 }

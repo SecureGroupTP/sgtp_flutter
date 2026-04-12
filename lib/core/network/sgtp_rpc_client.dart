@@ -6,13 +6,13 @@ import 'dart:typed_data';
 import 'package:cbor/cbor.dart';
 import 'package:cryptography/cryptography.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 
-const _tag = 'RPC';
+final _log = AppLog('SgtpRpcClient');
 
 /// CBOR-RPC caller that sits on top of [IProtocolTransport].
 ///
@@ -79,10 +79,10 @@ class SgtpRpcClient {
       _keyPair = keyPair;
       _authenticated = true;
       _flushQueue();
-      AppLogger.d('Authenticated as ${_hexShort(publicKey)}', tag: _tag);
+      _log.debug('Authenticated as {pubkey}', parameters: {'pubkey': _hexShort(publicKey)});
       return null;
     } catch (e, st) {
-      AppLogger.e('authenticate failed: $e\n$st', tag: _tag);
+      _log.error('authenticate failed: {error}', parameters: {'error': e}, error: e, stackTrace: st);
       return 'Authentication failed: $e';
     }
   }
@@ -124,7 +124,7 @@ class SgtpRpcClient {
     if (request.requiresAuth && !_authenticated) {
       final completer = Completer<Map<String, dynamic>>();
       _queue.add(_QueuedCall(request, completer));
-      AppLogger.d('queued ${request.method} (waiting for auth)', tag: _tag);
+      _log.debug('queued {method} (waiting for auth)', parameters: {'method': request.method});
       return completer.future;
     }
     return _sendRpc(request);
@@ -218,7 +218,7 @@ class SgtpRpcClient {
       _ => null,
     };
     if (replyIdBytes == null) {
-      AppLogger.w('replyToRequestId has unexpected type: ${replyToIdValue.runtimeType}', tag: _tag);
+      _log.warning('replyToRequestId has unexpected type: {type}', parameters: {'type': replyToIdValue.runtimeType});
       return;
     }
     final replyIdHex =
@@ -226,7 +226,7 @@ class SgtpRpcClient {
 
     final completer = _pending.remove(replyIdHex);
     if (completer == null) {
-      AppLogger.w('no pending call for replyId=$replyIdHex', tag: _tag);
+      _log.warning('no pending call for replyId={replyId}', parameters: {'replyId': replyIdHex});
       return;
     }
 
@@ -263,7 +263,7 @@ class SgtpRpcClient {
     } catch (_) {
       decoded = '<parse error>';
     }
-    AppLogger.d('$dir raw $decoded\n  cbor=$b64', tag: _tag);
+    _log.debug('{dir} raw {decoded}\n  cbor={cbor}', parameters: {'dir': dir, 'decoded': decoded, 'cbor': b64});
   }
 
   /// Logs a full CBOR packet (request or response) as JSON + raw base64.
@@ -275,10 +275,7 @@ class SgtpRpcClient {
         ? '$dir [${idHex.substring(0, idHex.length >= 8 ? 8 : idHex.length)}]'
         : dir;
     final b64 = base64.encode(rawBytes);
-    AppLogger.d(
-      '$label ${_jsonEncode(_cborToJsonLog(packet))}\n  cbor=$b64',
-      tag: _tag,
-    );
+    _log.debug('{label} {json}\n  cbor={cbor}', parameters: {'label': label, 'json': _jsonEncode(_cborToJsonLog(packet)), 'cbor': b64});
   }
 
   /// Recursively converts a [CborValue] to a JSON-encodable value.

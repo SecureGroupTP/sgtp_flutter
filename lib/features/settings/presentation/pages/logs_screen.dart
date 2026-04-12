@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/logs_cubit.dart';
@@ -12,10 +11,10 @@ import 'package:sgtp_flutter/features/settings/application/viewmodels/logs_view_
 ///
 /// Features:
 ///   • Live-updating list (new entries appear without reopening the screen).
-///   • Level badge colour coding: DEBUG=grey, INFO=blue, WARN=orange, ERROR=red.
-///   • Filter bar — filter by level or free-text search.
-///   • "Copy all" button copies the full log text to the clipboard.
-///   • "Clear" button wipes the ring buffer.
+///   • Level badge colour coding: DEBUG=grey, INFO=blue, WARNING=orange, ERROR=red.
+///   • Filter bar — filter by level, logger name, time range, or free-text search.
+///   • "Copy visible" / "Copy all" buttons copy log text to the clipboard.
+///   • "Clear" button wipes the log file and in-memory buffer.
 ///   • Auto-scrolls to the newest entry when already at the bottom.
 class LogsScreen extends StatefulWidget {
   const LogsScreen({super.key});
@@ -25,11 +24,7 @@ class LogsScreen extends StatefulWidget {
 }
 
 class _LogsScreenState extends State<LogsScreen> {
-  static const String _allDirectionValue = '__all_directions__';
-  static const String _directionInValue = '__inbound__';
-  static const String _directionOutValue = '__outbound__';
-  static const String _allTagsValue = '__all_tags__';
-  static const String _allPacketTypesValue = '__all_packet_types__';
+  static const String _allNamesValue = '__all_names__';
 
   final ScrollController _scrollCtrl = ScrollController();
   final TextEditingController _searchCtrl = TextEditingController();
@@ -52,7 +47,7 @@ class _LogsScreenState extends State<LogsScreen> {
   Color _levelColor(LogLevel l) => switch (l) {
         LogLevel.debug => const Color(0xFF636366),
         LogLevel.info => const Color(0xFF0A84FF),
-        LogLevel.warn => const Color(0xFFFF9F0A),
+        LogLevel.warning => const Color(0xFFFF9F0A),
         LogLevel.error => const Color(0xFFFF3B30),
       };
 
@@ -141,7 +136,7 @@ class _LogsScreenState extends State<LogsScreen> {
                     ],
                   ),
                 ),
-                // Copy all
+                // Copy visible
                 IconButton(
                   icon: const Icon(Icons.content_copy_outlined,
                       color: AppColors.textSecondary),
@@ -154,23 +149,6 @@ class _LogsScreenState extends State<LogsScreen> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Visible logs copied'),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.copy_all_outlined,
-                      color: AppColors.textSecondary),
-                  tooltip: 'Copy all logs',
-                  onPressed: total == 0
-                      ? null
-                      : () {
-                          Clipboard.setData(
-                              ClipboardData(text: cubit.fullLogText));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Logs copied to clipboard'),
                               behavior: SnackBarBehavior.floating,
                             ),
                           );
@@ -202,8 +180,8 @@ class _LogsScreenState extends State<LogsScreen> {
                           final ok = await showAppConfirmSheet(
                             context,
                             title: 'Clear logs?',
-                            body: 'All in-memory log entries will be deleted. '
-                                'This cannot be undone.',
+                            body: 'All log entries will be deleted from memory '
+                                'and the log file.',
                             confirmLabel: 'Clear',
                             danger: true,
                           );
@@ -229,6 +207,7 @@ class _LogsScreenState extends State<LogsScreen> {
             spacing: 6,
             runSpacing: 6,
             children: [
+              // Level filter
               for (final level in [null, ...LogLevel.values])
                 _LevelChip(
                   label: level == null ? 'All' : level.name.toUpperCase(),
@@ -238,46 +217,28 @@ class _LogsScreenState extends State<LogsScreen> {
                   selected: state.filterLevel == level,
                   onTap: () => cubit.setFilterLevel(level),
                 ),
-              _ToggleChip(
-                label: 'Packets',
-                selected: state.packetsOnly,
-                onTap: () => cubit.setPacketsOnly(!state.packetsOnly),
-              ),
-              _ToggleChip(
-                label: 'Issues',
-                selected: state.issuesOnly,
-                onTap: () => cubit.setIssuesOnly(!state.issuesOnly),
-              ),
+              // Name (logger class) filter
               _PopupFilterChip<String>(
-                label: state.filterDirection == null
-                    ? 'Direction: All'
-                    : 'Direction: ${state.filterDirection!.label}',
-                selected: state.filterDirection != null,
+                label: state.filterName == null
+                    ? 'Logger: All'
+                    : 'Logger: ${state.filterName}',
+                selected: state.filterName != null,
                 items: [
                   const PopupMenuItem<String>(
-                    value: _allDirectionValue,
-                    child: Text('All directions'),
+                    value: _allNamesValue,
+                    child: Text('All loggers'),
                   ),
-                  const PopupMenuItem<String>(
-                    value: _directionInValue,
-                    child: Text('IN'),
-                  ),
-                  const PopupMenuItem<String>(
-                    value: _directionOutValue,
-                    child: Text('OUT'),
-                  ),
+                  for (final name in state.availableNames)
+                    PopupMenuItem<String>(
+                      value: name,
+                      child: Text(name),
+                    ),
                 ],
                 onSelected: (value) {
-                  switch (value) {
-                    case _directionInValue:
-                      cubit.setDirection(PacketDirection.inbound);
-                    case _directionOutValue:
-                      cubit.setDirection(PacketDirection.outbound);
-                    default:
-                      cubit.setDirection(null);
-                  }
+                  cubit.setFilterName(value == _allNamesValue ? null : value);
                 },
               ),
+              // Time range filter
               _PopupFilterChip<LogsTimeRange>(
                 label: 'Time: ${state.timeRange.label}',
                 selected: state.timeRange != LogsTimeRange.all,
@@ -289,48 +250,6 @@ class _LogsScreenState extends State<LogsScreen> {
                     ),
                 ],
                 onSelected: cubit.setTimeRange,
-              ),
-              _PopupFilterChip<String>(
-                label: state.filterTag == null
-                    ? 'Tag: All'
-                    : 'Tag: ${state.filterTag}',
-                selected: state.filterTag != null,
-                items: [
-                  const PopupMenuItem<String>(
-                    value: _allTagsValue,
-                    child: Text('All tags'),
-                  ),
-                  for (final tag in state.availableTags)
-                    PopupMenuItem<String>(
-                      value: tag,
-                      child: Text(tag),
-                    ),
-                ],
-                onSelected: (value) {
-                  cubit.setTag(value == _allTagsValue ? null : value);
-                },
-              ),
-              _PopupFilterChip<String>(
-                label: state.filterPacketType == null
-                    ? 'Type: All'
-                    : 'Type: ${state.filterPacketType}',
-                selected: state.filterPacketType != null,
-                items: [
-                  const PopupMenuItem<String>(
-                    value: _allPacketTypesValue,
-                    child: Text('All packet types'),
-                  ),
-                  for (final packetType in state.availablePacketTypes)
-                    PopupMenuItem<String>(
-                      value: packetType,
-                      child: Text(packetType),
-                    ),
-                ],
-                onSelected: (value) {
-                  cubit.setPacketType(
-                    value == _allPacketTypesValue ? null : value,
-                  );
-                },
               ),
               _ActionChip(
                 label: 'Reset',
@@ -357,7 +276,7 @@ class _LogsScreenState extends State<LogsScreen> {
                 style:
                     const TextStyle(fontSize: 13, color: AppColors.textPrimary),
                 decoration: InputDecoration(
-                  hintText: 'Search message, tag, source, packet type/code…',
+                  hintText: 'Search message or logger name…',
                   hintStyle: const TextStyle(
                       fontSize: 13, color: AppColors.textSecondary),
                   border: InputBorder.none,
@@ -407,7 +326,7 @@ class _LogsScreenState extends State<LogsScreen> {
       itemCount: entries.length,
       itemBuilder: (_, i) => _LogRow(
         key: ValueKey(
-          '${entries[i].time.microsecondsSinceEpoch}-${entries[i].level.index}-${entries[i].tag}-${entries[i].message.hashCode}',
+          '${entries[i].time.microsecondsSinceEpoch}-${entries[i].level.index}-${entries[i].name}-${entries[i].message.hashCode}',
         ),
         entry: entries[i],
       ),
@@ -454,29 +373,6 @@ class _LevelChip extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _ToggleChip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ToggleChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = selected ? const Color(0xFF30D158) : const Color(0xFF8E8E93);
-    return _LevelChip(
-      label: label,
-      color: color,
-      selected: selected,
-      onTap: onTap,
     );
   }
 }
@@ -589,7 +485,7 @@ class _LogRow extends StatefulWidget {
 }
 
 class _LogRowState extends State<_LogRow> {
-  static const int _previewLength = 100;
+  static const int _previewLength = 120;
 
   bool _expanded = false;
 
@@ -598,26 +494,26 @@ class _LogRowState extends State<_LogRow> {
   Color get _levelColor => switch (entry.level) {
         LogLevel.debug => const Color(0xFF636366),
         LogLevel.info => const Color(0xFF0A84FF),
-        LogLevel.warn => const Color(0xFFFF9F0A),
+        LogLevel.warning => const Color(0xFFFF9F0A),
         LogLevel.error => const Color(0xFFFF3B30),
       };
 
   Color get _rowBg => switch (entry.level) {
         LogLevel.error => const Color(0x12FF3B30),
-        LogLevel.warn => const Color(0x10FF9F0A),
+        LogLevel.warning => const Color(0x10FF9F0A),
         _ => Colors.transparent,
       };
 
   bool get _canExpand {
     final compact = entry.message.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return compact.length > _previewLength || entry.message.contains('\n');
+    return compact.length > _previewLength ||
+        entry.message.contains('\n') ||
+        entry.error != null;
   }
 
   String get _collapsedMessage {
     final compact = entry.message.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (compact.length <= _previewLength) {
-      return compact;
-    }
+    if (compact.length <= _previewLength) return compact;
     return '${compact.substring(0, _previewLength)}…';
   }
 
@@ -656,11 +552,8 @@ class _LogRowState extends State<_LogRow> {
               const SizedBox(width: 8),
               // Level badge
               Container(
-                width: 40,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 3,
-                  vertical: 1,
-                ),
+                width: 44,
+                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
                 decoration: BoxDecoration(
                   color: _levelColor.withAlpha(30),
                   borderRadius: BorderRadius.circular(4),
@@ -677,57 +570,43 @@ class _LogRowState extends State<_LogRow> {
                 ),
               ),
               const SizedBox(width: 8),
-              // Message
+              // Message + name badge
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Wrap(
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: [
-                        _MetaBadge(label: entry.tag, color: _levelColor),
-                        if ((entry.source ?? '').trim().isNotEmpty)
-                          _MetaBadge(
-                            label: entry.source!.trim(),
-                            color: const Color(0xFF5AC8FA),
-                          ),
-                        if ((entry.packetTypeName ?? '').trim().isNotEmpty)
-                          _MetaBadge(
-                            label:
-                                '${entry.packetTypeName}${entry.packetTypeCode == null ? '' : ' ${entry.packetTypeCode}'}',
-                            color: const Color(0xFFBF5AF2),
-                          ),
-                        if (entry.packetDirection != PacketDirection.none)
-                          _MetaBadge(
-                            label: entry.packetDirection.label,
-                            color: const Color(0xFF30D158),
-                          ),
-                        if (entry.packetDropped || entry.packetError)
-                          _MetaBadge(
-                            label: entry.packetDropped ? 'DROPPED' : 'PKT_ERR',
-                            color: const Color(0xFFFF453A),
-                          ),
-                      ],
-                    ),
+                    _MetaBadge(label: entry.name, color: _levelColor),
                     const SizedBox(height: 2),
                     Text(
                       _expanded ? entry.message : _collapsedMessage,
                       maxLines: _expanded ? null : 1,
                       style: TextStyle(
-                        fontFamily: entry.level == LogLevel.error ||
-                                entry.level == LogLevel.warn
-                            ? null
-                            : 'monospace',
+                        fontFamily:
+                            entry.level == LogLevel.error ||
+                                    entry.level == LogLevel.warning
+                                ? null
+                                : 'monospace',
                         fontSize: 12,
                         color: entry.level == LogLevel.error
                             ? const Color(0xFFFF6B63)
-                            : entry.level == LogLevel.warn
+                            : entry.level == LogLevel.warning
                                 ? const Color(0xFFFFBF3B)
                                 : const Color(0xFFF5F5F5),
                         height: 1.4,
                       ),
                     ),
+                    if (_expanded && entry.error != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        entry.error!,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Color(0xFFFF6B63),
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -754,10 +633,7 @@ class _MetaBadge extends StatelessWidget {
   final String label;
   final Color color;
 
-  const _MetaBadge({
-    required this.label,
-    required this.color,
-  });
+  const _MetaBadge({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {

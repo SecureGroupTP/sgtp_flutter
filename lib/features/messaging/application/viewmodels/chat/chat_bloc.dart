@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
@@ -13,6 +13,8 @@ import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
 class ChatBloc extends Bloc<ChatEvent, ChatState> {
+  final _log = AppLog('ChatBloc');
+  final _logVideo = AppLog('VideoNote');
   ISgtpSession? _client;
   StreamSubscription<SgtpEvent>? _eventSub;
   late final SgtpSessionFactory _sessionFactory;
@@ -106,11 +108,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         chatName = saved.name;
         chatAvatar = saved.avatarBytes;
         isDirectChat = saved.isDirectMessage;
-        AppLogger.i(
-          '[ChatBloc] OpenOffline room=$roomUUIDHex direct=$isDirectChat '
-          'name="$chatName" avatar=${chatAvatar?.length ?? 0}B',
-          tag: 'DM',
-        );
+        _log.info('[ChatBloc] OpenOffline room={room} direct={direct} name="{name}" avatar={avatarSize}B', parameters: {'room': roomUUIDHex, 'direct': isDirectChat, 'name': chatName, 'avatarSize': chatAvatar?.length ?? 0});
       }
     } catch (_) {}
 
@@ -210,12 +208,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           if (saved.serverAddress.trim().isNotEmpty) {
             _activeServerAddress = saved.serverAddress.trim();
           }
-          AppLogger.i(
-            '[ChatBloc] Pre-loaded metadata room=$roomUUIDHex '
-            'direct=$isDirectChat name="${saved.name}" '
-            'avatar=${saved.avatarBytes?.length ?? 0}B',
-            tag: 'DM',
-          );
+          _log.info('[ChatBloc] Pre-loaded metadata room={room} direct={direct} name="{name}" avatar={avatarSize}B', parameters: {'room': roomUUIDHex, 'direct': isDirectChat, 'name': saved.name, 'avatarSize': saved.avatarBytes?.length ?? 0});
         }
       } catch (_) {}
     }
@@ -449,10 +442,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       ChatSendVideoNoteFile event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
     try {
-      AppLogger.i(
-        '[ChatBloc] Video note send start: ${event.xFile.path}',
-        tag: 'VIDEO',
-      );
+      _logVideo.info('[ChatBloc] Video note send start: ${event.xFile.path}');
       final prepared = event.metadata != null
           ? PreparedVideoNote(
               xFile: event.xFile,
@@ -460,21 +450,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
               metadata: event.metadata!,
             )
           : await VideoNotePipeline.prepare(sourceFile: event.xFile);
-      AppLogger.i(
-        '[ChatBloc] Video note prepared: mime=${prepared.mime}, '
-        '${prepared.metadata.width}x${prepared.metadata.height}, '
-        'duration=${prepared.metadata.durationMs}ms',
-        tag: 'VIDEO',
-      );
+      _logVideo.info('[ChatBloc] Video note prepared: mime=${prepared.mime}, '
+          '${prepared.metadata.width}x${prepared.metadata.height}, '
+          'duration=${prepared.metadata.durationMs}ms');
       await _client!.sendVideoNoteFromXFile(
         prepared.xFile,
         prepared.mime,
         metadata: prepared.metadata,
       );
-      AppLogger.i('[ChatBloc] Video note send handed to client', tag: 'VIDEO');
+      _logVideo.info('[ChatBloc] Video note send handed to client');
       await _touchChatActivity();
     } catch (e) {
-      AppLogger.e('[ChatBloc] Video note send failed: $e', tag: 'VIDEO');
+      _logVideo.error('[ChatBloc] Video note send failed: $e');
       rethrow;
     }
   }
@@ -555,9 +542,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         updatedAt: now,
       );
       await _metaRepo.saveChat(meta);
-      AppLogger.i('[ChatBloc] Saved metadata for $roomUUID: "$name"');
+      _log.info('[ChatBloc] Saved metadata for {room}: "{name}"', parameters: {'room': roomUUID, 'name': name});
     } catch (e) {
-      AppLogger.i('[ChatBloc] Failed to save metadata: $e');
+      _log.info('[ChatBloc] Failed to save metadata: {error}', parameters: {'error': e});
     }
   }
 
@@ -592,7 +579,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       await _metaRepo.saveChat(metadata);
       _lastActivityPersistAt = now;
     } catch (e) {
-      AppLogger.i('[ChatBloc] Failed to persist chat activity: $e');
+      _log.info('[ChatBloc] Failed to persist chat activity: {error}', parameters: {'error': e});
     }
   }
 
@@ -762,8 +749,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (_lastConnectEvent != null && _client != null) {
           Future.delayed(const Duration(seconds: 3), () {
             if (!isClosed && state.status == ChatStatus.disconnected) {
-              AppLogger.i(
-                  '[ChatBloc] Auto-reconnecting after unexpected disconnect');
+              _log.info('[ChatBloc] Auto-reconnecting after unexpected disconnect');
               add(const ChatReconnect());
             }
           });
@@ -782,8 +768,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             isDirect && directDisplay != null ? directDisplay.name : chatName;
         final effectiveAvatar =
             isDirect && directDisplay != null ? directDisplay.avatar : avatarBytes;
-        AppLogger.i(
-            '[ChatBloc] Got metadata from $senderUUID: "$chatName" -> "$effectiveName"');
+        _log.info('[ChatBloc] Got metadata from {sender}: "{chatName}" -> "{effectiveName}"', parameters: {'sender': senderUUID, 'chatName': chatName, 'effectiveName': effectiveName});
         emit(state.copyWith(
           chatName: effectiveName,
           chatAvatarBytes: effectiveAvatar,

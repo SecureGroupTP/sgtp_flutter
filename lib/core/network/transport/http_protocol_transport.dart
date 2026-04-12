@@ -4,10 +4,10 @@ import 'dart:typed_data';
 
 import 'package:http2/http2.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 
-const _tag = 'H2';
+final _log = AppLog('HttpProtocolTransport');
 
 /// HTTP/2 persistent transport for CBOR-RPC.
 ///
@@ -55,10 +55,7 @@ class HttpProtocolTransport implements IProtocolTransport {
         port,
         supportedProtocols: ['h2'],
         onBadCertificate: (cert) {
-          AppLogger.e(
-            'TLS cert rejected: subject="${cert.subject}"',
-            tag: _tag,
-          );
+          _log.error('TLS cert rejected: subject="{subject}"', parameters: {'subject': cert.subject});
           return false;
         },
       );
@@ -72,7 +69,7 @@ class HttpProtocolTransport implements IProtocolTransport {
       settings: const ClientSettings(allowServerPushes: true),
     );
 
-    AppLogger.d('HTTP/2 connected to $host:$port (tls=$useTls)', tag: _tag);
+    _log.debug('HTTP/2 connected to {host}:{port} (tls={useTls})', parameters: {'host': host, 'port': port, 'useTls': useTls});
   }
 
   @override
@@ -95,7 +92,7 @@ class HttpProtocolTransport implements IProtocolTransport {
     // Handle server pushes on this request stream.
     stream.peerPushes.listen(
       (push) => _drainPushedStream(push.stream),
-      onError: (e) => AppLogger.w('H2 server push error: $e', tag: _tag),
+      onError: (e) => _log.warning('H2 server push error: {error}', parameters: {'error': e}),
     );
 
     stream.sendData(bytes, endStream: true);
@@ -121,7 +118,7 @@ class HttpProtocolTransport implements IProtocolTransport {
           if (msg.endStream) _deliver(Uint8List.fromList(buf));
         }
       },
-      onError: (e) => AppLogger.w('H2 push data error: $e', tag: _tag),
+      onError: (e) => _log.warning('H2 push data error: {error}', parameters: {'error': e}),
     );
   }
 

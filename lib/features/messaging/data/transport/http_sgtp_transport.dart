@@ -4,11 +4,11 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/http_client_factory.dart';
 
-const _tag = 'HTTP';
+final _log = AppLog('HttpSgtpTransport');
 
 class HttpSgtpTransport implements IProtocolTransport {
   final String host;
@@ -64,10 +64,7 @@ class HttpSgtpTransport implements IProtocolTransport {
   Future<void> connect() async {
     if (_sidHex != null) return;
     final tlsSni = (fakeSni ?? '').trim();
-    AppLogger.d(
-      'Connecting HTTP to $host:$port (tls=$useTls, sni=${tlsSni.isEmpty ? host : tlsSni})',
-      tag: _tag,
-    );
+    _log.debug('Connecting HTTP to {host}:{port} (tls={useTls}, sni={sni})', parameters: {'host': host, 'port': port, 'useTls': useTls, 'sni': tlsSni.isEmpty ? host : tlsSni});
     final sid = await _createSession();
     _sidHex = sid;
     _recvLoop = _startRecvLoop();

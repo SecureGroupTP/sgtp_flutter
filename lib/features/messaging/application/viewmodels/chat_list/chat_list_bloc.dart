@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
@@ -12,6 +12,7 @@ part 'chat_list_state.dart';
 
 /// BLoC для управления списком сохраненных чатов и их метаданными
 class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
+  final _log = AppLog('ChatListBloc');
   final ChatMetadataStore _repository;
 
   ChatListBloc({required ChatMetadataStore repository})
@@ -36,22 +37,14 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
 
     try {
       final chats = await _repository.loadAllChats();
-      AppLogger.i(
-        '[ChatListBloc] Loaded ${chats.length} chats',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.info('[ChatListBloc] Loaded {count} chats', parameters: {'count': chats.length});
 
       emit(state.copyWith(
         status: ChatListStatus.loaded,
         chats: chats,
       ));
     } catch (e) {
-      AppLogger.e(
-        '[ChatListBloc] Error loading chats: $e',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.error('[ChatListBloc] Error loading chats: {error}', parameters: {'error': e});
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to load chats: $e',
@@ -78,11 +71,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       );
 
       await _repository.saveChat(newChat);
-      AppLogger.i(
-        '[ChatListBloc] Created chat: $uuid',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.info('[ChatListBloc] Created chat: {uuid}', parameters: {'uuid': uuid});
 
       final updatedChats = [newChat, ...state.chats];
       emit(state.copyWith(
@@ -91,11 +80,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
         selectedChat: newChat,
       ));
     } catch (e) {
-      AppLogger.e(
-        '[ChatListBloc] Error creating chat: $e',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.error('[ChatListBloc] Error creating chat: {error}', parameters: {'error': e});
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to create chat: $e',
@@ -123,11 +108,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
       );
 
       await _repository.updateChat(updated);
-      AppLogger.i(
-        '[ChatListBloc] Updated chat: ${event.uuid}',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.info('[ChatListBloc] Updated chat: {uuid}', parameters: {'uuid': event.uuid});
 
       // Update in list
       final updatedChats =
@@ -144,11 +125,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
             : state.selectedChat,
       ));
     } catch (e) {
-      AppLogger.e(
-        '[ChatListBloc] Error updating chat: $e',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.error('[ChatListBloc] Error updating chat: {error}', parameters: {'error': e});
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to update chat: $e',
@@ -163,11 +140,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
   ) async {
     try {
       await _repository.deleteChat(event.uuid);
-      AppLogger.i(
-        '[ChatListBloc] Deleted chat: ${event.uuid}',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.info('[ChatListBloc] Deleted chat: {uuid}', parameters: {'uuid': event.uuid});
 
       final updatedChats =
           state.chats.where((c) => c.uuid != event.uuid).toList();
@@ -179,11 +152,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
             state.selectedChat?.uuid == event.uuid ? null : state.selectedChat,
       ));
     } catch (e) {
-      AppLogger.e(
-        '[ChatListBloc] Error deleting chat: $e',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.error('[ChatListBloc] Error deleting chat: {error}', parameters: {'error': e});
       emit(state.copyWith(
         status: ChatListStatus.error,
         errorMessage: 'Failed to delete chat: $e',
@@ -202,17 +171,9 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
         status: ChatListStatus.loaded,
         chats: chats,
       ));
-      AppLogger.i(
-        '[ChatListBloc] Refreshed chat list',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.info('[ChatListBloc] Refreshed chat list');
     } catch (e) {
-      AppLogger.e(
-        '[ChatListBloc] Error refreshing: $e',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.error('[ChatListBloc] Error refreshing: {error}', parameters: {'error': e});
     }
   }
 
@@ -222,11 +183,7 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
     Emitter<ChatListState> emit,
   ) async {
     emit(state.copyWith(selectedChat: event.chat));
-    AppLogger.d(
-      '[ChatListBloc] Selected chat: ${event.chat.uuid}',
-      tag: 'CHATLIST',
-      source: 'ChatListBloc',
-    );
+    _log.debug('[ChatListBloc] Selected chat: {uuid}', parameters: {'uuid': event.chat.uuid});
   }
 
   /// Update window size (desktop only)
@@ -259,17 +216,9 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
             : state.selectedChat,
       ));
 
-      AppLogger.i(
-        '[ChatListBloc] Updated window size for ${event.chatUUID}',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.info('[ChatListBloc] Updated window size for {uuid}', parameters: {'uuid': event.chatUUID});
     } catch (e) {
-      AppLogger.e(
-        '[ChatListBloc] Error updating window size: $e',
-        tag: 'CHATLIST',
-        source: 'ChatListBloc',
-      );
+      _log.error('[ChatListBloc] Error updating window size: {error}', parameters: {'error': e});
     }
   }
 
@@ -280,14 +229,6 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
   ) async {
     // This updates local metadata based on what other peers sent
     // Usually you'd merge or ask user to confirm
-    AppLogger.i(
-      '[ChatListBloc] Received metadata from ${event.senderUUID}',
-      tag: 'CHATLIST',
-      source: 'ChatListBloc',
-      attributes: {
-        'chatName': event.chatName,
-        'avatarBytes': '${event.avatarBytes?.length ?? 0}',
-      },
-    );
+    _log.info('[ChatListBloc] Received metadata from {sender}: chatName={chatName}, avatarBytes={avatarSize}', parameters: {'sender': event.senderUUID, 'chatName': event.chatName, 'avatarSize': event.avatarBytes?.length ?? 0});
   }
 }

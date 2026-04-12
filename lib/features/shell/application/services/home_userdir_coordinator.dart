@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_persistence_service.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_userdir_support_service.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
+
+final _log = AppLog('HomeUserDirCoordinator');
 
 class HomeUserDirCoordinator {
   HomeUserDirCoordinator({
@@ -257,10 +259,7 @@ class HomeUserDirCoordinator {
         peerPubkey: _support.hexToBytes32(peerHex),
         identityKeyPair: session.config.identityKeyPair,
       );
-      AppLogger.i(
-        'FRIEND_DELETE ${ok ? 'sent' : 'failed'} peer=${peerHex.substring(0, 8)}',
-        tag: 'RPC',
-      );
+      _log.info('FRIEND_DELETE {status} peer={peer}', parameters: {'status': ok ? 'sent' : 'failed', 'peer': peerHex.substring(0, 8)});
       if (ok) {
         await _syncFriendStates(session, client);
       }
@@ -292,10 +291,7 @@ class HomeUserDirCoordinator {
         peerPubkey: entry.bytes,
         identityKeyPair: session.config.identityKeyPair,
       );
-      AppLogger.i(
-        'FRIEND_REQUEST ${ok ? 'sent' : 'failed'} peer=${hex.substring(0, 8)}',
-        tag: 'RPC',
-      );
+      _log.info('FRIEND_REQUEST {status} peer={peer}', parameters: {'status': ok ? 'sent' : 'failed', 'peer': hex.substring(0, 8)});
       await _syncFriendStates(session, client);
     } catch (_) {}
   }
@@ -362,7 +358,7 @@ class HomeUserDirCoordinator {
       identityKeyPair: session.config.identityKeyPair,
     );
     if (snapshot == null) {
-      AppLogger.w('FRIEND_SYNC skipped: no response', tag: 'RPC');
+      _log.warning('FRIEND_SYNC skipped: no response');
       return;
     }
 
@@ -470,7 +466,7 @@ class HomeUserDirCoordinator {
     if (session.accountId.trim().isEmpty) return;
     final resolved = session.resolvedNode;
     if (resolved == null) {
-      AppLogger.w('RPC skip: server options not yet discovered', tag: 'RPC');
+      _log.warning('RPC skip: server options not yet discovered');
       return;
     }
     _profileRegisterTimer?.cancel();
@@ -484,14 +480,11 @@ class HomeUserDirCoordinator {
 
     final client = _clientFactory(resolved.node, resolved.options);
     if (client == null) {
-      AppLogger.w(
-        'RPC skip: no HTTP endpoint on node (opts=${resolved.options})',
-        tag: 'RPC',
-      );
+      _log.warning('RPC skip: no HTTP endpoint on node (opts={opts})', parameters: {'opts': resolved.options});
       return;
     }
 
-    AppLogger.i('RPC connecting via ${client.label}', tag: 'RPC');
+    _log.info('RPC connecting via {label}', parameters: {'label': client.label});
     try {
       await client.connect();
       _client = client;
@@ -522,7 +515,7 @@ class HomeUserDirCoordinator {
       // Requests are sent explicitly when the user adds a contact
       // (see applyWhitelistChanges -> _sendFriendRequestFor).
     } catch (e, st) {
-      AppLogger.e('RPC init failed: $e\n$st', tag: 'RPC');
+      _log.error('RPC init failed: {error}', parameters: {'error': e}, error: e, stackTrace: st);
     }
   }
 

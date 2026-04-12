@@ -10,7 +10,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/uint64_utils.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
@@ -35,7 +35,8 @@ import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_sessi
 
 export 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
-const _sgtpTag = 'SGTP';
+final _log = AppLog('SgtpClient');
+final _logVideo = AppLog('VideoNote');
 
 String _sgtpLogQuote(String value) {
   final escaped = value
@@ -68,12 +69,12 @@ String _sgtpLogValue(Object? value) {
 
 void _sgtpLogCall(String method, [Map<String, Object?> args = const {}]) {
   if (args.isEmpty) {
-    AppLogger.d('$method()', tag: _sgtpTag);
+    _log.debug('{method}()', parameters: {'method': method});
     return;
   }
   final formatted =
       args.entries.map((e) => '${e.key}=${_sgtpLogValue(e.value)}').join(', ');
-  AppLogger.d('$method($formatted)', tag: _sgtpTag);
+  _log.debug('{method}({args})', parameters: {'method': method, 'args': formatted});
 }
 
 String? _sgtpVideoNoteMetadataSummary(VideoNoteMetadata? metadata) {
@@ -450,7 +451,7 @@ class SgtpClient implements ISgtpSession {
     if (_state != _ClientState.disconnected) return;
     _state = _ClientState.connecting;
     _eventController.add(SgtpConnecting());
-    AppLogger.i('Connecting to server...', tag: 'SGTP');
+    _log.info('Connecting to server...');
     try {
       _ephemeralX25519 = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
@@ -487,7 +488,7 @@ class SgtpClient implements ISgtpSession {
 
       _state = _ClientState.waitingHandshake;
       _eventController.add(SgtpHandshaking());
-      AppLogger.i('Performing handshake...', tag: 'SGTP');
+      _log.info('Performing handshake...');
       _transport!.inbound.listen(
         _onData,
         onError: _onTransportError,
@@ -515,7 +516,7 @@ class SgtpClient implements ISgtpSession {
         if (_state == _ClientState.waitingHandshake &&
             _peers.isEmpty &&
             !_readyEmitted) {
-          AppLogger.i('No peers after delay — ready solo', tag: 'SGTP');
+          _log.info('No peers after delay — ready solo');
           _updateMaster();
           _chatRequestSent = true;
           await _issueCK();
@@ -523,7 +524,7 @@ class SgtpClient implements ISgtpSession {
       });
     } catch (e) {
       _state = _ClientState.disconnected;
-      AppLogger.e('Connection failed: $e', tag: 'SGTP');
+      _log.error('Connection failed: {error}', parameters: {'error': e});
       _eventController.add(SgtpError(error: 'Connection failed: $e'));
     }
   }
@@ -648,7 +649,7 @@ class SgtpClient implements ISgtpSession {
         replyToSender: replyToSender,
       )));
     } catch (e) {
-      AppLogger.e('Failed to send message: $e', tag: 'SGTP');
+      _log.error('Failed to send message: {error}', parameters: {'error': e});
       _eventController.add(SgtpError(error: 'Failed to send message: $e'));
     }
   }
@@ -724,9 +725,9 @@ class SgtpClient implements ISgtpSession {
       final cipher = await encrypt(plain, _chatKey!, nonce);
       await _sendFrame(
           buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
-      AppLogger.d('Sent chat_meta: $name', tag: 'SGTP');
+      _log.debug('Sent chat_meta: {name}', parameters: {'name': name});
     } catch (e) {
-      AppLogger.e('sendChatMeta error: $e', tag: 'SGTP');
+      _log.error('sendChatMeta error: {error}', parameters: {'error': e});
     }
   }
 
@@ -837,7 +838,7 @@ class SgtpClient implements ISgtpSession {
                 id: fileId, isSending: false, sendProgress: 1.0)));
       }
     } catch (e) {
-      AppLogger.e('Failed to send $mediaType: $e', tag: 'SGTP');
+      _log.error('Failed to send {mediaType}: {error}', parameters: {'mediaType': mediaType, 'error': e});
       _eventController.add(SgtpError(error: 'Failed to send $mediaType: $e'));
     }
   }
@@ -1043,17 +1044,13 @@ class SgtpClient implements ISgtpSession {
       'mime': mime,
       'metadata': _sgtpVideoNoteMetadataSummary(metadata),
     });
-    AppLogger.i(
-      'sendVideoNoteFromXFile start: path=${xFile.path}, mime=$mime, '
-      'meta=${metadata?.width}x${metadata?.height}, duration=${metadata?.durationMs}',
-      tag: 'VIDEO',
-    );
+    _logVideo.info('sendVideoNoteFromXFile start: path=${xFile.path}, mime=$mime, '
+        'meta=${metadata?.width}x${metadata?.height}, duration=${metadata?.durationMs}');
     final name =
         'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
     final echoId = uuidBytesToHex(generateUUIDv7());
     final localPath = await _cachePlayableMediaFromXFile(echoId, mime, xFile);
-    AppLogger.d('Video note cached locally: ${localPath ?? xFile.path}',
-        tag: 'VIDEO');
+    _logVideo.debug('Video note cached locally: ${localPath ?? xFile.path}');
     await _sendMediaFromXFile(
       xFile,
       name,
@@ -1074,7 +1071,7 @@ class SgtpClient implements ISgtpSession {
         isFromMe: true,
       ),
     );
-    AppLogger.i('sendVideoNoteFromXFile completed: $name', tag: 'VIDEO');
+    _logVideo.info('sendVideoNoteFromXFile completed: $name');
   }
 
   String _ext(String mime) => switch (mime) {
@@ -1120,9 +1117,9 @@ class SgtpClient implements ISgtpSession {
         // peer discovery in the room.
         await _sendFrame(buildIntentFrame(_roomUUID, _myUUID));
       }
-      AppLogger.d('Sent connection probe on existing socket', tag: 'SGTP');
+      _log.debug('Sent connection probe on existing socket');
     } catch (e) {
-      AppLogger.w('Connection probe failed: $e', tag: 'SGTP');
+      _log.warning('Connection probe failed: {error}', parameters: {'error': e});
     }
   }
 
@@ -1137,7 +1134,7 @@ class SgtpClient implements ISgtpSession {
   }
 
   void _onTransportError(Object e) {
-    AppLogger.e('Transport error: $e', tag: 'SGTP');
+    _log.error('Transport error: {error}', parameters: {'error': e});
     _eventController.add(SgtpError(error: 'Transport error: $e'));
     _cleanup();
   }
@@ -1145,7 +1142,7 @@ class SgtpClient implements ISgtpSession {
   void _onTransportDone() {
     if (_state != _ClientState.disconnected) {
       _cleanup();
-      AppLogger.i('Disconnected from server', tag: 'SGTP');
+      _log.info('Disconnected from server');
       _eventController.add(SgtpDisconnected());
     }
   }
@@ -1161,7 +1158,7 @@ class SgtpClient implements ISgtpSession {
       try {
         await _dispatch(r.frame);
       } catch (e) {
-        AppLogger.w('Frame error: $e', tag: 'SGTP');
+        _log.warning('Frame error: {error}', parameters: {'error': e});
       }
       // After this frame is fully processed, extract the next one (if any).
       _scheduleNextFrame();
@@ -1174,43 +1171,15 @@ class SgtpClient implements ISgtpSession {
 
   Future<void> _dispatch(ParsedFrame frame) async {
     if (!_tsOk(frame.timestamp)) {
-      AppLogger.packet(
-        '← INBOUND ${_pktName(frame.packetType)} from ${uuidBytesToHex(frame.senderUUID).substring(0, 8)} '
-        'DROPPED (timestamp out of window: ${frame.timestamp})',
-        packetType: frame.packetType,
-        packetTypeName: _pktName(frame.packetType),
-        direction: PacketDirection.inbound,
-        level: LogLevel.warn,
-        dropped: true,
-        error: true,
-      );
       return;
     }
     if (frame.version != SgtpConstants.version) {
-      AppLogger.packet(
-        '← INBOUND ${_pktName(frame.packetType)} from ${uuidBytesToHex(frame.senderUUID).substring(0, 8)} '
-        'DROPPED (version mismatch: ${frame.version})',
-        packetType: frame.packetType,
-        packetTypeName: _pktName(frame.packetType),
-        direction: PacketDirection.inbound,
-        level: LogLevel.warn,
-        dropped: true,
-        error: true,
-      );
       return;
     }
     final frameSender = uuidBytesToHex(frame.senderUUID);
     if (_peers.containsKey(frameSender)) {
       _peerLastSeen[frameSender] = DateTime.now().millisecondsSinceEpoch;
     }
-    AppLogger.packet(
-      '← INBOUND  ${_pktName(frame.packetType).padRight(14)} '
-      'from=${frameSender.substring(0, 8)}  '
-      'payload=${frame.payloadLength}B',
-      packetType: frame.packetType,
-      packetTypeName: _pktName(frame.packetType),
-      direction: PacketDirection.inbound,
-    );
     switch (frame.packetType) {
       case PacketType.intent:
         await _onIntent(frame);
@@ -1307,9 +1276,9 @@ class SgtpClient implements ISgtpSession {
       _chatKeyRetryCountByPeer.remove(h);
       _chatKeyRetryTimers.remove(h)?.cancel();
       _needChatKeyLastSentMsByPeer.remove(h);
-      AppLogger.i('Peer left: ${h.substring(0, 8)}', tag: 'SGTP');
+      _log.info('Peer left: {peer}', parameters: {'peer': h.substring(0, 8)});
       if (!_eventController.isClosed)
-        AppLogger.i('Peer left: ${h.substring(0, 8)}', tag: 'SGTP');
+        _log.info('Peer left: {peer}', parameters: {'peer': h.substring(0, 8)});
       if (!_eventController.isClosed)
         _eventController.add(SgtpPeerLeft(peerUUID: h));
     }
@@ -1356,7 +1325,7 @@ class SgtpClient implements ISgtpSession {
     _peerPublicKeys[h] = edH;
     if (!_eventController.isClosed && !_announcedJoins.contains(h)) {
       _announcedJoins.add(h);
-      AppLogger.i('Peer joined: ${h.substring(0, 8)}', tag: 'SGTP');
+      _log.info('Peer joined: {peer}', parameters: {'peer': h.substring(0, 8)});
       _eventController.add(SgtpPeerJoined(peerUUID: h, ed25519PubHex: edH));
     }
   }
@@ -1432,10 +1401,7 @@ class SgtpClient implements ISgtpSession {
       _pendingHandshakeTimers[h]?.cancel();
       _pendingHandshakeTimers[h] = Timer(const Duration(seconds: 5), () async {
         if (_pendingHandshakes.remove(h)) {
-          AppLogger.w(
-            'Handshake probe timed out for ${h.substring(0, 8)}; continuing with reachable peers',
-            tag: 'SGTP',
-          );
+          _log.warning('Handshake probe timed out for {peer}; continuing with reachable peers', parameters: {'peer': h.substring(0, 8)});
           _pendingHandshakeTimers.remove(h)?.cancel();
           _pendingHandshakeTimers.remove(h);
           await _checkChatReq();
@@ -1465,7 +1431,7 @@ class SgtpClient implements ISgtpSession {
         chatAvatarBytes: _currentChatAvatar,
       ));
       _chatRequestSent = true;
-      AppLogger.d('Sent CHAT_REQUEST name="$_currentChatName"', tag: 'SGTP');
+      _log.debug('Sent CHAT_REQUEST name="{name}"', parameters: {'name': _currentChatName});
     } else {
       _chatRequestSent = true;
       await _issueCK();
@@ -1489,13 +1455,13 @@ class SgtpClient implements ISgtpSession {
         }
       }
     } catch (e) {
-      AppLogger.w('Handshake retry tick failed: $e', tag: 'SGTP');
+      _log.warning('Handshake retry tick failed: {error}', parameters: {'error': e});
     }
   }
 
   Future<void> _onChatRequest(ParsedFrame f) async {
     final sender = uuidBytesToHex(f.senderUUID);
-    AppLogger.d('CHAT_REQUEST from $sender', tag: 'SGTP');
+    _log.debug('CHAT_REQUEST from {sender}', parameters: {'sender': sender});
     final peer = _peers[sender];
     if (peer == null) return;
     if (!await verifyFrame(f.raw, peer.ed25519PubKey)) return;
@@ -1504,11 +1470,7 @@ class SgtpClient implements ISgtpSession {
     final name = f.chatRequestName;
     final avatar = f.chatRequestAvatar;
     if (name != null) {
-      AppLogger.d(
-        'CHAT_REQUEST metadata: name="$name" avatar=${avatar?.length ?? 0}B',
-        tag: 'SGTP',
-        source: 'SgtpClient',
-      );
+      _log.debug('CHAT_REQUEST metadata: name="{name}" avatar={avatarSize}B', parameters: {'name': name, 'avatarSize': avatar?.length ?? 0});
       _eventController.add(SgtpChatMetadataReceived(
         chatName: name,
         avatarBytes: avatar,
@@ -1543,7 +1505,7 @@ class SgtpClient implements ISgtpSession {
       ));
       _scheduleChatKeyRetry(peerHex);
     } catch (e) {
-      AppLogger.e('_issueCKToPeer failed for $peerHex: $e', tag: 'SGTP');
+      _log.error('_issueCKToPeer failed for {peer}: {error}', parameters: {'peer': peerHex, 'error': e});
     }
   }
 
@@ -1570,10 +1532,7 @@ class SgtpClient implements ISgtpSession {
         if (retries > SgtpConstants.ckAckRetries) {
           _chatKeyRetryCountByPeer.remove(peerHex);
           _chatKeyRetryTimers.remove(peerHex)?.cancel();
-          AppLogger.w(
-            'CHAT_KEY retry budget exhausted for ${peerHex.substring(0, 8)} epoch=$_chatEpoch',
-            tag: 'SGTP',
-          );
+          _log.warning('CHAT_KEY retry budget exhausted for {peer} epoch={epoch}', parameters: {'peer': peerHex.substring(0, 8), 'epoch': _chatEpoch});
           return;
         }
         _chatKeyRetryCountByPeer[peerHex] = retries;
@@ -1610,7 +1569,7 @@ class SgtpClient implements ISgtpSession {
         ));
         _scheduleChatKeyRetry(peer.uuid);
       } catch (e) {
-        AppLogger.e('issueCK encrypt failed for ${peer.uuid}: $e', tag: 'SGTP');
+        _log.error('issueCK encrypt failed for {peer}: {error}', parameters: {'peer': peer.uuid, 'error': e});
       }
     }
     if (!_readyEmitted) {
@@ -1618,8 +1577,7 @@ class SgtpClient implements ISgtpSession {
       _state = _ClientState.ready;
       _handshakeRetryTimer?.cancel();
       _handshakeRetryTimer = null;
-      AppLogger.i('Ready (master) room=${roomUUIDHex.substring(0, 8)}',
-          tag: 'SGTP');
+      _log.info('Ready (master) room={room}', parameters: {'room': roomUUIDHex.substring(0, 8)});
       _eventController.add(SgtpReady(isMaster: true, roomUUIDHex: roomUUIDHex));
     }
     _ckRotationTimer?.cancel();
@@ -1655,8 +1613,7 @@ class SgtpClient implements ISgtpSession {
         _state = _ClientState.ready;
         _handshakeRetryTimer?.cancel();
         _handshakeRetryTimer = null;
-        AppLogger.i('Ready (peer) room=${roomUUIDHex.substring(0, 8)}',
-            tag: 'SGTP');
+        _log.info('Ready (peer) room={room}', parameters: {'room': roomUUIDHex.substring(0, 8)});
         _eventController
             .add(SgtpReady(isMaster: false, roomUUIDHex: roomUUIDHex));
         _requestHistory();
@@ -1665,7 +1622,7 @@ class SgtpClient implements ISgtpSession {
       // Rapid focus/background switches can race old/new handshakes.
       // In that case stale CHAT_KEY frames may fail MAC check transiently.
       // Recover silently by re-running handshake instead of spamming UI errors.
-      AppLogger.w('CHAT_KEY decrypt failed (will recover): $e', tag: 'SGTP');
+      _log.warning('CHAT_KEY decrypt failed (will recover): {error}', parameters: {'error': e});
       await _recoverFromChatKeyDecryptFailure(f.senderUUID);
     }
   }
@@ -1703,7 +1660,7 @@ class SgtpClient implements ISgtpSession {
       // Trigger a fresh key exchange after shared-secret re-derivation.
       await _checkChatReq();
     } catch (e) {
-      AppLogger.w('CHAT_KEY recovery failed: $e', tag: 'SGTP');
+      _log.warning('CHAT_KEY recovery failed: {error}', parameters: {'error': e});
     }
   }
 
@@ -2315,7 +2272,7 @@ class SgtpClient implements ISgtpSession {
           await _ensureChatKeyForPeer(senderH);
           return;
         }
-        AppLogger.e('Server status $code', tag: 'SGTP');
+        _log.error('Server status {code}', parameters: {'code': code});
         _eventController.add(SgtpError(error: 'Server status $code'));
       }
     } catch (_) {}
@@ -2352,7 +2309,7 @@ class SgtpClient implements ISgtpSession {
         version: version,
       ));
     } catch (e) {
-      AppLogger.w('Failed to send NEED_CHAT_KEY to $peerHex: $e', tag: 'SGTP');
+      _log.warning('Failed to send NEED_CHAT_KEY to {peer}: {error}', parameters: {'peer': peerHex, 'error': e});
     }
   }
 
@@ -2460,28 +2417,13 @@ class SgtpClient implements ISgtpSession {
   }
 
   Future<void> _sendFrame(Uint8List unsigned) async {
-    // Log outbound packet type (bytes 50–51 in header = packet type uint16BE).
-    if (unsigned.length >= 52) {
-      final pktType = (unsigned[50] << 8) | unsigned[51];
-      final payloadLen = unsigned.length -
-          SgtpConstants.headerSize -
-          SgtpConstants.signatureSize;
-      final recv = uuidBytesToHex(unsigned.sublist(16, 32)).substring(0, 8);
-      AppLogger.packet(
-        '→ OUTBOUND ${_pktName(pktType).padRight(14)} '
-        'to=${recv}  payload=${payloadLen}B',
-        packetType: pktType,
-        packetTypeName: _pktName(pktType),
-        direction: PacketDirection.outbound,
-      );
-    }
     // Sign first — this is CPU/async work, safe to do before entering the queue.
     final Uint8List signed;
     try {
       signed = await signFrame(unsigned, _config.identityKeyPair);
     } catch (e) {
       if (!_eventController.isClosed) {
-        AppLogger.e('Failed to sign frame: $e', tag: 'SGTP');
+        _log.error('Failed to sign frame: {error}', parameters: {'error': e});
         _eventController.add(SgtpError(error: 'Failed to sign frame: $e'));
       }
       return;
@@ -2503,36 +2445,13 @@ class SgtpClient implements ISgtpSession {
       if (t != null) await t.send(signed);
     } catch (e) {
       if (!_eventController.isClosed) {
-        AppLogger.e('Failed to send frame: $e', tag: 'SGTP');
+        _log.error('Failed to send frame: {error}', parameters: {'error': e});
         _eventController.add(SgtpError(error: 'Failed to send frame: $e'));
       }
     } finally {
       mine.complete(); // release the next sender
     }
   }
-
-  /// Human-readable name for a packet type code (for logging).
-  static String _pktName(int type) => switch (type) {
-        PacketType.intent => 'INTENT',
-        PacketType.ping => 'PING',
-        PacketType.pong => 'PONG',
-        PacketType.info => 'INFO',
-        PacketType.chatRequest => 'CHAT_REQUEST',
-        PacketType.chatKey => 'CHAT_KEY',
-        PacketType.chatKeyAck => 'CHAT_KEY_ACK',
-        PacketType.message => 'MESSAGE',
-        PacketType.messageFailed => 'MSG_FAILED',
-        PacketType.messageFailedAck => 'MSG_FAILED_ACK',
-        PacketType.status => 'STATUS',
-        PacketType.fin => 'FIN',
-        PacketType.kickRequest => 'KICK_REQ',
-        PacketType.kicked => 'KICKED',
-        PacketType.hsir => 'HSIR',
-        PacketType.hsi => 'HSI',
-        PacketType.hsr => 'HSR',
-        PacketType.hsra => 'HSRA',
-        _ => '0x${type.toRadixString(16).padLeft(4, '0')}',
-      };
 
   void _updateMaster() {
     _isMaster =

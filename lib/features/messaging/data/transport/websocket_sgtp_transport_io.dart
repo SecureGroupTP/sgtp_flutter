@@ -4,10 +4,10 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 
-const _tag = 'WS';
+final _log = AppLog('WebSocketSgtpTransport');
 
 class WebSocketSgtpTransport implements IProtocolTransport {
   final String host;
@@ -58,10 +58,7 @@ class WebSocketSgtpTransport implements IProtocolTransport {
   Future<void> connect() async {
     if (_socket != null) return;
     final tlsSni = (fakeSni ?? '').trim();
-    AppLogger.d(
-      'Connecting WS to $host:$port (tls=$useTls, sni=${tlsSni.isEmpty ? host : tlsSni})',
-      tag: _tag,
-    );
+    _log.debug('Connecting WS to {host}:{port} (tls={useTls}, sni={sni})', parameters: {'host': host, 'port': port, 'useTls': useTls, 'sni': tlsSni.isEmpty ? host : tlsSni});
 
     final sock =
         useTls ? await _connectTlsSocket() : await Socket.connect(host, port);

@@ -7,7 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:sgtp_camera/sgtp_camera.dart';
 import 'package:image/image.dart' as img;
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,6 +38,7 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
+  final _log = AppLog('ChatPage');
   static const int _maxUploadImageDimension = 2560;
   static const int _targetUploadImageBytes = 3 * 1024 * 1024;
 
@@ -176,14 +177,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
           final status = bloc.state.status;
           if (status == ChatStatus.ready) {
-            AppLogger.i('[Chat] probing live connection after background '
-                '(${bgDuration.inSeconds}s, status=$status)');
+            _log.info('[Chat] probing live connection after background ({duration}s, status={status})', parameters: {'duration': bgDuration.inSeconds, 'status': status});
             bloc.add(const ChatProbeConnection());
           } else if (status == ChatStatus.error) {
             // Error state may represent a broken transport session.
             // Attempt recovery automatically, but keep "disconnected" manual.
-            AppLogger.w('[Chat] reconnecting after background '
-                '(${bgDuration.inSeconds}s, status=$status)');
+            _log.warning('[Chat] reconnecting after background ({duration}s, status={status})', parameters: {'duration': bgDuration.inSeconds, 'status': status});
             bloc.add(const ChatReconnect());
           }
         }

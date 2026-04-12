@@ -1,5 +1,3 @@
-import 'package:sgtp_flutter/core/app_logger.dart';
-
 enum LogsTimeRange {
   all,
   m5,
@@ -16,32 +14,76 @@ enum LogsTimeRange {
       };
 }
 
+enum LogLevel {
+  debug,
+  info,
+  warning,
+  error;
+
+  String get label => switch (this) {
+        LogLevel.debug => 'Debug',
+        LogLevel.info => 'Info',
+        LogLevel.warning => 'Warning',
+        LogLevel.error => 'Error',
+      };
+
+  static LogLevel? byName(String name) {
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+    return null;
+  }
+}
+
+class LogEntry {
+  final DateTime time;
+  final LogLevel level;
+  final String name;
+  final String message;
+  final String messageTemplate;
+  final Map<String, Object?> parameters;
+  final String? error;
+  final String? stackTrace;
+
+  const LogEntry({
+    required this.time,
+    required this.level,
+    required this.name,
+    required this.message,
+    required this.messageTemplate,
+    required this.parameters,
+    this.error,
+    this.stackTrace,
+  });
+
+  String get timeLabel {
+    final h = time.hour.toString().padLeft(2, '0');
+    final mi = time.minute.toString().padLeft(2, '0');
+    final s = time.second.toString().padLeft(2, '0');
+    final ms = time.millisecond.toString().padLeft(3, '0');
+    return '$h:$mi:$s.$ms';
+  }
+
+  @override
+  String toString() => '[$timeLabel ${level.name.toUpperCase()} $name] $message';
+}
+
 class LogsViewState {
   const LogsViewState({
     this.entries = const [],
     this.totalCount = 0,
     this.filterLevel,
-    this.filterTag,
-    this.packetsOnly = false,
-    this.filterPacketType,
-    this.filterDirection,
-    this.issuesOnly = false,
+    this.filterName,
     this.timeRange = LogsTimeRange.all,
     this.searchText = '',
-    this.availableTags = const [],
-    this.availablePacketTypes = const [],
+    this.availableNames = const [],
   });
 
   final List<LogEntry> entries;
   final int totalCount;
   final LogLevel? filterLevel;
-  final String? filterTag;
-  final bool packetsOnly;
-  final String? filterPacketType;
-  final PacketDirection? filterDirection;
-  final bool issuesOnly;
+  final String? filterName;
   final LogsTimeRange timeRange;
   final String searchText;
-  final List<String> availableTags;
-  final List<String> availablePacketTypes;
+  final List<String> availableNames;
 }

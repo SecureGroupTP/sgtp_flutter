@@ -22,7 +22,7 @@ import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/core/file_save.dart';
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:logging/logging.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_share_panel.dart';
 import 'package:sgtp_flutter/features/settings/presentation/widgets/styled_dropdown.dart';
@@ -2380,7 +2380,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListenableBuilder(
       listenable: _logsCountNotifier,
       builder: (_, __) {
-        final count = AppLogger.entries.length;
+        final count = _logsCountNotifier.count;
         return Row(
           children: [
             Expanded(
@@ -3754,18 +3754,22 @@ class _InfoAppIcon extends StatelessWidget {
   }
 }
 
-// Thin ChangeNotifier that fires whenever AppLogger gains or loses entries,
+// Thin ChangeNotifier that fires whenever a new log record arrives,
 // so the Settings "Logs" card reflects the current count in real time.
 class _LogsCountNotifier extends ChangeNotifier {
-  _LogsCountNotifier() {
-    AppLogger.addListener(_update);
-  }
+  int count = 0;
+  StreamSubscription<LogRecord>? _sub;
 
-  void _update(LogEntry _) => notifyListeners();
+  _LogsCountNotifier() {
+    _sub = Logger.root.onRecord.listen((_) {
+      count++;
+      notifyListeners();
+    });
+  }
 
   @override
   void dispose() {
-    AppLogger.removeListener(_update);
+    _sub?.cancel();
     super.dispose();
   }
 }

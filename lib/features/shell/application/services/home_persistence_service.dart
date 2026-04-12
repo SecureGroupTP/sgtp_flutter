@@ -1,11 +1,13 @@
 import 'dart:typed_data';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
+
+final _log = AppLog('HomePersistenceService');
 
 class HomePersistenceService {
   HomePersistenceService({
@@ -93,11 +95,7 @@ class HomePersistenceService {
     final existing =
         await repo.loadChat(roomUUID, serverAddress: serverAddress);
     final now = DateTime.now();
-    AppLogger.i(
-      '[HomePersistence] upsertDirectMessageChat room=$roomUUID direct=true '
-      'name="$displayName" avatar=${avatarBytes?.length ?? 0}B',
-      tag: 'DM',
-    );
+    _log.info('[HomePersistence] upsertDirectMessageChat room={room} direct=true name="{name}" avatar={avatarSize}B', parameters: {'room': roomUUID, 'name': displayName, 'avatarSize': avatarBytes?.length ?? 0});
     await repo.saveChat(
       ChatMetadata(
         uuid: roomUUID,

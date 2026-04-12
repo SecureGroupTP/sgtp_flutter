@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:sgtp_flutter/core/app_logger.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 
-const _tag = 'TCP';
+final _log = AppLog('TcpSgtpTransport');
 
 class TcpSgtpTransport implements IProtocolTransport {
   final String host;
@@ -42,15 +42,12 @@ class TcpSgtpTransport implements IProtocolTransport {
   Future<void> connect() async {
     if (_socket != null) return;
     final tlsSni = (fakeSni ?? '').trim();
-    AppLogger.d(
-      'Connecting to $host:$port (tls=$useTls, sni=${tlsSni.isEmpty ? host : tlsSni})',
-      tag: _tag,
-    );
+    _log.debug('Connecting to {host}:{port} (tls={useTls}, sni={sni})', parameters: {'host': host, 'port': port, 'useTls': useTls, 'sni': tlsSni.isEmpty ? host : tlsSni});
     Socket s;
     try {
       if (useTls) {
         final tlsServerName = (fakeSni ?? '').trim();
-        AppLogger.d('Starting TLS handshake with $host:$port', tag: _tag);
+        _log.debug('Starting TLS handshake with {host}:{port}', parameters: {'host': host, 'port': port});
         if (tlsServerName.isNotEmpty &&
             tlsServerName.toLowerCase() != host.toLowerCase()) {
           final raw = await Socket.connect(host, port);
@@ -58,12 +55,7 @@ class TcpSgtpTransport implements IProtocolTransport {
             raw,
             host: tlsServerName,
             onBadCertificate: (cert) {
-              AppLogger.e(
-                'TLS cert rejected by Dart: subject="${cert.subject}" '
-                'issuer="${cert.issuer}" '
-                'valid=${cert.startValidity}–${cert.endValidity}',
-                tag: _tag,
-              );
+              _log.error('TLS cert rejected by Dart: subject="{subject}" issuer="{issuer}" valid={validFrom}–{validTo}', parameters: {'subject': cert.subject, 'issuer': cert.issuer, 'validFrom': cert.startValidity, 'validTo': cert.endValidity});
               return false;
             },
           );
@@ -72,33 +64,21 @@ class TcpSgtpTransport implements IProtocolTransport {
             host,
             port,
             onBadCertificate: (cert) {
-              AppLogger.e(
-                'TLS cert rejected by Dart: subject="${cert.subject}" '
-                'issuer="${cert.issuer}" '
-                'valid=${cert.startValidity}–${cert.endValidity}',
-                tag: _tag,
-              );
+              _log.error('TLS cert rejected by Dart: subject="{subject}" issuer="{issuer}" valid={validFrom}–{validTo}', parameters: {'subject': cert.subject, 'issuer': cert.issuer, 'validFrom': cert.startValidity, 'validTo': cert.endValidity});
               return false;
             },
           );
         }
         final secure = s as SecureSocket;
-        AppLogger.d(
-          'TLS handshake OK: '
-          'cert-subject=${secure.peerCertificate?.subject ?? "none"}',
-          tag: _tag,
-        );
+        _log.debug('TLS handshake OK: cert-subject={subject}', parameters: {'subject': secure.peerCertificate?.subject ?? 'none'});
       } else {
         s = await Socket.connect(host, port);
       }
     } catch (e) {
-      AppLogger.e(
-        'Connect failed to $host:$port (tls=$useTls) [${e.runtimeType}]: $e',
-        tag: _tag,
-      );
+      _log.error('Connect failed to {host}:{port} (tls={useTls}) [{type}]: {error}', parameters: {'host': host, 'port': port, 'useTls': useTls, 'type': e.runtimeType, 'error': e});
       rethrow;
     }
-    AppLogger.d('Socket established $host:$port (tls=$useTls)', tag: _tag);
+    _log.debug('Socket established {host}:{port} (tls={useTls})', parameters: {'host': host, 'port': port, 'useTls': useTls});
 
     try {
       s.setOption(SocketOption.tcpNoDelay, true);
@@ -139,7 +119,7 @@ class TcpSgtpTransport implements IProtocolTransport {
         }
       },
       onError: (e, st) {
-        AppLogger.e('Socket error on $host:$port (tls=$useTls): $e', tag: _tag);
+        _log.error('Socket error on {host}:{port} (tls={useTls}): {error}', parameters: {'host': host, 'port': port, 'useTls': useTls, 'error': e});
         if (!headerDone.isCompleted) headerDone.completeError(e, st);
         _inbound.addError(e, st);
       },
@@ -147,7 +127,7 @@ class TcpSgtpTransport implements IProtocolTransport {
         if (!headerDone.isCompleted) {
           final err = StateError(
               'Connection closed before 25-byte banner on $host:$port');
-          AppLogger.e('$err', tag: _tag);
+          _log.error('{error}', parameters: {'error': err});
           headerDone.completeError(err);
         }
         if (!_inbound.isClosed) _inbound.close();
@@ -162,11 +142,10 @@ class TcpSgtpTransport implements IProtocolTransport {
             'Banner timeout on $host:$port (tls=$useTls) after 15s'),
       );
     } catch (e) {
-      AppLogger.e('Banner wait failed on $host:$port (tls=$useTls): $e',
-          tag: _tag);
+      _log.error('Banner wait failed on {host}:{port} (tls={useTls}): {error}', parameters: {'host': host, 'port': port, 'useTls': useTls, 'error': e});
       rethrow;
     }
-    AppLogger.d('Banner received on $host:$port (tls=$useTls)', tag: _tag);
+    _log.debug('Banner received on {host}:{port} (tls={useTls})', parameters: {'host': host, 'port': port, 'useTls': useTls});
   }
 
   @override
