@@ -12,6 +12,7 @@ import 'package:sgtp_flutter/features/settings/application/services/settings_man
 import 'package:sgtp_flutter/features/shell/application/models/home_models.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_persistence_service.dart';
+import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_userdir_coordinator.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_userdir_support_service.dart';
 import 'package:sgtp_flutter/features/shell/application/viewmodels/home_view_state.dart';
@@ -82,6 +83,10 @@ class HomeCubit extends Cubit<HomeViewState> {
   final HomeUserDirSupportService _userDirSupport;
 
   late HomeUserDirCoordinator _userDirCoordinator;
+
+  /// Exposes the active user-directory client for read-only use by other cubits
+  /// (e.g. contact search). Do NOT close the returned client.
+  IUserDirClient? get activeUserDirClient => _userDirCoordinator.activeClient;
   late RoomsBloc _roomsBloc;
 
   String _accountId;

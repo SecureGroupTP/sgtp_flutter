@@ -6,12 +6,9 @@ import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_mo
 class ContactsDirectoryService {
   ContactsDirectoryService({
     required SettingsManagementService settingsManagementService,
-    required UserDirClientFactory userDirClientFactory,
-  })  : _settings = settingsManagementService,
-        _clientFactory = userDirClientFactory;
+  }) : _settings = settingsManagementService;
 
   final SettingsManagementService _settings;
-  final UserDirClientFactory _clientFactory;
 
   Future<void> saveWhitelistEntries({
     required String accountId,
@@ -20,47 +17,33 @@ class ContactsDirectoryService {
     return _settings.saveWhitelistEntriesForNode(accountId, entries);
   }
 
+  /// Searches for an exact username match on the server.
+  ///
+  /// [client] must be the already-connected and authenticated [IUserDirClient]
+  /// from the active session — it is NOT closed after the call.
   Future<ContactsServerSearchHit?> searchExactUser({
-    required String? serverNodeId,
+    required IUserDirClient? client,
     required String normalizedUsername,
     required List<WhitelistEntry> existingEntries,
   }) async {
-    final client = await _buildUserDirClient(serverNodeId);
     if (client == null) return null;
 
-    try {
-      await client.connect();
-      final items = await client.search(normalizedUsername, limit: 20);
-      final lower = normalizedUsername.toLowerCase();
-      final exact = items
-          .where((item) => item.username.toLowerCase() == lower)
-          .firstOrNull;
-      if (exact == null) return null;
+    final items = await client.search(normalizedUsername, limit: 20);
+    final lower = normalizedUsername.toLowerCase();
+    final exact = items
+        .where((item) => item.username.toLowerCase() == lower)
+        .firstOrNull;
+    if (exact == null) return null;
 
-      final alreadyTrusted = existingEntries.any(
-        (entry) => entry.hexKey.toLowerCase() == exact.pubkeyHex.toLowerCase(),
-      );
-      if (alreadyTrusted) return null;
+    final alreadyTrusted = existingEntries.any(
+      (entry) => entry.hexKey.toLowerCase() == exact.pubkeyHex.toLowerCase(),
+    );
+    if (alreadyTrusted) return null;
 
-      return ContactsServerSearchHit(
-        username: exact.username,
-        pubkeyHex: exact.pubkeyHex,
-        fullname: exact.fullname,
-      );
-    } finally {
-      client.close();
-    }
-  }
-
-  Future<IUserDirClient?> _buildUserDirClient(String? serverNodeId) async {
-    final nodes = await _settings.loadNodes();
-    final selectedServerId = (serverNodeId ?? '').trim();
-    final node = selectedServerId.isNotEmpty
-        ? nodes.where((n) => n.id == selectedServerId).firstOrNull
-        : await _settings.loadPreferredNode();
-    if (node == null) return null;
-    final opts = await _settings.loadNodeServerOptions(node.id);
-    if (opts == null) return null;
-    return _clientFactory(node, opts);
+    return ContactsServerSearchHit(
+      username: exact.username,
+      pubkeyHex: exact.pubkeyHex,
+      fullname: exact.fullname,
+    );
   }
 }

@@ -8,11 +8,13 @@ import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/features/contacts/application/models/contacts_models.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/contacts/application/viewmodels/contacts_view_state.dart';
+import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 class ContactsCubit extends Cubit<ContactsViewState> {
   ContactsCubit({
     required ContactsDirectoryService directoryService,
+    required IUserDirClient? Function() activeClientProvider,
     required AppSessionController appSessionController,
     required String accountId,
     required String? serverNodeId,
@@ -21,6 +23,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     required Map<String, ContactProfile> contactProfiles,
     required Map<String, FriendStateRecord> friendStates,
   })  : _directoryService = directoryService,
+        _activeClientProvider = activeClientProvider,
         _appSessionController = appSessionController,
         _accountId = accountId,
         _serverNodeId = serverNodeId,
@@ -40,6 +43,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
   }
 
   final ContactsDirectoryService _directoryService;
+  final IUserDirClient? Function() _activeClientProvider;
   final AppSessionController _appSessionController;
 
   String _accountId;
@@ -352,7 +356,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
 
     try {
       final hit = await _directoryService.searchExactUser(
-        serverNodeId: _serverNodeId,
+        client: _activeClientProvider(),
         normalizedUsername: normalizedUsername,
         existingEntries: _entries,
       );

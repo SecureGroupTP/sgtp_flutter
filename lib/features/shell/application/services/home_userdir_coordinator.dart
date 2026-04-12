@@ -40,6 +40,11 @@ class HomeUserDirCoordinator {
   final void Function(HomeUserDirState state) _onStateChanged;
 
   IUserDirClient? _client;
+
+  /// The currently active and authenticated user-directory client, or null if
+  /// not connected. Safe to call from other services for read-only operations
+  /// (search, getMeta, etc.) — do NOT close it.
+  IUserDirClient? get activeClient => _client;
   StreamSubscription<UserDirMeta>? _userDirSub;
   StreamSubscription<UserDirFriendNotify>? _friendDirSub;
   Timer? _profileRegisterTimer;

@@ -6,6 +6,7 @@ import 'package:sgtp_flutter/features/contacts/application/services/contacts_dir
 import 'package:sgtp_flutter/features/contacts/application/viewmodels/contacts_cubit.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/pages/contacts_screen.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
+import 'package:sgtp_flutter/features/shell/application/viewmodels/home_cubit.dart';
 
 class ContactsPage extends StatefulWidget {
   const ContactsPage({
@@ -35,8 +36,10 @@ class _ContactsPageState extends State<ContactsPage> {
   @override
   void initState() {
     super.initState();
+    final homeCubit = context.read<HomeCubit>();
     _contactsCubit = ContactsCubit(
       directoryService: context.read<ContactsDirectoryService>(),
+      activeClientProvider: () => homeCubit.activeUserDirClient,
       appSessionController: context.read<AppSessionController>(),
       accountId: widget.accountId,
       serverNodeId: widget.serverNodeId,

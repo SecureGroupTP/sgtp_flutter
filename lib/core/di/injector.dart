@@ -104,7 +104,6 @@ class AppInjector {
 
     final contactsDirectoryService = ContactsDirectoryService(
       settingsManagementService: settingsManagementService,
-      userDirClientFactory: userDirClientFactory,
     );
     return AppDependencies(
       chatStorageGateway: chatStorageGateway,
