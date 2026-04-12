@@ -146,6 +146,7 @@ class LogSetup {
   /// Wraps [value] in the ANSI colour matching its runtime type.
   static String _colorValue(Object? value) {
     if (value == null) return '$_valNull(null)$_r';
+    if (value is Exception || value is Error) return '$_lvlError$value$_r';
     if (value is String) return '$_valString"$value"$_r';
     if (value is bool) return '$_valBool$value$_r';
     if (value is num) return '$_valNumber$value$_r';
