@@ -40,6 +40,11 @@ dependencies:
   ffi: ^2.1.3
   sgtp_camera:
     path: packages/sgtp_camera
+  sgtp_chat_core:
+    git:
+      url: git@github.com:SecureGroupTP/chat_core.git
+      ref: v0.0.9
+      path: flutter/sgtp_chat_core
 
 dev_dependencies:
   flutter_test:
@@ -53,3 +58,11 @@ flutter:
   assets:
     - web/icons/Icon-192.png
     - assets/app_icon.png
+
+hooks:
+  user_defines:
+    sgtp_chat_core:
+      release_tag: v0.0.9
+      github_owner: SecureGroupTP
+      github_repo: chat_core
+      allow_static_linking: false

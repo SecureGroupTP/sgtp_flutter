@@ -985,6 +985,15 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  sgtp_chat_core:
+    dependency: "direct main"
+    description:
+      path: "flutter/sgtp_chat_core"
+      ref: "v0.0.9"
+      resolved-ref: "6ab7e5d401ad6b7f787e5e6a73adf0848cfcb386"
+      url: "git@github.com:SecureGroupTP/chat_core.git"
+    source: git
+    version: "0.1.0"
   shared_preferences:
     dependency: "direct main"
     description:
