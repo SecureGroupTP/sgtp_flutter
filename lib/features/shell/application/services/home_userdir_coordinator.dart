@@ -42,9 +42,11 @@ class HomeUserDirCoordinator {
   IUserDirClient? _client;
   StreamSubscription<UserDirMeta>? _userDirSub;
   StreamSubscription<UserDirFriendNotify>? _friendDirSub;
+  Timer? _friendSyncTimer;
   Timer? _profileRegisterTimer;
   Future<void> _notifyQueue = Future.value();
   String _lastRegisteredFingerprint = '';
+  String _desiredProfileFingerprint = '';
   String _activeAccountId = '';
 
   Map<String, ContactProfile> _contactProfiles = {};
@@ -65,13 +67,20 @@ class HomeUserDirCoordinator {
     _activeAccountId = session.accountId.trim();
     _notifyQueue = Future.value();
     _lastRegisteredFingerprint = '';
+    _desiredProfileFingerprint = _support.buildProfileFingerprint(
+      publicKey: session.config.myPublicKey,
+      nickname: session.nickname,
+      username: session.username,
+      userAvatar: session.userAvatar,
+    );
     final accountState = await _persistence.loadAccountState(session.accountId);
     final storedProfiles =
         await _persistence.loadAllContactProfiles(session.accountId);
     _contactProfiles = {
       for (final e in storedProfiles.entries) e.key.toLowerCase(): e.value,
     };
-    _friendStates = Map<String, FriendStateRecord>.from(accountState.friendStates);
+    _friendStates =
+        Map<String, FriendStateRecord>.from(accountState.friendStates);
     _suppressedContacts = Set<String>.from(accountState.suppressedContacts);
     _whitelist = _sanitizeWhitelist(session, session.whitelist);
     _nicknames = {for (final e in _whitelist) e.hexKey.toLowerCase(): e.name};
@@ -108,6 +117,13 @@ class HomeUserDirCoordinator {
       username: session.username,
       userAvatar: session.userAvatar,
     );
+    if (force) {
+      _desiredProfileFingerprint = fp;
+    } else if (_desiredProfileFingerprint.isNotEmpty &&
+        _desiredProfileFingerprint != fp) {
+      _log.debug('Skip stale profile registration snapshot');
+      return null;
+    }
     if (!force && _lastRegisteredFingerprint == fp) return null;
 
     Future<({bool ok, String? errorMessage})> doRegister(
@@ -234,6 +250,7 @@ class HomeUserDirCoordinator {
   Future<void> dispose() async {
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
+    _friendSyncTimer?.cancel();
     _profileRegisterTimer?.cancel();
     _client?.close();
     _client = null;
@@ -259,7 +276,10 @@ class HomeUserDirCoordinator {
         peerPubkey: _support.hexToBytes32(peerHex),
         identityKeyPair: session.config.identityKeyPair,
       );
-      _log.info('FRIEND_DELETE {status} peer={peer}', parameters: {'status': ok ? 'sent' : 'failed', 'peer': peerHex.substring(0, 8)});
+      _log.info('FRIEND_DELETE {status} peer={peer}', parameters: {
+        'status': ok ? 'sent' : 'failed',
+        'peer': peerHex.substring(0, 8)
+      });
       if (ok) {
         await _syncFriendStates(session, client);
       }
@@ -291,7 +311,10 @@ class HomeUserDirCoordinator {
         peerPubkey: entry.bytes,
         identityKeyPair: session.config.identityKeyPair,
       );
-      _log.info('FRIEND_REQUEST {status} peer={peer}', parameters: {'status': ok ? 'sent' : 'failed', 'peer': hex.substring(0, 8)});
+      _log.info('FRIEND_REQUEST {status} peer={peer}', parameters: {
+        'status': ok ? 'sent' : 'failed',
+        'peer': hex.substring(0, 8)
+      });
       await _syncFriendStates(session, client);
     } catch (_) {}
   }
@@ -393,7 +416,8 @@ class HomeUserDirCoordinator {
           _friendStatusPriority(status) >
               _friendStatusPriority(previous.statusEnum)) {
         next[peerHex] = candidate;
-      } else if (previous.roomUUIDHex == null && candidate.roomUUIDHex != null) {
+      } else if (previous.roomUUIDHex == null &&
+          candidate.roomUUIDHex != null) {
         next[peerHex] = previous.copyWith(
           roomUUIDHex: candidate.roomUUIDHex,
           updatedAt: now,
@@ -433,9 +457,8 @@ class HomeUserDirCoordinator {
         final profile = _contactProfiles[peerHex];
         final nickname = (_nicknames[peerHex] ?? '').trim();
         final fullName = profile?.fullname?.trim() ?? '';
-        final username = (profile?.username ?? '')
-            .trim()
-            .replaceFirst(RegExp(r'^@+'), '');
+        final username =
+            (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
         final displayName = _bestContactName(
           fullName: fullName,
           username: username,
@@ -469,6 +492,7 @@ class HomeUserDirCoordinator {
       _log.warning('RPC skip: server options not yet discovered');
       return;
     }
+    _friendSyncTimer?.cancel();
     _profileRegisterTimer?.cancel();
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
@@ -480,11 +504,13 @@ class HomeUserDirCoordinator {
 
     final client = _clientFactory(resolved.node, resolved.options);
     if (client == null) {
-      _log.warning('RPC skip: no HTTP endpoint on node (opts={opts})', parameters: {'opts': resolved.options});
+      _log.warning('RPC skip: no HTTP endpoint on node (opts={opts})',
+          parameters: {'opts': resolved.options});
       return;
     }
 
-    _log.info('RPC connecting via {label}', parameters: {'label': client.label});
+    _log.info('RPC connecting via {label}',
+        parameters: {'label': client.label});
     try {
       await client.connect();
       _client = client;
@@ -501,10 +527,18 @@ class HomeUserDirCoordinator {
       ];
       await client.subscribe(keys);
       _userDirSub = client.notifyStream.listen((meta) {
-        _notifyQueue = _notifyQueue.then((_) => _handleNotify(session, meta, client));
+        _notifyQueue =
+            _notifyQueue.then((_) => _handleNotify(session, meta, client));
       });
       _friendDirSub = client.friendNotifyStream.listen((_) {
-        _notifyQueue = _notifyQueue.then((_) => _syncFriendStates(session, client));
+        _notifyQueue =
+            _notifyQueue.then((_) => _syncFriendStates(session, client));
+      });
+      _friendSyncTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+        final active = _client;
+        if (active == null || !active.isConnected) return;
+        _notifyQueue =
+            _notifyQueue.then((_) => _syncFriendStates(session, active));
       });
       _profileRegisterTimer?.cancel();
       _profileRegisterTimer = Timer.periodic(const Duration(seconds: 10), (_) {
@@ -515,7 +549,8 @@ class HomeUserDirCoordinator {
       // Requests are sent explicitly when the user adds a contact
       // (see applyWhitelistChanges -> _sendFriendRequestFor).
     } catch (e, st) {
-      _log.error('RPC init failed: {error}', parameters: {'error': e}, error: e, stackTrace: st);
+      _log.error('RPC init failed: {error}',
+          parameters: {'error': e}, error: e, stackTrace: st);
     }
   }
 
