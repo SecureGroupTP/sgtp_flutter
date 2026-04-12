@@ -9,6 +9,7 @@ import 'package:cross_file/cross_file.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
+import 'package:sgtp_chat_core/sgtp_chat_core.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/constants.dart';
@@ -74,12 +75,30 @@ void _sgtpLogCall(String method, [Map<String, Object?> args = const {}]) {
   }
   final formatted =
       args.entries.map((e) => '${e.key}=${_sgtpLogValue(e.value)}').join(', ');
-  _log.debug('{method}({args})', parameters: {'method': method, 'args': formatted});
+  _log.debug('{method}({args})',
+      parameters: {'method': method, 'args': formatted});
 }
 
 String? _sgtpVideoNoteMetadataSummary(VideoNoteMetadata? metadata) {
   if (metadata == null) return null;
   return '${metadata.width}x${metadata.height}/${metadata.durationMs}ms';
+}
+
+const Set<String> _mlsTransportPayloadTypes = {
+  'mls_key_package',
+  'mls_welcome',
+  'mls_commit',
+  'mls_app',
+};
+
+String? _decodedPayloadType(Uint8List plaintext) {
+  try {
+    final decoded = json.decode(utf8.decode(plaintext));
+    if (decoded is Map && decoded['v'] == 1) {
+      return decoded['type'] as String?;
+    }
+  } catch (_) {}
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +274,16 @@ class SgtpClient implements ISgtpSession {
   Uint8List? _chatKey;
   int _chatEpoch = 0;
   int _myNonce = 0;
+
+  MessengerMls? _mls;
+  bool _mlsClientReady = false;
+  bool _mlsGroupReady = false;
+  bool _mlsKeyPackageBroadcast = false;
+  bool _mlsGroupCreated = false;
+  bool _mlsInviteInFlight = false;
+  String? _mlsLocalKeyPackageB64;
+  final Map<String, String> _mlsPeerKeyPackages = {};
+  final Set<String> _mlsInvitedPeers = {};
 
   // Current local chat metadata (can be updated and broadcast)
   String _currentChatName;
@@ -453,6 +482,7 @@ class SgtpClient implements ISgtpSession {
     _eventController.add(SgtpConnecting());
     _log.info('Connecting to server...');
     try {
+      await _initMls();
       _ephemeralX25519 = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
       final (host, _) = _parseHostPortOrThrow(_config.serverAddr);
@@ -596,6 +626,248 @@ class SgtpClient implements ISgtpSession {
     };
   }
 
+  Future<void> _initMls() async {
+    if (_mlsClientReady) return;
+    try {
+      final privateKey = await _config.identityKeyPair.extractPrivateKeyBytes();
+      final userId =
+          (_config.accountId ?? _config.nodeId ?? _hex(_config.myPublicKey))
+              .trim();
+      final deviceId = myUUIDHex;
+      final clientId = {
+        'user_id': userId.isEmpty ? _hex(_config.myPublicKey) : userId,
+        'device_id': deviceId,
+      };
+      final mls = MessengerMls.create();
+      mls.createClientSync({
+        'client_id': clientId,
+        'device_signature_private_key': privateKey,
+        'binding': {
+          'client_id': clientId,
+          'serialized_binding': _config.myPublicKey,
+          'account_signature': <int>[],
+        },
+        'identity_data': _config.myPublicKey,
+      });
+      final bundle = mls.createKeyPackagesSync(8);
+      final keyPackages = _asObjectList(_map(bundle)['keypackages']);
+      if (keyPackages.isEmpty) {
+        throw StateError('chat_core returned no key packages');
+      }
+      final first = _asBytes(keyPackages.first);
+      _mls = mls;
+      _mlsLocalKeyPackageB64 = base64.encode(first);
+      _mlsClientReady = true;
+      _log.info('MLS client initialized');
+    } catch (e) {
+      _mls?.close();
+      _mls = null;
+      _mlsClientReady = false;
+      _log.warning(
+          'MLS initialization failed; falling back to legacy SGTP crypto: {error}',
+          parameters: {'error': e});
+    }
+  }
+
+  Map<String, dynamic> _map(Object? value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return value.map((key, value) => MapEntry('$key', value));
+    return <String, dynamic>{};
+  }
+
+  List<Object?> _asObjectList(Object? value) {
+    if (value is List) return value.cast<Object?>();
+    return const [];
+  }
+
+  Uint8List _asBytes(Object? value) {
+    if (value is Uint8List) return value;
+    if (value is List<int>) return Uint8List.fromList(value);
+    if (value is List) {
+      return Uint8List.fromList(value.map((e) => (e as num).toInt()).toList());
+    }
+    if (value is String) return base64.decode(value);
+    return Uint8List(0);
+  }
+
+  Map<String, dynamic> get _mlsGroupIdJson => {'value': _roomUUID};
+
+  Future<void> _ensureMlsGroupCreated() async {
+    if (!_mlsClientReady || _mlsGroupCreated) return;
+    final mls = _mls;
+    if (mls == null) return;
+    try {
+      mls.createGroupSync(_mlsGroupIdJson);
+      _mlsGroupCreated = true;
+      _mlsGroupReady = true;
+      _log.info('MLS group created');
+    } on MlsException catch (e) {
+      // Already-created groups can happen after reconnects within the same process.
+      if (!e.message.toLowerCase().contains('exists')) rethrow;
+      _mlsGroupCreated = true;
+      _mlsGroupReady = true;
+    }
+  }
+
+  Future<void> _announceMlsKeyPackage() async {
+    if (!_mlsClientReady || _mlsKeyPackageBroadcast || _chatKey == null) return;
+    final keyPackageB64 = _mlsLocalKeyPackageB64;
+    if (keyPackageB64 == null || keyPackageB64.isEmpty) return;
+    _mlsKeyPackageBroadcast = true;
+    await _sendLegacyPayload({
+      'v': 1,
+      'type': 'mls_key_package',
+      'pub': _hex(_config.myPublicKey),
+      'client_id': {
+        'user_id':
+            (_config.accountId ?? _config.nodeId ?? _hex(_config.myPublicKey))
+                .trim(),
+        'device_id': myUUIDHex,
+      },
+      'keypackage': keyPackageB64,
+    });
+  }
+
+  Future<void> _inviteKnownMlsPeers() async {
+    if (!_isMaster ||
+        !_mlsClientReady ||
+        !_mlsGroupReady ||
+        _mlsInviteInFlight) {
+      return;
+    }
+    final mls = _mls;
+    if (mls == null || _chatKey == null) return;
+    _mlsInviteInFlight = true;
+    try {
+      for (final entry in _mlsPeerKeyPackages.entries.toList()) {
+        final peerHex = entry.key;
+        if (_mlsInvitedPeers.contains(peerHex)) continue;
+        final peer = _peers[peerHex];
+        if (peer == null) continue;
+        final keyPackage = base64.decode(entry.value);
+        final result = _map(mls.inviteSync({
+          'group_id': _mlsGroupIdJson,
+          'invited_client': {
+            'user_id': _peerPublicKeys[peerHex] ?? peerHex,
+            'device_id': peerHex,
+          },
+          'keypackage': keyPackage,
+        }));
+        _mlsInvitedPeers.add(peerHex);
+        final welcome = _asBytes(result['welcome_message']);
+        final commit = _asBytes(result['commit_message']);
+        if (welcome.isNotEmpty) {
+          await _sendLegacyPayload({
+            'v': 1,
+            'type': 'mls_welcome',
+            'to': peerHex,
+            'payload': base64.encode(welcome),
+          });
+        }
+        if (commit.isNotEmpty) {
+          await _sendLegacyPayload({
+            'v': 1,
+            'type': 'mls_commit',
+            'payload': base64.encode(commit),
+          });
+        }
+        try {
+          mls.clearPendingCommitSync(_mlsGroupIdJson);
+        } catch (_) {}
+      }
+    } catch (e) {
+      _log.warning('MLS invite failed: {error}', parameters: {'error': e});
+    } finally {
+      _mlsInviteInFlight = false;
+    }
+  }
+
+  Future<Uint8List?> _mlsEncryptPayload(Uint8List plaintext) async {
+    final mls = _mls;
+    if (mls == null || !_mlsGroupReady) return null;
+    try {
+      final encrypted = mls.encryptMessageSync({
+        'group_id': _mlsGroupIdJson,
+        'plaintext': plaintext,
+        'aad': _roomUUID,
+      });
+      return _asBytes(encrypted);
+    } catch (e) {
+      _log.warning('MLS encrypt failed; using legacy payload: {error}',
+          parameters: {'error': e});
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _mlsHandleGroupMessage(Uint8List payload) async {
+    final mls = _mls;
+    if (mls == null || !_mlsClientReady) return null;
+    try {
+      final result = mls.handleIncomingSync({
+        'kind': 'GroupMessage',
+        'payload': payload,
+      });
+      final events = result is List ? _asObjectList(result) : <Object?>[result];
+      for (final value in events) {
+        final event = _map(value);
+        final kind = event['kind'] as String?;
+        if (kind == 'MessageReceived') {
+          return _asBytes(event['message_plaintext']);
+        }
+        if (kind == 'GroupJoined' ||
+            kind == 'GroupStateChanged' ||
+            kind == 'MemberAdded') {
+          _mlsGroupReady = true;
+        }
+      }
+    } catch (e) {
+      _log.warning('MLS incoming group message failed: {error}',
+          parameters: {'error': e});
+    }
+    return null;
+  }
+
+  Future<int?> _sendLegacyPayload(
+    Map<String, dynamic> payload, {
+    Uint8List? messageUUID,
+    bool persist = false,
+  }) async {
+    if (_state != _ClientState.ready || _chatKey == null) return null;
+    final msgUUID = messageUUID ?? generateUUIDv7();
+    final nonce = _myNonce++;
+    final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
+    final cipher = await encrypt(plain, _chatKey!, nonce);
+    await _sendFrame(buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+    if (persist) {
+      unawaited(_persistRecord(_HistoryRecord(
+        senderUUID: _myUUID,
+        messageUUID: msgUUID,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        nonce: nonce,
+        plaintext: plain,
+      )));
+    }
+    return nonce;
+  }
+
+  Future<int?> _sendApplicationPayload(
+    Map<String, dynamic> payload, {
+    Uint8List? messageUUID,
+    bool persist = false,
+  }) async {
+    final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
+    final mlsCiphertext = await _mlsEncryptPayload(plain);
+    if (mlsCiphertext == null) {
+      return _sendLegacyPayload(payload,
+          messageUUID: messageUUID, persist: persist);
+    }
+    return _sendLegacyPayload({
+      'v': 1,
+      'type': 'mls_app',
+      'payload': base64.encode(mlsCiphertext),
+    }, messageUUID: messageUUID, persist: persist);
+  }
+
   @override
   Future<void> sendMessage(
     String text, {
@@ -611,7 +883,6 @@ class SgtpClient implements ISgtpSession {
     });
     if (_state != _ClientState.ready || _chatKey == null) return;
     final msgUUID = generateUUIDv7();
-    final nonce = _myNonce++;
     final myPubHex = _hex(_config.myPublicKey);
     final payload = <String, dynamic>{
       'v': 1,
@@ -625,9 +896,9 @@ class SgtpClient implements ISgtpSession {
     _attachChatAvatar(payload);
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
     try {
-      final cipher = await encrypt(plaintext, _chatKey!, nonce);
-      await _sendFrame(
-          buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+      final nonce =
+          await _sendApplicationPayload(payload, messageUUID: msgUUID);
+      if (nonce == null) return;
       unawaited(_persistRecord(_HistoryRecord(
         senderUUID: _myUUID,
         messageUUID: msgUUID,
@@ -673,12 +944,7 @@ class SgtpClient implements ISgtpSession {
         'pub': _hex(_config.myPublicKey),
       };
       _attachChatAvatar(payload);
-      final msgUUID = generateUUIDv7();
-      final nonce = _myNonce++;
-      final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
-      final cipher = await encrypt(plain, _chatKey!, nonce);
-      await _sendFrame(
-          buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+      await _sendApplicationPayload(payload);
     } catch (_) {}
   }
 
@@ -695,12 +961,7 @@ class SgtpClient implements ISgtpSession {
         'pub': _hex(_config.myPublicKey),
       };
       _attachChatAvatar(payload);
-      final msgUUID = generateUUIDv7();
-      final nonce = _myNonce++;
-      final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
-      final cipher = await encrypt(plain, _chatKey!, nonce);
-      await _sendFrame(
-          buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+      await _sendApplicationPayload(payload);
     } catch (_) {}
   }
 
@@ -719,12 +980,7 @@ class SgtpClient implements ISgtpSession {
         if (avatar != null && avatar.isNotEmpty)
           'avatar': base64.encode(avatar),
       };
-      final msgUUID = generateUUIDv7();
-      final nonce = _myNonce++;
-      final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
-      final cipher = await encrypt(plain, _chatKey!, nonce);
-      await _sendFrame(
-          buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
+      await _sendApplicationPayload(payload);
       _log.debug('Sent chat_meta: {name}', parameters: {'name': name});
     } catch (e) {
       _log.error('sendChatMeta error: {error}', parameters: {'error': e});
@@ -791,12 +1047,10 @@ class SgtpClient implements ISgtpSession {
           payload['chunks'] = totalChunks;
         }
         final msgUUID = generateUUIDv7();
-        final nonce = _myNonce++;
         final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
-        final cipher = await encrypt(plain, _chatKey!, nonce);
-        await _sendFrame(
-            buildMessage(_roomUUID, _myUUID, msgUUID, nonce, cipher));
-        if (persistChunks) {
+        final nonce =
+            await _sendApplicationPayload(payload, messageUUID: msgUUID);
+        if (persistChunks && nonce != null) {
           unawaited(_persistRecord(_HistoryRecord(
             senderUUID: _myUUID,
             messageUUID: msgUUID,
@@ -838,7 +1092,8 @@ class SgtpClient implements ISgtpSession {
                 id: fileId, isSending: false, sendProgress: 1.0)));
       }
     } catch (e) {
-      _log.error('Failed to send {mediaType}: {error}', parameters: {'mediaType': mediaType, 'error': e});
+      _log.error('Failed to send {mediaType}: {error}',
+          parameters: {'mediaType': mediaType, 'error': e});
       _eventController.add(SgtpError(error: 'Failed to send $mediaType: $e'));
     }
   }
@@ -1044,7 +1299,8 @@ class SgtpClient implements ISgtpSession {
       'mime': mime,
       'metadata': _sgtpVideoNoteMetadataSummary(metadata),
     });
-    _logVideo.info('sendVideoNoteFromXFile start: path=${xFile.path}, mime=$mime, '
+    _logVideo.info(
+        'sendVideoNoteFromXFile start: path=${xFile.path}, mime=$mime, '
         'meta=${metadata?.width}x${metadata?.height}, duration=${metadata?.durationMs}');
     final name =
         'videonote_${DateTime.now().millisecondsSinceEpoch}.${_extForMime(mime)}';
@@ -1119,7 +1375,8 @@ class SgtpClient implements ISgtpSession {
       }
       _log.debug('Sent connection probe on existing socket');
     } catch (e) {
-      _log.warning('Connection probe failed: {error}', parameters: {'error': e});
+      _log.warning('Connection probe failed: {error}',
+          parameters: {'error': e});
     }
   }
 
@@ -1191,10 +1448,11 @@ class SgtpClient implements ISgtpSession {
         await _onPong(frame);
         break;
       case PacketType.info:
-        if (frame.payloadLength == 0)
+        if (frame.payloadLength == 0) {
           await _onInfoReq(frame);
-        else
+        } else {
           await _onInfoResp(frame);
+        }
         break;
       case PacketType.chatRequest:
         if (_isMaster) await _onChatRequest(frame);
@@ -1277,10 +1535,12 @@ class SgtpClient implements ISgtpSession {
       _chatKeyRetryTimers.remove(h)?.cancel();
       _needChatKeyLastSentMsByPeer.remove(h);
       _log.info('Peer left: {peer}', parameters: {'peer': h.substring(0, 8)});
-      if (!_eventController.isClosed)
+      if (!_eventController.isClosed) {
         _log.info('Peer left: {peer}', parameters: {'peer': h.substring(0, 8)});
-      if (!_eventController.isClosed)
+      }
+      if (!_eventController.isClosed) {
         _eventController.add(SgtpPeerLeft(peerUUID: h));
+      }
     }
     if (_state == _ClientState.ready) {
       _updateMaster();
@@ -1401,7 +1661,9 @@ class SgtpClient implements ISgtpSession {
       _pendingHandshakeTimers[h]?.cancel();
       _pendingHandshakeTimers[h] = Timer(const Duration(seconds: 5), () async {
         if (_pendingHandshakes.remove(h)) {
-          _log.warning('Handshake probe timed out for {peer}; continuing with reachable peers', parameters: {'peer': h.substring(0, 8)});
+          _log.warning(
+              'Handshake probe timed out for {peer}; continuing with reachable peers',
+              parameters: {'peer': h.substring(0, 8)});
           _pendingHandshakeTimers.remove(h)?.cancel();
           _pendingHandshakeTimers.remove(h);
           await _checkChatReq();
@@ -1416,7 +1678,9 @@ class SgtpClient implements ISgtpSession {
   Future<void> _checkChatReq() async {
     if (_chatRequestSent || _pendingHandshakes.isNotEmpty) return;
     if (_peers.isNotEmpty &&
-        !_peers.values.every((p) => p.sharedKey.isNotEmpty)) return;
+        !_peers.values.every((p) => p.sharedKey.isNotEmpty)) {
+      return;
+    }
     _updateMaster();
     if (!_isMaster) {
       final m = _masterPeer();
@@ -1431,7 +1695,8 @@ class SgtpClient implements ISgtpSession {
         chatAvatarBytes: _currentChatAvatar,
       ));
       _chatRequestSent = true;
-      _log.debug('Sent CHAT_REQUEST name="{name}"', parameters: {'name': _currentChatName});
+      _log.debug('Sent CHAT_REQUEST name="{name}"',
+          parameters: {'name': _currentChatName});
     } else {
       _chatRequestSent = true;
       await _issueCK();
@@ -1455,7 +1720,8 @@ class SgtpClient implements ISgtpSession {
         }
       }
     } catch (e) {
-      _log.warning('Handshake retry tick failed: {error}', parameters: {'error': e});
+      _log.warning('Handshake retry tick failed: {error}',
+          parameters: {'error': e});
     }
   }
 
@@ -1470,7 +1736,8 @@ class SgtpClient implements ISgtpSession {
     final name = f.chatRequestName;
     final avatar = f.chatRequestAvatar;
     if (name != null) {
-      _log.debug('CHAT_REQUEST metadata: name="{name}" avatar={avatarSize}B', parameters: {'name': name, 'avatarSize': avatar?.length ?? 0});
+      _log.debug('CHAT_REQUEST metadata: name="{name}" avatar={avatarSize}B',
+          parameters: {'name': name, 'avatarSize': avatar?.length ?? 0});
       _eventController.add(SgtpChatMetadataReceived(
         chatName: name,
         avatarBytes: avatar,
@@ -1505,7 +1772,8 @@ class SgtpClient implements ISgtpSession {
       ));
       _scheduleChatKeyRetry(peerHex);
     } catch (e) {
-      _log.error('_issueCKToPeer failed for {peer}: {error}', parameters: {'peer': peerHex, 'error': e});
+      _log.error('_issueCKToPeer failed for {peer}: {error}',
+          parameters: {'peer': peerHex, 'error': e});
     }
   }
 
@@ -1532,7 +1800,12 @@ class SgtpClient implements ISgtpSession {
         if (retries > SgtpConstants.ckAckRetries) {
           _chatKeyRetryCountByPeer.remove(peerHex);
           _chatKeyRetryTimers.remove(peerHex)?.cancel();
-          _log.warning('CHAT_KEY retry budget exhausted for {peer} epoch={epoch}', parameters: {'peer': peerHex.substring(0, 8), 'epoch': _chatEpoch});
+          _log.warning(
+              'CHAT_KEY retry budget exhausted for {peer} epoch={epoch}',
+              parameters: {
+                'peer': peerHex.substring(0, 8),
+                'epoch': _chatEpoch
+              });
           return;
         }
         _chatKeyRetryCountByPeer[peerHex] = retries;
@@ -1569,7 +1842,8 @@ class SgtpClient implements ISgtpSession {
         ));
         _scheduleChatKeyRetry(peer.uuid);
       } catch (e) {
-        _log.error('issueCK encrypt failed for {peer}: {error}', parameters: {'peer': peer.uuid, 'error': e});
+        _log.error('issueCK encrypt failed for {peer}: {error}',
+            parameters: {'peer': peer.uuid, 'error': e});
       }
     }
     if (!_readyEmitted) {
@@ -1577,8 +1851,10 @@ class SgtpClient implements ISgtpSession {
       _state = _ClientState.ready;
       _handshakeRetryTimer?.cancel();
       _handshakeRetryTimer = null;
-      _log.info('Ready (master) room={room}', parameters: {'room': roomUUIDHex.substring(0, 8)});
+      _log.info('Ready (master) room={room}',
+          parameters: {'room': roomUUIDHex.substring(0, 8)});
       _eventController.add(SgtpReady(isMaster: true, roomUUIDHex: roomUUIDHex));
+      unawaited(_onLegacyReadyForMls());
     }
     _ckRotationTimer?.cancel();
     _ckRotationTimer = Timer(
@@ -1613,16 +1889,19 @@ class SgtpClient implements ISgtpSession {
         _state = _ClientState.ready;
         _handshakeRetryTimer?.cancel();
         _handshakeRetryTimer = null;
-        _log.info('Ready (peer) room={room}', parameters: {'room': roomUUIDHex.substring(0, 8)});
+        _log.info('Ready (peer) room={room}',
+            parameters: {'room': roomUUIDHex.substring(0, 8)});
         _eventController
             .add(SgtpReady(isMaster: false, roomUUIDHex: roomUUIDHex));
+        unawaited(_onLegacyReadyForMls());
         _requestHistory();
       }
     } catch (e) {
       // Rapid focus/background switches can race old/new handshakes.
       // In that case stale CHAT_KEY frames may fail MAC check transiently.
       // Recover silently by re-running handshake instead of spamming UI errors.
-      _log.warning('CHAT_KEY decrypt failed (will recover): {error}', parameters: {'error': e});
+      _log.warning('CHAT_KEY decrypt failed (will recover): {error}',
+          parameters: {'error': e});
       await _recoverFromChatKeyDecryptFailure(f.senderUUID);
     }
   }
@@ -1640,6 +1919,20 @@ class SgtpClient implements ISgtpSession {
     _chatKeyAckEpochByPeer[senderH] = ackEpoch;
     _chatKeyRetryCountByPeer.remove(senderH);
     _chatKeyRetryTimers.remove(senderH)?.cancel();
+  }
+
+  Future<void> _onLegacyReadyForMls() async {
+    if (!_mlsClientReady || _chatKey == null) return;
+    try {
+      if (_isMaster) {
+        await _ensureMlsGroupCreated();
+        await _inviteKnownMlsPeers();
+      } else {
+        await _announceMlsKeyPackage();
+      }
+    } catch (e) {
+      _log.warning('MLS ready hook failed: {error}', parameters: {'error': e});
+    }
   }
 
   Future<void> _recoverFromChatKeyDecryptFailure(Uint8List senderUUID) async {
@@ -1660,7 +1953,8 @@ class SgtpClient implements ISgtpSession {
       // Trigger a fresh key exchange after shared-secret re-derivation.
       await _checkChatReq();
     } catch (e) {
-      _log.warning('CHAT_KEY recovery failed: {error}', parameters: {'error': e});
+      _log.warning('CHAT_KEY recovery failed: {error}',
+          parameters: {'error': e});
     }
   }
 
@@ -1685,13 +1979,17 @@ class SgtpClient implements ISgtpSession {
     try {
       final plain =
           await decrypt(f.messageCiphertext, _chatKey!, f.messageNonce);
-      unawaited(_persistRecord(_HistoryRecord(
+      final record = _HistoryRecord(
         senderUUID: Uint8List.fromList(f.senderUUID),
         messageUUID: Uint8List.fromList(f.messageUUID),
         timestamp: f.timestamp,
         nonce: f.messageNonce,
         plaintext: plain,
-      )));
+      );
+      final payloadType = _decodedPayloadType(plain);
+      if (!history && !_mlsTransportPayloadTypes.contains(payloadType)) {
+        unawaited(_persistRecord(record));
+      }
       await _emitDecodedMessage(
         msgId: uuidBytesToHex(f.messageUUID),
         senderUUIDHex: sH,
@@ -1700,6 +1998,8 @@ class SgtpClient implements ISgtpSession {
             ? DateTime.fromMillisecondsSinceEpoch(f.timestamp)
             : DateTime.now(),
         history: history,
+        decodedPersistRecord:
+            !history && payloadType == 'mls_app' ? record : null,
       );
     } catch (_) {
       if (!history) {
@@ -1726,6 +2026,7 @@ class SgtpClient implements ISgtpSession {
     required Uint8List plaintext,
     required DateTime recvAt,
     required bool history,
+    _HistoryRecord? decodedPersistRecord,
   }) async {
     Map<String, dynamic>? p;
     try {
@@ -1749,6 +2050,62 @@ class SgtpClient implements ISgtpSession {
     if (senderPub != null) _peerPublicKeys[senderUUIDHex] = senderPub;
 
     switch (p['type'] as String?) {
+      case 'mls_key_package':
+        if (!history && _isMaster && senderUUIDHex != myUUIDHex) {
+          final kp = p['keypackage'] as String?;
+          if (kp != null && kp.isNotEmpty) {
+            _mlsPeerKeyPackages[senderUUIDHex] = kp;
+            await _inviteKnownMlsPeers();
+          }
+        }
+      case 'mls_welcome':
+        if (!history && !_isMaster && !_mlsGroupReady) {
+          final to = (p['to'] as String?)?.toLowerCase();
+          if (to == null || to == myUUIDHex.toLowerCase()) {
+            final payload = p['payload'] as String?;
+            if (payload != null) {
+              try {
+                _mls?.joinFromWelcomeSync(base64.decode(payload));
+                _mlsGroupReady = true;
+                _log.info('MLS group joined');
+              } catch (e) {
+                _log.warning('MLS welcome failed: {error}',
+                    parameters: {'error': e});
+              }
+            }
+          }
+        }
+      case 'mls_commit':
+        if (!history && senderUUIDHex != myUUIDHex) {
+          final payload = p['payload'] as String?;
+          if (payload != null) {
+            await _mlsHandleGroupMessage(base64.decode(payload));
+          }
+        }
+      case 'mls_app':
+        final payload = p['payload'] as String?;
+        if (payload != null) {
+          final inner = await _mlsHandleGroupMessage(base64.decode(payload));
+          if (inner != null) {
+            final record = decodedPersistRecord;
+            if (record != null) {
+              unawaited(_persistRecord(_HistoryRecord(
+                senderUUID: record.senderUUID,
+                messageUUID: record.messageUUID,
+                timestamp: record.timestamp,
+                nonce: record.nonce,
+                plaintext: inner,
+              )));
+            }
+            await _emitDecodedMessage(
+              msgId: msgId,
+              senderUUIDHex: senderUUIDHex,
+              plaintext: inner,
+              recvAt: recvAt,
+              history: history,
+            );
+          }
+        }
       case 'text':
         _eventController.add(SgtpMessageReceived(
             message: ChatMessage(
@@ -2250,9 +2607,10 @@ class SgtpClient implements ISgtpSession {
     try {
       final (nonce, ciphertext) = _sharedKeyCipherParams(f);
       final plain = await decrypt(ciphertext, peer.sharedKey, nonce);
-      if (plain.length >= 16)
+      if (plain.length >= 16) {
         _eventController
             .add(SgtpError(error: 'Message rejected (CK rotation)'));
+      }
       await _sendFrame(buildMessageFailedAck(_roomUUID, f.senderUUID, _myUUID));
     } catch (_) {}
   }
@@ -2309,7 +2667,8 @@ class SgtpClient implements ISgtpSession {
         version: version,
       ));
     } catch (e) {
-      _log.warning('Failed to send NEED_CHAT_KEY to {peer}: {error}', parameters: {'peer': peerHex, 'error': e});
+      _log.warning('Failed to send NEED_CHAT_KEY to {peer}: {error}',
+          parameters: {'peer': peerHex, 'error': e});
     }
   }
 
@@ -2513,6 +2872,16 @@ class SgtpClient implements ISgtpSession {
     _chatKey = null;
     _chatEpoch = 0;
     _myNonce = 0;
+    _mls?.close();
+    _mls = null;
+    _mlsClientReady = false;
+    _mlsGroupReady = false;
+    _mlsKeyPackageBroadcast = false;
+    _mlsGroupCreated = false;
+    _mlsInviteInFlight = false;
+    _mlsLocalKeyPackageB64 = null;
+    _mlsPeerKeyPackages.clear();
+    _mlsInvitedPeers.clear();
     _receiveBuffer.clear();
     _sendChain = Future.value(); // reset the send queue
     _lastReceiveAt = DateTime.now();
