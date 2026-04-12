@@ -35,7 +35,8 @@ class SgtpRpcClient {
   SimpleKeyPairData? _keyPair;
   bool _authenticated = false;
 
-  final _pending = <String, Completer<Map<String, dynamic>>>{};
+  final _pending =
+      <String, ({Completer<Map<String, dynamic>> completer, String method})>{};
   final _queue = <_QueuedCall>[];
 
   SgtpRpcClient(IProtocolTransport transport) : _transport = transport {
@@ -161,10 +162,17 @@ class SgtpRpcClient {
     });
     final packetBytes = Uint8List.fromList(cbor.encode(packet));
 
-    _logCbor('→', requestIdHex, packet, packetBytes);
+    _log.info(
+      'Calling RPC method: {methodName}. RequestId: {requestIdShort}. Parameters: {parameters}',
+      parameters: {
+        'methodName': request.method,
+        'requestIdShort': requestIdHex.substring(0, 8),
+        'parameters': _jsonEncode(_cborToJsonLog(_toCborValue(request.toMap()))),
+      },
+    );
 
     final completer = Completer<Map<String, dynamic>>();
-    _pending[requestIdHex] = completer;
+    _pending[requestIdHex] = (completer: completer, method: request.method);
 
     try {
       await _transport.send(packetBytes);
@@ -186,8 +194,6 @@ class SgtpRpcClient {
   // ── Internal ───────────────────────────────────────────────────────────────
 
   void _onPacket(Uint8List bytes) {
-    // Log every inbound packet immediately — before any routing.
-    _logRaw('←', bytes);
     try {
       final decoded = cbor.decode(bytes);
       final packets = switch (decoded) {
@@ -224,8 +230,8 @@ class SgtpRpcClient {
     final replyIdHex =
         replyIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-    final completer = _pending.remove(replyIdHex);
-    if (completer == null) {
+    final pending = _pending.remove(replyIdHex);
+    if (pending == null) {
       _log.warning('no pending call for replyId={replyId}', parameters: {'replyId': replyIdHex});
       return;
     }
@@ -235,48 +241,37 @@ class SgtpRpcClient {
       final params = _fromCborMap(paramsValue);
       final error = params['error'];
       if (error is Map<String, dynamic>) {
-        completer.completeError(StateError(
-            '${error['code'] ?? 'rpc_error'}: ${error['message'] ?? ''}'));
+        final code = error['code'] ?? 'rpc_error';
+        final message = error['message'] ?? '';
+        _log.warning(
+          'RPC error response. Method: {methodName}. RequestId: {requestIdShort}. Code: {code}. Message: {message}',
+          parameters: {
+            'methodName': pending.method,
+            'requestIdShort': replyIdHex.substring(0, 8),
+            'code': code,
+            'message': message,
+          },
+        );
+        pending.completer.completeError(StateError('$code: $message'));
       } else {
-        completer.complete(params);
+        _log.info(
+          'RPC response received. Method: {methodName}. RequestId: {requestIdShort}. Parameters: {parameters}',
+          parameters: {
+            'methodName': pending.method,
+            'requestIdShort': replyIdHex.substring(0, 8),
+            'parameters': _jsonEncode(_cborToJsonLog(paramsValue)),
+          },
+        );
+        pending.completer.complete(params);
       }
     } else {
-      completer.completeError(
+      pending.completer.completeError(
         StateError('Invalid RPC response parameters for reply $replyIdHex'),
       );
     }
   }
 
   // ── Logging ────────────────────────────────────────────────────────────────
-
-  /// Logs raw inbound bytes as base64, with best-effort CBOR→JSON decoding.
-  static void _logRaw(String dir, Uint8List bytes) {
-    final b64 = base64.encode(bytes);
-    String decoded;
-    try {
-      final value = cbor.decode(bytes);
-      decoded = _jsonEncode(value is CborMap
-          ? _cborToJsonLog(value)
-          : value is CborList
-              ? value.map((e) => e is CborMap ? _cborToJsonLog(e) : e.toString()).toList()
-              : value.toString());
-    } catch (_) {
-      decoded = '<parse error>';
-    }
-    _log.debug('{dir} raw {decoded}\n  cbor={cbor}', parameters: {'dir': dir, 'decoded': decoded, 'cbor': b64});
-  }
-
-  /// Logs a full CBOR packet (request or response) as JSON + raw base64.
-  /// [dir] is `'→'` for outgoing, `'←'` for incoming.
-  /// [idHex] is the requestId for outgoing (first 8 chars shown), null for incoming.
-  static void _logCbor(
-      String dir, String? idHex, CborMap packet, Uint8List rawBytes) {
-    final label = idHex != null
-        ? '$dir [${idHex.substring(0, idHex.length >= 8 ? 8 : idHex.length)}]'
-        : dir;
-    final b64 = base64.encode(rawBytes);
-    _log.debug('{label} {json}\n  cbor={cbor}', parameters: {'label': label, 'json': _jsonEncode(_cborToJsonLog(packet)), 'cbor': b64});
-  }
 
   /// Recursively converts a [CborValue] to a JSON-encodable value.
   /// Byte arrays are rendered as hex strings with truncation for long arrays.
@@ -320,6 +315,7 @@ class SgtpRpcClient {
       return value.toString();
     }
   }
+
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
