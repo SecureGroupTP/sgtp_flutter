@@ -42,7 +42,6 @@ class HomeUserDirCoordinator {
   IUserDirClient? _client;
   StreamSubscription<UserDirMeta>? _userDirSub;
   StreamSubscription<UserDirFriendNotify>? _friendDirSub;
-  Timer? _friendSyncTimer;
   Timer? _profileRegisterTimer;
   Future<void> _notifyQueue = Future.value();
   String _lastRegisteredFingerprint = '';
@@ -250,7 +249,6 @@ class HomeUserDirCoordinator {
   Future<void> dispose() async {
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
-    _friendSyncTimer?.cancel();
     _profileRegisterTimer?.cancel();
     _client?.close();
     _client = null;
@@ -492,7 +490,6 @@ class HomeUserDirCoordinator {
       _log.warning('RPC skip: server options not yet discovered');
       return;
     }
-    _friendSyncTimer?.cancel();
     _profileRegisterTimer?.cancel();
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
@@ -533,12 +530,6 @@ class HomeUserDirCoordinator {
       _friendDirSub = client.friendNotifyStream.listen((_) {
         _notifyQueue =
             _notifyQueue.then((_) => _syncFriendStates(session, client));
-      });
-      _friendSyncTimer = Timer.periodic(const Duration(seconds: 6), (_) {
-        final active = _client;
-        if (active == null || !active.isConnected) return;
-        _notifyQueue =
-            _notifyQueue.then((_) => _syncFriendStates(session, active));
       });
       _profileRegisterTimer?.cancel();
       _profileRegisterTimer = Timer.periodic(const Duration(seconds: 10), (_) {
