@@ -181,8 +181,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await oldSub?.cancel();
     await oldClient?.close();
 
-    // Load saved metadata from disk BEFORE creating client,
-    // so we pass correct name/avatar into SgtpClient from the start.
+    // Load saved metadata from disk BEFORE creating the session, so we pass
+    // correct name/avatar into the active OpenMLS-backed runtime from the start.
     _activeServerAddress = event.config.serverAddr.trim();
     _persistedHistoryLoaded = 0;
 

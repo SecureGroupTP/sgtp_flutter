@@ -7,7 +7,7 @@ import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
-import 'package:sgtp_flutter/features/messaging/data/services/sgtp_client.dart';
+import 'package:sgtp_flutter/features/messaging/data/services/openmls_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
@@ -100,7 +100,11 @@ class AppInjector {
     );
     final homeUserDirSupportService = HomeUserDirSupportService();
 
-    final SgtpSessionFactory sgtpSessionFactory = (config) => SgtpClient(config);
+    // The active chat session runtime is the dedicated chat_core/OpenMLS-backed
+    // implementation. `SgtpClient` remains only as a deprecated compatibility
+    // alias and is intentionally not wired here.
+    final SgtpSessionFactory sgtpSessionFactory =
+        (config) => OpenMlsChatSession(config);
 
     final contactsDirectoryService = ContactsDirectoryService(
       settingsManagementService: settingsManagementService,
