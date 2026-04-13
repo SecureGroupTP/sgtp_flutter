@@ -31,6 +31,7 @@ class _QueuedCall {
 
 class SgtpRpcClient {
   final IProtocolTransport _transport;
+  final _eventCallbacks = <void Function(Map<String, dynamic> event)>[];
 
   SimpleKeyPairData? _keyPair;
   bool _authenticated = false;
@@ -53,21 +54,23 @@ class SgtpRpcClient {
   /// Returns an error string on failure, or null on success.
   Future<String?> authenticate(
     Uint8List publicKey,
-    SimpleKeyPairData keyPair,
-  ) async {
+    SimpleKeyPairData keyPair, {
+    String deviceId = 'flutter-client',
+  }) async {
     if (_authenticated) return null;
     try {
       _keyPair = keyPair;
       final challengeReq = RequestAuthChallengeRequest(
         userPublicKey: publicKey,
         publicIp: '',
-        deviceId: 'flutter-client',
+        deviceId: deviceId,
         clientNonce: _randomBytes(32),
       );
       final challengeRaw = await callRpc(challengeReq);
       final challengeRes = RequestAuthChallengeResponse.fromMap(challengeRaw);
 
-      final sig = await Ed25519().sign(challengeRes.challengePayload, keyPair: keyPair);
+      final sig =
+          await Ed25519().sign(challengeRes.challengePayload, keyPair: keyPair);
       final solveReq = SolveAuthChallengeRequest(
         sessionId: challengeRes.sessionId,
         signature: Uint8List.fromList(sig.bytes),
@@ -80,10 +83,12 @@ class SgtpRpcClient {
       _keyPair = keyPair;
       _authenticated = true;
       _flushQueue();
-      _log.debug('Authenticated as {pubkey}', parameters: {'pubkey': _hexShort(publicKey)});
+      _log.debug('Authenticated as {pubkey}',
+          parameters: {'pubkey': _hexShort(publicKey)});
       return null;
     } catch (e, st) {
-      _log.error('authenticate failed: {error}', parameters: {'error': e}, error: e, stackTrace: st);
+      _log.error('authenticate failed: {error}',
+          parameters: {'error': e}, error: e, stackTrace: st);
       return 'Authentication failed: $e';
     }
   }
@@ -110,10 +115,10 @@ class SgtpRpcClient {
   }
 
   /// Register a callback for server-initiated events (not RPC responses).
-  /// Stub — not yet implemented; events are silently ignored.
-  // ignore: avoid_unused_parameters
   void registerEventsCallback(
-      void Function(Map<String, dynamic> event) callback) {}
+      void Function(Map<String, dynamic> event) callback) {
+    _eventCallbacks.add(callback);
+  }
 
   /// Send a typed RPC request and return the decoded response parameters.
   ///
@@ -125,7 +130,8 @@ class SgtpRpcClient {
     if (request.requiresAuth && !_authenticated) {
       final completer = Completer<Map<String, dynamic>>();
       _queue.add(_QueuedCall(request, completer));
-      _log.debug('queued {method} (waiting for auth)', parameters: {'method': request.method});
+      _log.debug('queued {method} (waiting for auth)',
+          parameters: {'method': request.method});
       return completer.future;
     }
     return _sendRpc(request);
@@ -139,8 +145,8 @@ class SgtpRpcClient {
       CborString('requestId'): CborBytes(requestId),
       CborString('rpcCall'): CborString(request.method),
       CborString('timestamp'):
-          CborSmallInt(DateTime.now().millisecondsSinceEpoch),
-      CborString('version'): CborSmallInt(1),
+          CborInt(BigInt.from(DateTime.now().microsecondsSinceEpoch)),
+      CborString('version'): CborSmallInt(2),
       CborString('parameters'): _toCborValue(request.toMap()),
     });
 
@@ -167,7 +173,8 @@ class SgtpRpcClient {
       parameters: {
         'methodName': request.method,
         'requestIdShort': requestIdHex.substring(0, 8),
-        'parameters': _jsonEncode(_cborToJsonLog(_toCborValue(request.toMap()))),
+        'parameters':
+            _jsonEncode(_cborToJsonLog(_toCborValue(request.toMap()))),
       },
     );
 
@@ -214,7 +221,7 @@ class SgtpRpcClient {
   void _onResponsePacket(CborMap decoded, Uint8List rawBytes) {
     final replyToIdValue = decoded[CborString('replyToRequestId')];
     if (replyToIdValue == null || replyToIdValue is CborNull) {
-      // Server-initiated event — ignored until events callback is wired.
+      _emitServerEvent(decoded);
       return;
     }
 
@@ -224,7 +231,8 @@ class SgtpRpcClient {
       _ => null,
     };
     if (replyIdBytes == null) {
-      _log.warning('replyToRequestId has unexpected type: {type}', parameters: {'type': replyToIdValue.runtimeType});
+      _log.warning('replyToRequestId has unexpected type: {type}',
+          parameters: {'type': replyToIdValue.runtimeType});
       return;
     }
     final replyIdHex =
@@ -232,7 +240,8 @@ class SgtpRpcClient {
 
     final pending = _pending.remove(replyIdHex);
     if (pending == null) {
-      _log.warning('no pending call for replyId={replyId}', parameters: {'replyId': replyIdHex});
+      _log.warning('no pending call for replyId={replyId}',
+          parameters: {'replyId': replyIdHex});
       return;
     }
 
@@ -271,6 +280,26 @@ class SgtpRpcClient {
     }
   }
 
+  void _emitServerEvent(CborMap decoded) {
+    final eventTypeValue = decoded[CborString('eventType')];
+    final paramsValue = decoded[CborString('parameters')];
+    if (eventTypeValue is! CborString || paramsValue is! CborMap) {
+      return;
+    }
+    final event = <String, dynamic>{
+      'eventType': eventTypeValue.toString(),
+      'parameters': _fromCborMap(paramsValue),
+    };
+    for (final callback in List<void Function(Map<String, dynamic> event)>.from(
+        _eventCallbacks)) {
+      try {
+        callback(event);
+      } catch (e, st) {
+        Zone.current.handleUncaughtError(e, st);
+      }
+    }
+  }
+
   // ── Logging ────────────────────────────────────────────────────────────────
 
   /// Recursively converts a [CborValue] to a JSON-encodable value.
@@ -286,9 +315,8 @@ class SgtpRpcClient {
       CborMap() => {
           for (final e in value.entries)
             (e.key is CborString
-                    ? (e.key as CborString).toString()
-                    : e.key.toString()):
-                _cborToJsonLog(e.value),
+                ? (e.key as CborString).toString()
+                : e.key.toString()): _cborToJsonLog(e.value),
         },
       CborList() => value.map(_cborToJsonLog).toList(),
       _ => value.toString(),
@@ -316,7 +344,6 @@ class SgtpRpcClient {
     }
   }
 
-
   // ── Private helpers ────────────────────────────────────────────────────────
 
   static final _rng = Random.secure();
@@ -324,8 +351,10 @@ class SgtpRpcClient {
   static Uint8List _randomBytes(int length) =>
       Uint8List.fromList(List.generate(length, (_) => _rng.nextInt(256)));
 
-  static String _hexShort(Uint8List key) =>
-      key.map((b) => b.toRadixString(16).padLeft(2, '0')).join().substring(0, 8);
+  static String _hexShort(Uint8List key) => key
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join()
+      .substring(0, 8);
 
   // ── CBOR helpers ───────────────────────────────────────────────────────────
 

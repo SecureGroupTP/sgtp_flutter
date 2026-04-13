@@ -5,11 +5,11 @@ import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
-import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
-import 'package:sgtp_flutter/features/messaging/data/services/openmls_chat_session.dart';
+import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
@@ -58,8 +58,8 @@ class AppInjector {
     final settingsRepository = SettingsRepository();
     final appBackupRepository = AppBackupRepository();
 
-    UserDirClientFactory userDirClientFactory =
-        (NodeConfig node, SgtpServerOptions opts) {
+    UserDirClient? userDirClientFactory(
+        NodeConfig node, SgtpServerOptions opts) {
       if (!opts.supports(node.transport, tls: node.useTls)) return null;
       final port = opts.portFor(node.transport, tls: node.useTls);
       if (port <= 0) return null;
@@ -86,7 +86,7 @@ class AppInjector {
       final label =
           '${node.transport.name}${node.useTls ? '+tls' : ''}://${node.host}:$port';
       return UserDirClient(rpc: SgtpRpcClient(transport), label: label);
-    };
+    }
 
     final settingsManagementService = SettingsManagementService(
       settingsRepository: settingsRepository,
@@ -103,8 +103,8 @@ class AppInjector {
     // The active chat session runtime is the dedicated chat_core/OpenMLS-backed
     // implementation. `SgtpClient` remains only as a deprecated compatibility
     // alias and is intentionally not wired here.
-    final SgtpSessionFactory sgtpSessionFactory =
-        (config) => OpenMlsChatSession(config);
+    ISgtpSession sgtpSessionFactory(SgtpConfig config) =>
+        ServerV2ChatSession(config);
 
     final contactsDirectoryService = ContactsDirectoryService(
       settingsManagementService: settingsManagementService,
@@ -124,12 +124,12 @@ class AppInjector {
         required onStateChanged,
       }) =>
           HomeUserDirCoordinator(
-            persistenceService: homePersistenceService,
-            supportService: homeUserDirSupportService,
-            userDirClientFactory: userDirClientFactory,
-            onDirectMessageReady: onDirectMessageReady,
-            onStateChanged: onStateChanged,
-          ),
+        persistenceService: homePersistenceService,
+        supportService: homeUserDirSupportService,
+        userDirClientFactory: userDirClientFactory,
+        onDirectMessageReady: onDirectMessageReady,
+        onStateChanged: onStateChanged,
+      ),
     );
   }
 }

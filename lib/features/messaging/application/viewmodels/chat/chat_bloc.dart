@@ -115,7 +115,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         chatName = saved.name;
         chatAvatar = saved.avatarBytes;
         isDirectChat = saved.isDirectMessage;
-        _log.info('[ChatBloc] OpenOffline room={room} direct={direct} name="{name}" avatar={avatarSize}B', parameters: {'room': roomUUIDHex, 'direct': isDirectChat, 'name': chatName, 'avatarSize': chatAvatar?.length ?? 0});
+        _log.info(
+            '[ChatBloc] OpenOffline room={room} direct={direct} name="{name}" avatar={avatarSize}B',
+            parameters: {
+              'room': roomUUIDHex,
+              'direct': isDirectChat,
+              'name': chatName,
+              'avatarSize': chatAvatar?.length ?? 0
+            });
       }
     } catch (_) {}
 
@@ -215,7 +222,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           if (saved.serverAddress.trim().isNotEmpty) {
             _activeServerAddress = saved.serverAddress.trim();
           }
-          _log.info('[ChatBloc] Pre-loaded metadata room={room} direct={direct} name="{name}" avatar={avatarSize}B', parameters: {'room': roomUUIDHex, 'direct': isDirectChat, 'name': saved.name, 'avatarSize': saved.avatarBytes?.length ?? 0});
+          _log.info(
+              '[ChatBloc] Pre-loaded metadata room={room} direct={direct} name="{name}" avatar={avatarSize}B',
+              parameters: {
+                'room': roomUUIDHex,
+                'direct': isDirectChat,
+                'name': saved.name,
+                'avatarSize': saved.avatarBytes?.length ?? 0
+              });
         }
       } catch (_) {}
     }
@@ -287,7 +301,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       ));
     }
 
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (e) {
+      if (!isClosed) {
+        emit(state.copyWith(
+          status: ChatStatus.error,
+          errorMessage: 'Connection failed: $e',
+        ));
+      }
+    }
   }
 
   Future<void> _onSendMessage(
@@ -330,8 +353,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       nicknames: newNicknames,
       peerNicknames: updatedPeerNicks,
       peerNicknamesHistory: updatedHistory,
-      chatName:
-          isDirect && directDisplay != null ? directDisplay.name : state.chatName,
+      chatName: isDirect && directDisplay != null
+          ? directDisplay.name
+          : state.chatName,
       chatAvatarBytes: isDirect && directDisplay != null
           ? directDisplay.avatar
           : state.chatAvatarBytes,
@@ -347,8 +371,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final isDirect = state.isDirectChat;
     emit(state.copyWith(
       peerAvatars: _peerAvatarsFor(state.peerPublicKeys),
-      chatName:
-          isDirect && directDisplay != null ? directDisplay.name : state.chatName,
+      chatName: isDirect && directDisplay != null
+          ? directDisplay.name
+          : state.chatName,
       chatAvatarBytes: isDirect && directDisplay != null
           ? directDisplay.avatar
           : state.chatAvatarBytes,
@@ -549,9 +574,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         updatedAt: now,
       );
       await _metaRepo.saveChat(meta);
-      _log.info('[ChatBloc] Saved metadata for {room}: "{name}"', parameters: {'room': roomUUID, 'name': name});
+      _log.info('[ChatBloc] Saved metadata for {room}: "{name}"',
+          parameters: {'room': roomUUID, 'name': name});
     } catch (e) {
-      _log.info('[ChatBloc] Failed to save metadata: {error}', parameters: {'error': e});
+      _log.info('[ChatBloc] Failed to save metadata: {error}',
+          parameters: {'error': e});
     }
   }
 
@@ -586,7 +613,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       await _metaRepo.saveChat(metadata);
       _lastActivityPersistAt = now;
     } catch (e) {
-      _log.info('[ChatBloc] Failed to persist chat activity: {error}', parameters: {'error': e});
+      _log.info('[ChatBloc] Failed to persist chat activity: {error}',
+          parameters: {'error': e});
     }
   }
 
@@ -675,12 +703,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         updatedPubKeys[peerUUID] = ed25519PubHex;
         final directDisplay = _directChatDisplayFor(updatedPubKeys);
         final isDirect = state.isDirectChat;
-        final nextChatName =
-            isDirect && directDisplay != null ? directDisplay.name : state.chatName;
-        final nextChatAvatar =
-            isDirect && directDisplay != null
-                ? directDisplay.avatar
-                : state.chatAvatarBytes;
+        final nextChatName = isDirect && directDisplay != null
+            ? directDisplay.name
+            : state.chatName;
+        final nextChatAvatar = isDirect && directDisplay != null
+            ? directDisplay.avatar
+            : state.chatAvatarBytes;
         if (!state.peerUUIDs.contains(peerUUID)) {
           emit(state.copyWith(
             messages: updatedMessages,
@@ -735,8 +763,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           peerNicknamesHistory: updatedHistory,
           peerPublicKeys: updatedPubKeys,
           peerAvatars: _peerAvatarsFor(updatedPubKeys),
-          chatName:
-              isDirect && directDisplay != null ? directDisplay.name : state.chatName,
+          chatName: isDirect && directDisplay != null
+              ? directDisplay.name
+              : state.chatName,
           chatAvatarBytes: isDirect && directDisplay != null
               ? directDisplay.avatar
               : state.chatAvatarBytes,
@@ -756,7 +785,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (_lastConnectEvent != null && _client != null) {
           Future.delayed(const Duration(seconds: 3), () {
             if (!isClosed && state.status == ChatStatus.disconnected) {
-              _log.info('[ChatBloc] Auto-reconnecting after unexpected disconnect');
+              _log.info(
+                  '[ChatBloc] Auto-reconnecting after unexpected disconnect');
               add(const ChatReconnect());
             }
           });
@@ -773,9 +803,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         final isDirect = state.isDirectChat;
         final effectiveName =
             isDirect && directDisplay != null ? directDisplay.name : chatName;
-        final effectiveAvatar =
-            isDirect && directDisplay != null ? directDisplay.avatar : avatarBytes;
-        _log.info('[ChatBloc] Got metadata from {sender}: "{chatName}" -> "{effectiveName}"', parameters: {'sender': senderUUID, 'chatName': chatName, 'effectiveName': effectiveName});
+        final effectiveAvatar = isDirect && directDisplay != null
+            ? directDisplay.avatar
+            : avatarBytes;
+        _log.info(
+            '[ChatBloc] Got metadata from {sender}: "{chatName}" -> "{effectiveName}"',
+            parameters: {
+              'sender': senderUUID,
+              'chatName': chatName,
+              'effectiveName': effectiveName
+            });
         emit(state.copyWith(
           chatName: effectiveName,
           chatAvatarBytes: effectiveAvatar,

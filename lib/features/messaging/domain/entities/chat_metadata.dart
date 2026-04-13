@@ -12,6 +12,9 @@ class ChatMetadata extends Equatable {
   /// Server address bound to this chat history (host:port).
   final String serverAddress;
 
+  /// Optional server-side room UUID for RPC-based runtimes.
+  final String? remoteRoomId;
+
   /// Avatar image bytes (optional, PNG/JPEG, max 4KB)
   final Uint8List? avatarBytes;
 
@@ -34,6 +37,7 @@ class ChatMetadata extends Equatable {
     required this.uuid,
     required this.name,
     required this.serverAddress,
+    this.remoteRoomId,
     this.avatarBytes,
     this.isDirectMessage = false,
     required this.createdAt,
@@ -47,6 +51,7 @@ class ChatMetadata extends Equatable {
     String? uuid,
     String? name,
     String? serverAddress,
+    String? remoteRoomId,
     Uint8List? avatarBytes,
     bool? isDirectMessage,
     DateTime? createdAt,
@@ -58,6 +63,7 @@ class ChatMetadata extends Equatable {
       uuid: uuid ?? this.uuid,
       name: name ?? this.name,
       serverAddress: serverAddress ?? this.serverAddress,
+      remoteRoomId: remoteRoomId ?? this.remoteRoomId,
       avatarBytes: avatarBytes ?? this.avatarBytes,
       isDirectMessage: isDirectMessage ?? this.isDirectMessage,
       createdAt: createdAt ?? this.createdAt,
@@ -72,6 +78,7 @@ class ChatMetadata extends Equatable {
         uuid,
         name,
         serverAddress,
+        remoteRoomId,
         avatarBytes,
         isDirectMessage,
         createdAt,

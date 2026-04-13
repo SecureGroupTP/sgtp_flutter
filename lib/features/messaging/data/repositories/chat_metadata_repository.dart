@@ -94,7 +94,8 @@ class ChatMetadataRepository {
         if (uuid.isEmpty) continue;
         chats.add(_parseJson(uuid, json));
       } catch (e) {
-        _log.warning('[ChatMetadata] Web: error parsing key {key}: {error}', parameters: {'key': key, 'error': e});
+        _log.warning('[ChatMetadata] Web: error parsing key {key}: {error}',
+            parameters: {'key': key, 'error': e});
       }
     }
     chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -146,7 +147,8 @@ class ChatMetadataRepository {
                 jsonDecode(await file.readAsString()) as Map<String, dynamic>;
             chats.add(_parseJson(uuid, parsed));
           } catch (e) {
-            _log.warning('[ChatMetadata] Error parsing chat {uuid}: {error}', parameters: {'uuid': uuid, 'error': e});
+            _log.warning('[ChatMetadata] Error parsing chat {uuid}: {error}',
+                parameters: {'uuid': uuid, 'error': e});
           }
         }
       }
@@ -154,7 +156,8 @@ class ChatMetadataRepository {
       chats.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       return chats;
     } catch (e) {
-      _log.error('[ChatMetadata] Error loading chats: {error}', parameters: {'error': e});
+      _log.error('[ChatMetadata] Error loading chats: {error}',
+          parameters: {'error': e});
       return [];
     }
   }
@@ -175,7 +178,8 @@ class ChatMetadataRepository {
       final json = jsonDecode(content) as Map<String, dynamic>;
       return _parseJson(uuid, json);
     } catch (e) {
-      _log.warning('[ChatMetadata] Error loading legacy chat {uuid}: {error}', parameters: {'uuid': uuid, 'error': e});
+      _log.warning('[ChatMetadata] Error loading legacy chat {uuid}: {error}',
+          parameters: {'uuid': uuid, 'error': e});
       return null;
     }
   }
@@ -218,7 +222,8 @@ class ChatMetadataRepository {
       }
       return null;
     } catch (e) {
-      _log.warning('[ChatMetadata] Error loading chat {uuid}: {error}', parameters: {'uuid': uuid, 'error': e});
+      _log.warning('[ChatMetadata] Error loading chat {uuid}: {error}',
+          parameters: {'uuid': uuid, 'error': e});
       return null;
     }
   }
@@ -235,9 +240,13 @@ class ChatMetadataRepository {
       );
       await file.parent.create(recursive: true);
       await file.writeAsString(jsonEncode(_toJson(metadata)), flush: true);
-      _log.info('[ChatMetadata] Saved chat: {uuid}@{server}', parameters: {'uuid': metadata.uuid, 'server': metadata.serverAddress});
+      _log.info('[ChatMetadata] Saved chat: {uuid}@{server}', parameters: {
+        'uuid': metadata.uuid,
+        'server': metadata.serverAddress
+      });
     } catch (e) {
-      _log.error('[ChatMetadata] Error saving chat: {error}', parameters: {'error': e});
+      _log.error('[ChatMetadata] Error saving chat: {error}',
+          parameters: {'error': e});
       rethrow;
     }
   }
@@ -246,9 +255,11 @@ class ChatMetadataRepository {
     try {
       final updated = metadata.copyWith(updatedAt: DateTime.now());
       await saveChat(updated);
-      _log.info('[ChatMetadata] Updated chat: {uuid}', parameters: {'uuid': metadata.uuid});
+      _log.info('[ChatMetadata] Updated chat: {uuid}',
+          parameters: {'uuid': metadata.uuid});
     } catch (e) {
-      _log.error('[ChatMetadata] Error updating chat: {error}', parameters: {'error': e});
+      _log.error('[ChatMetadata] Error updating chat: {error}',
+          parameters: {'error': e});
       rethrow;
     }
   }
@@ -282,9 +293,13 @@ class ChatMetadataRepository {
         }
       }
 
-      _log.info('[ChatMetadata] Deleted chat: {uuid}{suffix}', parameters: {'uuid': uuid, 'suffix': server.isNotEmpty ? '@$server' : ''});
+      _log.info('[ChatMetadata] Deleted chat: {uuid}{suffix}', parameters: {
+        'uuid': uuid,
+        'suffix': server.isNotEmpty ? '@$server' : ''
+      });
     } catch (e) {
-      _log.error('[ChatMetadata] Error deleting chat: {error}', parameters: {'error': e});
+      _log.error('[ChatMetadata] Error deleting chat: {error}',
+          parameters: {'error': e});
       rethrow;
     }
   }
@@ -294,6 +309,7 @@ class ChatMetadataRepository {
       'uuid': metadata.uuid,
       'name': metadata.name,
       'serverAddress': metadata.serverAddress,
+      'remoteRoomId': metadata.remoteRoomId,
       'avatar': metadata.avatarBytes != null
           ? base64Encode(metadata.avatarBytes!)
           : null,
@@ -316,7 +332,8 @@ class ChatMetadataRepository {
       try {
         avatarBytes = base64Decode(avatarBase64);
       } catch (e) {
-        _log.warning('[ChatMetadata] Failed to decode avatar: {error}', parameters: {'error': e});
+        _log.warning('[ChatMetadata] Failed to decode avatar: {error}',
+            parameters: {'error': e});
       }
     }
 
@@ -326,6 +343,7 @@ class ChatMetadataRepository {
       serverAddress:
           (json['serverAddress'] as String? ?? fallbackServerAddress ?? '')
               .trim(),
+      remoteRoomId: (json['remoteRoomId'] as String?)?.trim(),
       avatarBytes: avatarBytes,
       isDirectMessage: (json['isDirectMessage'] as bool?) ?? false,
       createdAt: DateTime.parse(
