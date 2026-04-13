@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -65,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
       initialWhitelist: widget.initialWhitelist,
       settingsManagementService: context.read<SettingsManagementService>(),
       chatStorageGateway: context.read<ChatStorageGateway>(),
+      sgtpConnectionService: context.read<SgtpConnectionService>(),
       sessionFactory: context.read<SgtpSessionFactory>(),
       homePersistenceService: context.read<HomePersistenceService>(),
       homeUserDirSupportService: context.read<HomeUserDirSupportService>(),

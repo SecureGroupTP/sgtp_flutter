@@ -1,41 +1,74 @@
 import 'dart:typed_data';
 
-import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/core/network/events/network_event.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/message.dart';
 
-sealed class SgtpEvent {}
+sealed class SgtpEvent extends NetworkEvent {
+  const SgtpEvent();
+}
 
-class SgtpConnecting extends SgtpEvent {}
+class SgtpConnecting extends SgtpEvent {
+  const SgtpConnecting();
 
-class SgtpHandshaking extends SgtpEvent {}
+  @override
+  String get type => 'sgtp.connecting';
+}
+
+class SgtpHandshaking extends SgtpEvent {
+  const SgtpHandshaking();
+
+  @override
+  String get type => 'sgtp.handshaking';
+}
 
 class SgtpReady extends SgtpEvent {
   final bool isMaster;
   final String roomUUIDHex;
   SgtpReady({required this.isMaster, required this.roomUUIDHex});
+
+  @override
+  String get type => 'sgtp.ready';
 }
 
 class SgtpMessageReceived extends SgtpEvent {
   final ChatMessage message;
   SgtpMessageReceived({required this.message});
+
+  @override
+  String get type => 'sgtp.message_received';
 }
 
 class SgtpPeerJoined extends SgtpEvent {
   final String peerUUID;
   final String ed25519PubHex;
   SgtpPeerJoined({required this.peerUUID, required this.ed25519PubHex});
+
+  @override
+  String get type => 'sgtp.peer_joined';
 }
 
 class SgtpPeerLeft extends SgtpEvent {
   final String peerUUID;
   SgtpPeerLeft({required this.peerUUID});
+
+  @override
+  String get type => 'sgtp.peer_left';
 }
 
 class SgtpError extends SgtpEvent {
   final String error;
   SgtpError({required this.error});
+
+  @override
+  String get type => 'sgtp.error';
 }
 
-class SgtpDisconnected extends SgtpEvent {}
+class SgtpDisconnected extends SgtpEvent {
+  const SgtpDisconnected();
+
+  @override
+  String get type => 'sgtp.disconnected';
+}
 
 /// A participant shared their chat metadata (name/avatar).
 class SgtpChatMetadataReceived extends SgtpEvent {
@@ -47,6 +80,9 @@ class SgtpChatMetadataReceived extends SgtpEvent {
     this.avatarBytes,
     required this.senderUUID,
   });
+
+  @override
+  String get type => 'sgtp.chat_metadata_received';
 }
 
 /// A peer sent a read receipt for a specific message.
@@ -59,6 +95,9 @@ class SgtpMessageReadReceived extends SgtpEvent {
     required this.readerUUID,
     this.readerPublicKeyHex,
   });
+
+  @override
+  String get type => 'sgtp.message_read_received';
 }
 
 /// Upload progress for our own outgoing media.
@@ -71,6 +110,9 @@ class SgtpMediaProgress extends SgtpEvent {
     required this.messageId,
     required this.progress,
   });
+
+  @override
+  String get type => 'sgtp.media_progress';
 }
 
 /// A peer added or removed an emoji reaction on a message.
@@ -85,6 +127,9 @@ class SgtpReactionReceived extends SgtpEvent {
     required this.senderUUID,
     required this.add,
   });
+
+  @override
+  String get type => 'sgtp.reaction_received';
 }
 
 class PersistedHistoryBatchResult {

@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/app/app_shell.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/window_size_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -77,6 +78,9 @@ RepositoryProvider<ChatStorageGateway>(
         ),
         RepositoryProvider<HomeUserDirSupportService>(
           create: (_) => widget.dependencies.homeUserDirSupportService,
+        ),
+        RepositoryProvider<SgtpConnectionService>(
+          create: (_) => widget.dependencies.sgtpConnectionService,
         ),
         RepositoryProvider<SgtpSessionFactory>(
           create: (_) => widget.dependencies.sgtpSessionFactory,

@@ -31,7 +31,8 @@ class _QueuedCall {
 
 class SgtpRpcClient {
   final IProtocolTransport _transport;
-  final _eventCallbacks = <void Function(Map<String, dynamic> event)>[];
+  final _eventCallbacks = <int, void Function(Map<String, dynamic> event)>{};
+  int _nextEventCallbackId = 0;
 
   SimpleKeyPairData? _keyPair;
   bool _authenticated = false;
@@ -115,9 +116,13 @@ class SgtpRpcClient {
   }
 
   /// Register a callback for server-initiated events (not RPC responses).
-  void registerEventsCallback(
+  void Function() registerEventsCallback(
       void Function(Map<String, dynamic> event) callback) {
-    _eventCallbacks.add(callback);
+    final id = _nextEventCallbackId++;
+    _eventCallbacks[id] = callback;
+    return () {
+      _eventCallbacks.remove(id);
+    };
   }
 
   /// Send a typed RPC request and return the decoded response parameters.
@@ -290,8 +295,9 @@ class SgtpRpcClient {
       'eventType': eventTypeValue.toString(),
       'parameters': _fromCborMap(paramsValue),
     };
-    for (final callback in List<void Function(Map<String, dynamic> event)>.from(
-        _eventCallbacks)) {
+    for (final callback
+        in List<void Function(Map<String, dynamic> event)>.from(
+            _eventCallbacks.values)) {
       try {
         callback(event);
       } catch (e, st) {
@@ -396,8 +402,16 @@ class SgtpRpcClient {
       CborString() => value.toString(),
       CborBytes() => Uint8List.fromList(value.bytes),
       CborMap() => _fromCborMap(value),
-      CborList() => value.map(_fromCborValue).toList(),
+      CborList() => _normalizeDecodedList(value.map(_fromCborValue).toList()),
       _ => null,
     };
+  }
+
+  static dynamic _normalizeDecodedList(List<dynamic> value) {
+    if (value.isEmpty) return value;
+    if (value.every((item) => item is int)) {
+      return Uint8List.fromList(value.cast<int>());
+    }
+    return value;
   }
 }

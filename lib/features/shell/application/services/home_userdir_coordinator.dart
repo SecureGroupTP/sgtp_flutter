@@ -14,7 +14,7 @@ class HomeUserDirCoordinator {
   HomeUserDirCoordinator({
     required HomePersistenceService persistenceService,
     required HomeUserDirSupportService supportService,
-    required UserDirClientFactory userDirClientFactory,
+    required IUserDirClient userDirClient,
     required Future<void> Function(
       String roomUUIDHex,
       String peerHex,
@@ -22,15 +22,15 @@ class HomeUserDirCoordinator {
       Uint8List? avatarBytes,
     ) onDirectMessageReady,
     required void Function(HomeUserDirState state) onStateChanged,
-  })  : _persistence = persistenceService,
+    })  : _persistence = persistenceService,
         _support = supportService,
-        _clientFactory = userDirClientFactory,
+        _userDirClient = userDirClient,
         _onDirectMessageReady = onDirectMessageReady,
         _onStateChanged = onStateChanged;
 
   final HomePersistenceService _persistence;
   final HomeUserDirSupportService _support;
-  final UserDirClientFactory _clientFactory;
+  final IUserDirClient _userDirClient;
   final Future<void> Function(
     String roomUUIDHex,
     String peerHex,
@@ -48,6 +48,7 @@ class HomeUserDirCoordinator {
   StreamSubscription<UserDirMeta>? _userDirSub;
   StreamSubscription<UserDirFriendNotify>? _friendDirSub;
   Timer? _profileRegisterTimer;
+  Future<void>? _initFuture;
   Future<void> _notifyQueue = Future.value();
   String _lastRegisteredFingerprint = '';
   String _desiredProfileFingerprint = '';
@@ -255,7 +256,7 @@ class HomeUserDirCoordinator {
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
     _profileRegisterTimer?.cancel();
-    _client?.close();
+    _initFuture = null;
     _client = null;
     _activeAccountId = '';
     _notifyQueue = Future.value();
@@ -488,6 +489,23 @@ class HomeUserDirCoordinator {
   }
 
   Future<void> _initUserDir(HomeUserDirSession session) async {
+    final inFlight = _initFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+    final future = _doInitUserDir(session);
+    _initFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_initFuture, future)) {
+        _initFuture = null;
+      }
+    }
+  }
+
+  Future<void> _doInitUserDir(HomeUserDirSession session) async {
     if (!_isCurrentSession(session)) return;
     if (session.accountId.trim().isEmpty) return;
     final resolved = session.resolvedNode;
@@ -500,23 +518,13 @@ class HomeUserDirCoordinator {
     await _friendDirSub?.cancel();
     _userDirSub = null;
     _friendDirSub = null;
-    final previousClient = _client;
-    _client = null;
-    previousClient?.close();
-
-    final client = _clientFactory(resolved.node, resolved.options);
-    if (client == null) {
-      _log.warning('RPC skip: no HTTP endpoint on node (opts={opts})',
-          parameters: {'opts': resolved.options});
-      return;
-    }
+    final client = _userDirClient;
+    _client = client;
 
     _log.info('RPC connecting via {label}',
         parameters: {'label': client.label});
     try {
       await client.connect();
-      _client = client;
-
       await registerSelf(session, force: false);
 
       if (_whitelist.isNotEmpty) {

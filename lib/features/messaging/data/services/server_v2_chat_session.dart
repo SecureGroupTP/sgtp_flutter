@@ -7,18 +7,12 @@ import 'package:cross_file/cross_file.dart';
 import 'package:sgtp_chat_core/sgtp_chat_core.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
-import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
-import 'package:sgtp_flutter/core/network/rpc_models/messaging_rpc_models.dart';
+import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
-import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
-import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
-import 'package:sgtp_flutter/core/sgtp_transport.dart';
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_metadata_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/message.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/peer.dart';
@@ -71,6 +65,7 @@ class _PendingMedia {
 
 class ServerV2ChatSession implements ISgtpSession {
   final SgtpConfig _config;
+  final SgtpConnectionService _connectionService;
   final _eventController = StreamController<SgtpEvent>.broadcast();
   final Map<String, PeerInfo> _peers = {};
   final Map<String, String> _peerPublicKeys = {};
@@ -81,9 +76,9 @@ class ServerV2ChatSession implements ISgtpSession {
 
   MessengerMls? _mls;
   ServerV2MlsClient? _rpcChat;
-  StreamSubscription<ServerV2MlsEvent>? _rpcEventSub;
+  StreamSubscription<SgtpServerEvent>? _rpcEventSub;
   Timer? _inviteRetryTimer;
-  Timer? _eventPollTimer;
+  Future<void>? _pendingRemoteRoomBind;
   bool _mlsClientReady = false;
   bool _mlsGroupReady = false;
   bool _mlsGroupCreated = false;
@@ -95,8 +90,11 @@ class ServerV2ChatSession implements ISgtpSession {
   late final Uint8List _roomUUID;
   late final String _deviceId;
 
-  ServerV2ChatSession(SgtpConfig config)
-      : _config = config,
+  ServerV2ChatSession(
+    SgtpConfig config, {
+    required SgtpConnectionService connectionService,
+  })  : _config = config,
+        _connectionService = connectionService,
         _whitelist = _normalizeWhitelist(config.whitelist),
         _metadataRepository = (config.accountId ?? '').trim().isEmpty
             ? null
@@ -152,7 +150,6 @@ class ServerV2ChatSession implements ISgtpSession {
       _seedPeers();
       await _bootstrapRoomAndMls();
       _scheduleInviteRetry();
-      _startEventPolling();
       _emitReadyIfNeeded(force: _mlsGroupReady || _whitelist.isEmpty);
     } catch (e) {
       _log.error('connect failed: {error}', parameters: {'error': e});
@@ -169,12 +166,12 @@ class ServerV2ChatSession implements ISgtpSession {
     _readyEmitted = false;
     _inviteRetryTimer?.cancel();
     _inviteRetryTimer = null;
-    _eventPollTimer?.cancel();
-    _eventPollTimer = null;
+    _pendingRemoteRoomBind = null;
     await _rpcEventSub?.cancel();
     _rpcEventSub = null;
-    await _rpcChat?.close();
+    final rpcChat = _rpcChat;
     _rpcChat = null;
+    await rpcChat?.close();
     _eventController.add(SgtpDisconnected());
   }
 
@@ -195,7 +192,11 @@ class ServerV2ChatSession implements ISgtpSession {
       await connect();
       return;
     }
-    await _pollAndAdvanceState();
+    final client = _rpcChat;
+    if (client == null || !client.isTransportConnected) {
+      _log.warning('RPC transport is not connected during probe');
+      await disconnect();
+    }
   }
 
   @override
@@ -398,43 +399,15 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   Future<void> _connectRpc() async {
-    final (host, explicitPort) = _parseHostPortOrThrow(_config.serverAddr);
-    final result = await SgtpServerDiscovery.discover(
-      host,
-      preferredPort: explicitPort > 0 ? explicitPort : null,
-      preferredTls: _config.useTls,
+    final client = ServerV2MlsClient(
+      rpcProvider: () => _connectionService.acquireRpc(_config),
     );
-    final options = result.opts;
-    final family = SgtpTransportFamilyCodec.resolve(_config.transport);
-    final tls = _config.useTls;
-    if (!options.supports(family, tls: tls)) {
-      throw StateError(
-        'Selected transport (${family.name}, tls=$tls) not supported by server.',
-      );
-    }
-    final port = options.portFor(family, tls: tls);
-    final transport = _buildTransport(
-      host: host,
-      port: port,
-      family: family,
-      tls: tls,
-      fakeSni: _config.fakeSni,
-    );
-    final client = ServerV2MlsClient(rpc: SgtpRpcClient(transport));
     _rpcEventSub = client.events.listen(
       _handleServerEvent,
       onError: (Object e) =>
           _eventController.add(SgtpError(error: 'Server event error: $e')),
     );
     await client.connect();
-    final authError = await client.authenticate(
-      _config.myPublicKey,
-      _config.identityKeyPair,
-      deviceId: _deviceId,
-    );
-    if (authError != null) {
-      throw StateError(authError);
-    }
     await client.ensureSubscribedToEvents();
     _rpcChat = client;
     _connected = true;
@@ -741,13 +714,17 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  Future<void> _handleServerEvent(ServerV2MlsEvent event) async {
+  Future<void> _handleServerEvent(SgtpServerEvent event) async {
     switch (event) {
-      case ServerV2MlsCommitReceived(:final event):
+      case MlsCommitReceivedNetworkEvent():
+        if (!_ownsRemoteRoom(event.roomId)) return;
         await _handleCommit(event.commitBytes);
-      case ServerV2MlsWelcomeReceived(:final event):
+      case MlsWelcomeReceivedNetworkEvent():
+        if (!_isWelcomeForMe(event.targetUserPublicKey)) return;
         await _handleWelcome(event.welcomeBytes);
-      case ServerV2MlsMessageReceived(:final event):
+        _scheduleRemoteRoomBind();
+      case MlsMessageReceivedNetworkEvent():
+        if (!_ownsRemoteRoom(event.roomId)) return;
         await _handleIncomingMessage(event);
     }
   }
@@ -768,7 +745,8 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  Future<void> _handleIncomingMessage(MlsMessageReceivedEvent event) async {
+  Future<void> _handleIncomingMessage(
+      MlsMessageReceivedNetworkEvent event) async {
     final senderHex = _hex(event.senderPublicKey);
     _peerPublicKeys[senderHex] = senderHex;
     _ensurePeer(senderHex);
@@ -1058,18 +1036,6 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  Future<void> _pollAndAdvanceState() async {
-    final client = _rpcChat;
-    if (client == null || !_connected) return;
-    await client.pollEvents();
-    if ((_remoteRoomId ?? '').isEmpty) {
-      await _ensureRemoteRoomBound();
-    }
-    if (_isMaster && !_allPeersInvited) {
-      await _inviteKnownPeers();
-    }
-  }
-
   void _seedPeers() {
     for (final peerHex in _whitelist) {
       if (peerHex == myUUIDHex) continue;
@@ -1154,15 +1120,31 @@ class ServerV2ChatSession implements ISgtpSession {
     });
   }
 
-  void _startEventPolling() {
-    _eventPollTimer?.cancel();
-    _eventPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      try {
-        await _pollAndAdvanceState();
-      } catch (e) {
-        _log.warning('event poll failed: {error}', parameters: {'error': e});
-      }
-    });
+  void _scheduleRemoteRoomBind() {
+    if (_isMaster ||
+        !_connected ||
+        (_remoteRoomId ?? '').isNotEmpty ||
+        _pendingRemoteRoomBind != null) {
+      return;
+    }
+    _pendingRemoteRoomBind = _bindRemoteRoomAfterWelcome();
+  }
+
+  Future<void> _bindRemoteRoomAfterWelcome() async {
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 750));
+      if (!_connected || (_remoteRoomId ?? '').isNotEmpty) return;
+      await _ensureRemoteRoomBound();
+    } catch (e, st) {
+      _log.warning(
+        'deferred remote room bind failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    } finally {
+      _pendingRemoteRoomBind = null;
+    }
   }
 
   void _attachSenderAvatar(Map<String, dynamic> payload) {
@@ -1179,63 +1161,11 @@ class ServerV2ChatSession implements ISgtpSession {
         .toSet();
   }
 
-  (String host, int port) _parseHostPortOrThrow(String raw) {
-    final s = raw
-        .trim()
-        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
-        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
-        .trim();
-    if (s.isEmpty) {
-      throw ArgumentError('Empty server address');
-    }
-    if (s.startsWith('[')) {
-      final end = s.indexOf(']');
-      if (end <= 1) {
-        throw ArgumentError('Invalid IPv6 address: $raw');
-      }
-      final host = s.substring(1, end);
-      final rest = s.substring(end + 1);
-      final port =
-          (rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null) ?? 0;
-      return (host, port);
-    }
-    final index = s.lastIndexOf(':');
-    if (index <= 0 || index == s.length - 1) {
-      return (s, 443);
-    }
-    return (s.substring(0, index), int.tryParse(s.substring(index + 1)) ?? 443);
-  }
+  bool _ownsRemoteRoom(String roomId) =>
+      roomId.isNotEmpty && roomId == (_remoteRoomId ?? '');
 
-  IProtocolTransport _buildTransport({
-    required String host,
-    required int port,
-    required SgtpTransportFamily family,
-    required bool tls,
-    String? fakeSni,
-  }) {
-    switch (family) {
-      case SgtpTransportFamily.tcp:
-        return TcpSgtpTransport(
-          host: host,
-          port: port,
-          useTls: tls,
-          fakeSni: fakeSni,
-        );
-      case SgtpTransportFamily.websocket:
-        return WebSocketSgtpTransport(
-          host: host,
-          port: port,
-          useTls: tls,
-          fakeSni: fakeSni,
-        );
-      case SgtpTransportFamily.http:
-        return HttpProtocolTransport(
-          host: host,
-          port: port,
-          useTls: tls,
-        );
-    }
-  }
+  bool _isWelcomeForMe(Uint8List targetUserPublicKey) =>
+      _hex(targetUserPublicKey) == myUUIDHex;
 
   Map<String, dynamic> _map(Object? value) {
     if (value is Map<String, dynamic>) return value;

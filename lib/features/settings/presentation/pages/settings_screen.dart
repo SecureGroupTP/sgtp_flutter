@@ -3218,17 +3218,36 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       );
       return;
     }
+    final selectedPort = _resolveSelectedPort();
     widget.onSave(NodeConfig(
       id: widget.baseId,
       accountId: widget.existing?.accountId ?? widget.accountIdForNew ?? '',
       name: name,
       host: host,
-      chatPort: 443,
-      voicePort: 443,
+      chatPort: selectedPort,
+      voicePort: selectedPort,
       transport: _transport,
       useTls: _useTls,
       fakeSni: _fakeSniCtrl.text.trim(),
     ));
+  }
+
+  int _resolveSelectedPort() {
+    final opts = _serverOptions;
+    if (opts != null && opts.supports(_transport, tls: _useTls)) {
+      final port = opts.portFor(_transport, tls: _useTls);
+      if (port > 0) {
+        return port;
+      }
+    }
+    final existing = widget.existing;
+    if (existing != null &&
+        existing.transport == _transport &&
+        existing.useTls == _useTls &&
+        existing.chatPort > 0) {
+      return existing.chatPort;
+    }
+    return _useTls ? 443 : 80;
   }
 
   @override

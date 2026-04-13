@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/events/connection_events.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
@@ -15,6 +16,8 @@ class HomeViewState {
     this.friendStates = const {},
     this.nickname = '',
     this.username = '',
+    this.connectionStatus = SgtpConnectionStatus.disconnected,
+    this.connectionError,
     this.currentTabIndex = 0,
   });
 
@@ -28,6 +31,8 @@ class HomeViewState {
   final Map<String, FriendStateRecord> friendStates;
   final String nickname;
   final String username;
+  final SgtpConnectionStatus connectionStatus;
+  final String? connectionError;
   final int currentTabIndex;
 
   String? get myPubkeyHex {

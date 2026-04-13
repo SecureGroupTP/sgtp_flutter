@@ -1,14 +1,15 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
 import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
+import 'package:sgtp_flutter/core/network/transport/tcp_sgtp_transport.dart';
+import 'package:sgtp_flutter/core/network/transport/websocket_sgtp_transport.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/tcp_sgtp_transport.dart';
-import 'package:sgtp_flutter/features/messaging/data/transport/websocket_sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -31,6 +32,7 @@ class AppDependencies {
     required this.settingsManagementService,
     required this.homePersistenceService,
     required this.homeUserDirSupportService,
+    required this.sgtpConnectionService,
     required this.sgtpSessionFactory,
     required this.homeUserDirCoordinatorFactory,
   });
@@ -41,6 +43,7 @@ class AppDependencies {
   final SettingsManagementService settingsManagementService;
   final HomePersistenceService homePersistenceService;
   final HomeUserDirSupportService homeUserDirSupportService;
+  final SgtpConnectionService sgtpConnectionService;
   final SgtpSessionFactory sgtpSessionFactory;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
@@ -85,7 +88,11 @@ class AppInjector {
       };
       final label =
           '${node.transport.name}${node.useTls ? '+tls' : ''}://${node.host}:$port';
-      return UserDirClient(rpc: SgtpRpcClient(transport), label: label);
+      final rpc = SgtpRpcClient(transport);
+      return UserDirClient(
+        rpcProvider: () async => rpc,
+        label: label,
+      );
     }
 
     final settingsManagementService = SettingsManagementService(
@@ -94,6 +101,11 @@ class AppInjector {
       userDirClientFactory: userDirClientFactory,
     );
     const chatStorageGateway = DefaultChatStorageGateway();
+    final sgtpConnectionService = SgtpConnectionService();
+    final sharedUserDirClient = UserDirClient(
+      rpcProvider: sgtpConnectionService.ensureConnected,
+      label: 'shared-sgtp',
+    );
     final homePersistenceService = HomePersistenceService(
       settingsManagementService: settingsManagementService,
       chatStorageGateway: chatStorageGateway,
@@ -104,7 +116,10 @@ class AppInjector {
     // implementation. `SgtpClient` remains only as a deprecated compatibility
     // alias and is intentionally not wired here.
     ISgtpSession sgtpSessionFactory(SgtpConfig config) =>
-        ServerV2ChatSession(config);
+        ServerV2ChatSession(
+          config,
+          connectionService: sgtpConnectionService,
+        );
 
     final contactsDirectoryService = ContactsDirectoryService(
       settingsManagementService: settingsManagementService,
@@ -118,6 +133,7 @@ class AppInjector {
       settingsManagementService: settingsManagementService,
       homePersistenceService: homePersistenceService,
       homeUserDirSupportService: homeUserDirSupportService,
+      sgtpConnectionService: sgtpConnectionService,
       sgtpSessionFactory: sgtpSessionFactory,
       homeUserDirCoordinatorFactory: ({
         required onDirectMessageReady,
@@ -126,7 +142,7 @@ class AppInjector {
           HomeUserDirCoordinator(
         persistenceService: homePersistenceService,
         supportService: homeUserDirSupportService,
-        userDirClientFactory: userDirClientFactory,
+        userDirClient: sharedUserDirClient,
         onDirectMessageReady: onDirectMessageReady,
         onStateChanged: onStateChanged,
       ),

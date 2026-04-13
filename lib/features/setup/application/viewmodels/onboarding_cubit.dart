@@ -182,22 +182,6 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         throw const FormatException('No private key for account');
       }
 
-      final options = state.resolvedOptions;
-      if (options == null) {
-        throw const FormatException('Server options are not resolved');
-      }
-      final registerError = await _settings.registerProfileOnUserDir(
-        node: node,
-        options: options,
-        privateKeyBytes: savedKey.bytes,
-        nickname: nick,
-        username: username,
-        avatarBytes: _avatarBytes,
-      );
-      if (registerError != null && registerError.trim().isNotEmpty) {
-        throw FormatException(registerError);
-      }
-
       emit(OnboardingViewState(
         step: state.step,
         completed: true,

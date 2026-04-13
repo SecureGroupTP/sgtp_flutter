@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sgtp_flutter/core/network/events/connection_events.dart';
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
@@ -28,6 +30,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     required List<WhitelistEntry> initialWhitelist,
     required SettingsManagementService settingsManagementService,
     required ChatStorageGateway chatStorageGateway,
+    required SgtpConnectionService sgtpConnectionService,
     required SgtpSessionFactory sessionFactory,
     required HomePersistenceService homePersistenceService,
     required HomeUserDirSupportService homeUserDirSupportService,
@@ -42,6 +45,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     }) homeUserDirCoordinatorFactory,
   })  : _settingsManagementService = settingsManagementService,
         _chatStorageGateway = chatStorageGateway,
+        _sgtpConnection = sgtpConnectionService,
         _sessionFactory = sessionFactory,
         _homePersistence = homePersistenceService,
         _userDirSupport = homeUserDirSupportService,
@@ -58,7 +62,12 @@ class HomeCubit extends Cubit<HomeViewState> {
           serverAddress: serverAddress,
           userAvatar: userAvatar,
           whitelist: initialWhitelist,
+          connectionStatus: sgtpConnectionService.status,
+          connectionError: sgtpConnectionService.lastError,
         )) {
+    _connectionStatus = _sgtpConnection.status;
+    _connectionError = _sgtpConnection.lastError;
+    _connectionSub = _sgtpConnection.events.listen(_onConnectionEvent);
     _userDirCoordinator = homeUserDirCoordinatorFactory(
       onDirectMessageReady: _upsertDmChat,
       onStateChanged: _applyCoordinatorState,
@@ -78,9 +87,11 @@ class HomeCubit extends Cubit<HomeViewState> {
 
   final SettingsManagementService _settingsManagementService;
   final ChatStorageGateway _chatStorageGateway;
+  final SgtpConnectionService _sgtpConnection;
   final SgtpSessionFactory _sessionFactory;
   final HomePersistenceService _homePersistence;
   final HomeUserDirSupportService _userDirSupport;
+  StreamSubscription<SgtpConnectionStateChanged>? _connectionSub;
 
   late HomeUserDirCoordinator _userDirCoordinator;
 
@@ -100,6 +111,8 @@ class HomeCubit extends Cubit<HomeViewState> {
   Map<String, FriendStateRecord> _friendStates = {};
   String _nickname = '';
   String _username = '';
+  SgtpConnectionStatus _connectionStatus = SgtpConnectionStatus.disconnected;
+  String? _connectionError;
   int _currentTabIndex = 0;
 
   RoomsBloc get roomsBloc => _roomsBloc;
@@ -133,7 +146,9 @@ class HomeCubit extends Cubit<HomeViewState> {
     _username = '';
     _contactProfiles = {};
     _friendStates = {};
+    _connectionError = null;
 
+    unawaited(_sgtpConnection.configure(newConfig));
     unawaited(_userDirCoordinator.dispose());
     _roomsBloc.close();
     _roomsBloc = RoomsBloc(
@@ -157,9 +172,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     _userAvatar = avatar;
     _roomsBloc.setUserAvatar(avatar);
     _buildState();
-    unawaited(
-      _userDirCoordinator.registerSelf(_buildUserDirSession(), force: true),
-    );
+    unawaited(_syncProfileToUserDir(force: true));
   }
 
   // ── Intent: Nickname changed ────────────────────────────────────────────
@@ -168,9 +181,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     if (_nickname == nickname) return;
     _nickname = nickname;
     _buildState();
-    unawaited(
-      _userDirCoordinator.registerSelf(_buildUserDirSession(), force: true),
-    );
+    unawaited(_syncProfileToUserDir(force: true));
   }
 
   // ── Intent: Username changed ────────────────────────────────────────────
@@ -180,6 +191,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     if (_username == next) return null;
     _username = next;
     _buildState();
+    await _ensureShellConnection();
     return _userDirCoordinator.registerSelf(
       _buildUserDirSession(),
       force: true,
@@ -203,19 +215,17 @@ class HomeCubit extends Cubit<HomeViewState> {
     ));
     _pushContactAvatarsToRooms();
     _buildState();
-    unawaited(
-      _userDirCoordinator.applyWhitelistChanges(
-        session: _buildUserDirSession(),
-        previousWhitelist: old,
-        nextWhitelist: entries,
-        nextNicknames: {for (final e in entries) e.hexKey: e.name},
-      ),
-    );
+    unawaited(_syncWhitelistWithUserDir(old, entries));
   }
 
   // ── Intent: Respond to friend request ───────────────────────────────────
 
   Future<bool> respondToFriend(String peerHex, bool accept) {
+    return _respondToFriend(peerHex, accept);
+  }
+
+  Future<bool> _respondToFriend(String peerHex, bool accept) async {
+    await _ensureShellConnection();
     return _userDirCoordinator.respondToFriend(
       session: _buildUserDirSession(),
       peerHex: peerHex,
@@ -294,6 +304,8 @@ class HomeCubit extends Cubit<HomeViewState> {
       friendStates: Map.unmodifiable(_friendStates),
       nickname: _nickname,
       username: _username,
+      connectionStatus: _connectionStatus,
+      connectionError: _connectionError,
       currentTabIndex: _currentTabIndex,
     ));
   }
@@ -322,6 +334,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       accountId: _accountId,
       currentNodeId: _config.nodeId,
     );
+    await _ensureShellConnection();
     await _userDirCoordinator.start(_buildUserDirSession());
   }
 
@@ -386,13 +399,57 @@ class HomeCubit extends Cubit<HomeViewState> {
   }
 
   Future<void> _refreshContactsFromServer() {
-    return _userDirCoordinator.refresh(_buildUserDirSession());
+    return _refreshContactsFromServerConnected();
+  }
+
+  Future<void> _refreshContactsFromServerConnected() async {
+    await _ensureShellConnection();
+    await _userDirCoordinator.refresh(_buildUserDirSession());
+  }
+
+  Future<void> _syncProfileToUserDir({required bool force}) async {
+    await _ensureShellConnection();
+    await _userDirCoordinator.registerSelf(_buildUserDirSession(), force: force);
+  }
+
+  Future<void> _syncWhitelistWithUserDir(
+    List<WhitelistEntry> previousWhitelist,
+    List<WhitelistEntry> nextWhitelist,
+  ) async {
+    await _ensureShellConnection();
+    await _userDirCoordinator.applyWhitelistChanges(
+      session: _buildUserDirSession(),
+      previousWhitelist: previousWhitelist,
+      nextWhitelist: nextWhitelist,
+      nextNicknames: {for (final e in nextWhitelist) e.hexKey: e.name},
+    );
+  }
+
+  Future<void> _ensureShellConnection() async {
+    _connectionError = null;
+    try {
+      await _sgtpConnection.configure(_config);
+      await _sgtpConnection.ensureConnected();
+    } catch (e) {
+      _connectionError = '$e';
+      _buildState();
+      rethrow;
+    }
+  }
+
+  void _onConnectionEvent(SgtpConnectionStateChanged event) {
+    if (isClosed) return;
+    _connectionStatus = event.status;
+    _connectionError = event.errorMessage;
+    _buildState();
   }
 
   @override
-  Future<void> close() {
+  Future<void> close() async {
+    await _connectionSub?.cancel();
     unawaited(_userDirCoordinator.dispose());
     _roomsBloc.close();
-    return super.close();
+    unawaited(_sgtpConnection.disconnect());
+    await super.close();
   }
 }

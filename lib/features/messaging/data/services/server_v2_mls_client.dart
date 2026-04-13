@@ -4,53 +4,33 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
+import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/messaging_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
-import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/room_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
 
-sealed class ServerV2MlsEvent {
-  const ServerV2MlsEvent();
-}
-
-class ServerV2MlsCommitReceived extends ServerV2MlsEvent {
-  final MlsCommitReceivedEvent event;
-
-  const ServerV2MlsCommitReceived(this.event);
-}
-
-class ServerV2MlsWelcomeReceived extends ServerV2MlsEvent {
-  final MlsWelcomeReceivedEvent event;
-
-  const ServerV2MlsWelcomeReceived(this.event);
-}
-
-class ServerV2MlsMessageReceived extends ServerV2MlsEvent {
-  final MlsMessageReceivedEvent event;
-
-  const ServerV2MlsMessageReceived(this.event);
-}
-
 class ServerV2MlsClient {
-  final SgtpRpcClient _rpc;
+  final Future<SgtpRpcClient> Function() _rpcProvider;
   final _log = AppLog('ServerV2MlsClient');
-  final _events = StreamController<ServerV2MlsEvent>.broadcast();
+  final _events = StreamController<SgtpServerEvent>.broadcast();
 
+  SgtpRpcClient? _rpc;
   bool _connected = false;
   bool _eventsSubscribed = false;
+  void Function()? _removeEventsCallback;
 
-  ServerV2MlsClient({required SgtpRpcClient rpc}) : _rpc = rpc {
-    _rpc.registerEventsCallback(_handleEventPacket);
-  }
+  ServerV2MlsClient({required Future<SgtpRpcClient> Function() rpcProvider})
+      : _rpcProvider = rpcProvider;
 
   bool get isConnected => _connected;
-  Stream<ServerV2MlsEvent> get events => _events.stream;
+  bool get isTransportConnected => _rpc?.transport.isConnected == true;
+  Stream<SgtpServerEvent> get events => _events.stream;
 
   Future<void> connect() async {
     if (_connected) return;
-    await _rpc.transport.connect();
+    await _ensureRpc();
     _connected = true;
   }
 
@@ -58,12 +38,15 @@ class ServerV2MlsClient {
     Uint8List publicKey,
     SimpleKeyPairData identityKeyPair, {
     String deviceId = 'flutter-client',
-  }) =>
-      _rpc.authenticate(publicKey, identityKeyPair, deviceId: deviceId);
+  }) async {
+    final rpc = await _ensureRpc();
+    return rpc.authenticate(publicKey, identityKeyPair, deviceId: deviceId);
+  }
 
   Future<void> ensureSubscribedToEvents() async {
     if (_eventsSubscribed) return;
-    await _rpc.callRpc(SubscribeToEventsRequest(
+    final rpc = await _ensureRpc();
+    await rpc.callRpc(SubscribeToEventsRequest(
       requestedAtUs: DateTime.now().microsecondsSinceEpoch,
     ));
     _eventsSubscribed = true;
@@ -71,15 +54,16 @@ class ServerV2MlsClient {
 
   Future<UploadKeyPackagesResponse> uploadKeyPackages(
       List<KeyPackageDto> packages) async {
-    final raw =
-        await _rpc.callRpc(UploadKeyPackagesRequest(packages: packages));
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(UploadKeyPackagesRequest(packages: packages));
     return UploadKeyPackagesResponse.fromMap(raw);
   }
 
   Future<FetchKeyPackagesResponse> fetchKeyPackages(
       List<Uint8List> userPublicKeys) async {
-    final raw = await _rpc
-        .callRpc(FetchKeyPackagesRequest(userPublicKeys: userPublicKeys));
+    final rpc = await _ensureRpc();
+    final raw =
+        await rpc.callRpc(FetchKeyPackagesRequest(userPublicKeys: userPublicKeys));
     return FetchKeyPackagesResponse.fromMap(raw);
   }
 
@@ -87,7 +71,8 @@ class ServerV2MlsClient {
     required String roomId,
     required Uint8List commitBytes,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       SendCommitRequest(
         roomId: roomId,
         commitBytes: commitBytes,
@@ -100,7 +85,8 @@ class ServerV2MlsClient {
     required Uint8List targetUserPublicKey,
     required Uint8List welcomeBytes,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       SendWelcomeRequest(
         targetUserPublicKey: targetUserPublicKey,
         welcomeBytes: welcomeBytes,
@@ -114,7 +100,8 @@ class ServerV2MlsClient {
     required Uint8List clientMsgId,
     required List<Uint8List> body,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       SendMessageRequest(
         roomId: roomId,
         clientMsgId: clientMsgId,
@@ -128,7 +115,8 @@ class ServerV2MlsClient {
     required String roomId,
     required String messageId,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       DeleteMessageRequest(
         roomId: roomId,
         messageId: messageId,
@@ -142,7 +130,8 @@ class ServerV2MlsClient {
     String? description,
     int visibility = 3,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       CreateChatRoomRequest(
         title: title,
         description: description,
@@ -153,7 +142,8 @@ class ServerV2MlsClient {
   }
 
   Future<GetChatRoomResponse> getChatRoom(String roomId) async {
-    final raw = await _rpc.callRpc(GetChatRoomRequest(roomId: roomId));
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(GetChatRoomRequest(roomId: roomId));
     return GetChatRoomResponse.fromMap(raw);
   }
 
@@ -161,7 +151,8 @@ class ServerV2MlsClient {
     required String roomId,
     required Uint8List inviteePublicKey,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       SendChatInvitationRequest(
         roomId: roomId,
         inviteePublicKey: inviteePublicKey,
@@ -174,7 +165,8 @@ class ServerV2MlsClient {
     int? limit,
     String? cursor,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       ListIncomingChatInvitationsRequest(limit: limit, cursor: cursor),
     );
     return ListIncomingChatInvitationsResponse.fromMap(raw);
@@ -182,7 +174,8 @@ class ServerV2MlsClient {
 
   Future<AcceptChatInvitationResponse> acceptChatInvitation(
       String invitationId) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       AcceptChatInvitationRequest(invitationId: invitationId),
     );
     return AcceptChatInvitationResponse.fromMap(raw);
@@ -195,7 +188,8 @@ class ServerV2MlsClient {
     required Uint8List treeBytes,
     required Uint8List treeHash,
   }) async {
-    final raw = await _rpc.callRpc(
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
       UpdateChatRoomStateRequest(
         roomId: roomId,
         groupId: groupId,
@@ -207,14 +201,23 @@ class ServerV2MlsClient {
     return UpdateChatRoomStateResponse.fromMap(raw);
   }
 
-  Future<void> pollEvents() async {
-    await _rpc.callRpc(const GetServerConfigRequest());
-  }
-
   Future<void> close() async {
     _connected = false;
-    await _rpc.transport.close();
+    _eventsSubscribed = false;
+    _removeEventsCallback?.call();
+    _removeEventsCallback = null;
+    _rpc = null;
     await _events.close();
+  }
+
+  Future<SgtpRpcClient> _ensureRpc() async {
+    final existing = _rpc;
+    if (existing != null) return existing;
+    final rpc = await _rpcProvider();
+    _removeEventsCallback?.call();
+    _removeEventsCallback = rpc.registerEventsCallback(_handleEventPacket);
+    _rpc = rpc;
+    return rpc;
   }
 
   void _handleEventPacket(Map<String, dynamic> event) {
@@ -226,19 +229,13 @@ class ServerV2MlsClient {
 
     switch (eventType) {
       case 'mlsCommitReceived':
-        _events.add(ServerV2MlsCommitReceived(
-          MlsCommitReceivedEvent.fromParameters(parameters),
-        ));
+        _events.add(MlsCommitReceivedNetworkEvent.fromParameters(parameters));
         break;
       case 'mlsWelcomeReceived':
-        _events.add(ServerV2MlsWelcomeReceived(
-          MlsWelcomeReceivedEvent.fromParameters(parameters),
-        ));
+        _events.add(MlsWelcomeReceivedNetworkEvent.fromParameters(parameters));
         break;
       case 'mlsMessageReceived':
-        _events.add(ServerV2MlsMessageReceived(
-          MlsMessageReceivedEvent.fromParameters(parameters),
-        ));
+        _events.add(MlsMessageReceivedNetworkEvent.fromParameters(parameters));
         break;
       default:
         _log.debug('Ignoring server event: {eventType}',
