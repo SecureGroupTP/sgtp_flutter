@@ -62,6 +62,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatUpdateNicknames>(_onUpdateNicknames);
     on<ChatUpdateContactAvatars>(_onUpdateContactAvatars);
     on<ChatUpdateWhitelist>((event, emit) {
+      final last = _lastConnectEvent;
+      if (last != null) {
+        _lastConnectEvent = ChatConnect(
+          last.config.copyWith(whitelist: event.whitelist),
+          nicknames: last.nicknames,
+        );
+      }
       _client?.updateWhitelist(event.whitelist);
     });
     on<ChatInternalSgtpEvent>(_onSgtpEvent);

@@ -354,7 +354,7 @@ class OpenMlsChatSession implements ISgtpSession {
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
-    _whitelist = Set.unmodifiable(config.whitelist);
+    _whitelist = _normalizeWhitelist(config.whitelist);
     _historyRepository = _buildHistoryRepository();
   }
 
@@ -468,7 +468,7 @@ class OpenMlsChatSession implements ISgtpSession {
   @override
   void updateWhitelist(Set<String> whitelist) {
     _sgtpLogCall('updateWhitelist', {'whitelistCount': whitelist.length});
-    _whitelist = Set.unmodifiable(whitelist);
+    _whitelist = _normalizeWhitelist(whitelist);
   }
 
   // ---------------------------------------------------------------------------
@@ -490,9 +490,13 @@ class OpenMlsChatSession implements ISgtpSession {
       await _initMls();
       _ephemeralX25519 = await generateEphemeralKeyPair();
       _ephemeralX25519Pub = await extractPublicKeyBytes(_ephemeralX25519!);
-      final (host, _) = _parseHostPortOrThrow(_config.serverAddr);
+      final (host, explicitPort) = _parseHostPortOrThrow(_config.serverAddr);
 
-      final result = await SgtpServerDiscovery.discover(host);
+      final result = await SgtpServerDiscovery.discover(
+        host,
+        preferredPort: explicitPort > 0 ? explicitPort : null,
+        preferredTls: _config.useTls,
+      );
       final options = result.opts;
 
       if (!options.hasAny) {
@@ -1436,9 +1440,45 @@ class OpenMlsChatSession implements ISgtpSession {
 
   Future<void> _dispatch(ParsedFrame frame) async {
     if (!_tsOk(frame.timestamp)) {
+      _log.warning(
+        'Dropping frame outside timestamp window: pkt={packetType} sender={sender}',
+        parameters: {
+          'packetType': frame.packetType,
+          'sender': uuidBytesToHex(frame.senderUUID).substring(0, 8),
+        },
+      );
       return;
     }
     if (frame.version != SgtpConstants.version) {
+      _log.warning(
+        'Dropping frame with unsupported version: version={version} sender={sender}',
+        parameters: {
+          'version': frame.version,
+          'sender': uuidBytesToHex(frame.senderUUID).substring(0, 8),
+        },
+      );
+      return;
+    }
+    if (!_bytesEqual(frame.roomUUID, _roomUUID)) {
+      _log.warning(
+        'Dropping frame for another room: frameRoom={frameRoom} localRoom={localRoom}',
+        parameters: {
+          'frameRoom': uuidBytesToHex(frame.roomUUID).substring(0, 8),
+          'localRoom': roomUUIDHex.substring(0, 8),
+        },
+      );
+      return;
+    }
+    final receiverHex = uuidBytesToHex(frame.receiverUUID);
+    final isBroadcast = _bytesEqual(frame.receiverUUID, SgtpConstants.broadcastUUID);
+    if (!isBroadcast && receiverHex != myUUIDHex) {
+      _log.warning(
+        'Dropping frame addressed to another peer: receiver={receiver} local={local}',
+        parameters: {
+          'receiver': receiverHex.substring(0, 8),
+          'local': myUUIDHex.substring(0, 8),
+        },
+      );
       return;
     }
     final frameSender = uuidBytesToHex(frame.senderUUID);
@@ -1564,14 +1604,30 @@ class OpenMlsChatSession implements ISgtpSession {
   Future<void> _onPing(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
-    if (f.payloadLength < SgtpConstants.pingPayloadMinLength) return;
+    if (f.payloadLength < SgtpConstants.pingPayloadMinLength) {
+      _log.warning('Dropping short PING from {peer}',
+          parameters: {'peer': h.substring(0, 8)});
+      return;
+    }
     final ed = f.ed25519PubKey;
     final edH = _hex(ed);
-    if (!_whitelist.contains(edH)) return;
-    if (!await verifyFrame(f.raw, ed)) return;
+    if (!_whitelist.contains(edH)) {
+      _log.warning('Rejecting PING from non-whitelisted peer {peer} pub={pub}',
+          parameters: {'peer': h.substring(0, 8), 'pub': edH.substring(0, 8)});
+      return;
+    }
+    if (!await verifyFrame(f.raw, ed)) {
+      _log.warning('Rejecting PING with bad signature from {peer}',
+          parameters: {'peer': h.substring(0, 8)});
+      return;
+    }
     if (f.payloadLength >= SgtpConstants.pingPayloadLength) {
       final hello = ascii.decode(f.payload.sublist(64, 76), allowInvalid: true);
-      if (hello != SgtpConstants.clientHello) return;
+      if (hello != SgtpConstants.clientHello) {
+        _log.warning('Rejecting PING with invalid hello from {peer}',
+            parameters: {'peer': h.substring(0, 8)});
+        return;
+      }
     }
     final rawSecret =
         await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
@@ -1601,14 +1657,30 @@ class OpenMlsChatSession implements ISgtpSession {
   Future<void> _onPong(ParsedFrame f) async {
     final h = uuidBytesToHex(f.senderUUID);
     if (h == myUUIDHex) return;
-    if (f.payloadLength < SgtpConstants.pingPayloadMinLength) return;
+    if (f.payloadLength < SgtpConstants.pingPayloadMinLength) {
+      _log.warning('Dropping short PONG from {peer}',
+          parameters: {'peer': h.substring(0, 8)});
+      return;
+    }
     final ed = f.ed25519PubKey;
     final edH = _hex(ed);
-    if (!_whitelist.contains(edH)) return;
-    if (!await verifyFrame(f.raw, ed)) return;
+    if (!_whitelist.contains(edH)) {
+      _log.warning('Rejecting PONG from non-whitelisted peer {peer} pub={pub}',
+          parameters: {'peer': h.substring(0, 8), 'pub': edH.substring(0, 8)});
+      return;
+    }
+    if (!await verifyFrame(f.raw, ed)) {
+      _log.warning('Rejecting PONG with bad signature from {peer}',
+          parameters: {'peer': h.substring(0, 8)});
+      return;
+    }
     if (f.payloadLength >= SgtpConstants.pingPayloadLength) {
       final hello = ascii.decode(f.payload.sublist(64, 76), allowInvalid: true);
-      if (hello != SgtpConstants.clientHello) return;
+      if (hello != SgtpConstants.clientHello) {
+        _log.warning('Rejecting PONG with invalid hello from {peer}',
+            parameters: {'peer': h.substring(0, 8)});
+        return;
+      }
     }
     final rawSecret =
         await computeSharedSecret(_ephemeralX25519!, f.x25519PubKey);
@@ -2837,6 +2909,14 @@ class OpenMlsChatSession implements ISgtpSession {
 
   String _hex(Uint8List b) =>
       b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+
+  Set<String> _normalizeWhitelist(Set<String> whitelist) {
+    return Set.unmodifiable(
+      whitelist
+          .map((entry) => entry.trim().toLowerCase())
+          .where((entry) => entry.isNotEmpty),
+    );
+  }
 
   Future<void> _cleanup() async {
     _state = _ClientState.disconnected;
