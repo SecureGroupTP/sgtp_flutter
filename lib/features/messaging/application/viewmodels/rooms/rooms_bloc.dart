@@ -112,6 +112,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         emit,
         configOverride: configOverride,
         openOffline: event.openOffline,
+        isDirectMessage: event.isDirectMessage,
+        bootstrapDirectRoom: event.bootstrapDirectRoom,
+        directPeerPublicKeyHex: event.directPeerPublicKeyHex,
       );
     } catch (_) {
       emit(state.copyWith(error: 'Invalid UUID format'));
@@ -396,11 +399,20 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   // ── Room management ─────────────────────────────────────────────────────
 
   void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
-      {SgtpConfig? configOverride, bool openOffline = false}) {
+      {SgtpConfig? configOverride,
+      bool openOffline = false,
+      bool isDirectMessage = false,
+      bool bootstrapDirectRoom = false,
+      String? directPeerPublicKeyHex}) {
     final hexUUID = uuidBytesToHex(roomUUID);
     final config = (configOverride ?? _baseConfig)
         .copyWith(accountId: _accountId)
-        .copyWithRoomUUID(roomUUID);
+        .copyWithRoomUUID(roomUUID)
+        .copyWithDirectRoom(
+          isDirectMessage: isDirectMessage,
+          bootstrapDirectRoom: bootstrapDirectRoom,
+          directPeerPublicKeyHex: directPeerPublicKeyHex,
+        );
     final targetServer = _normalizeAddress(config.serverAddr);
     final alreadyJoined = state.rooms.any(
       (r) =>

@@ -181,6 +181,9 @@ class RoomsPageState extends State<RoomsPage> {
     String roomUUIDHex, {
     String? serverAddress,
     bool openOffline = false,
+    bool isDirectMessage = false,
+    bool bootstrapDirectRoom = false,
+    String? directPeerPublicKeyHex,
   }) {
     final roomsBloc = context.read<RoomsBloc>();
     final effectiveServer = (serverAddress ?? widget.serverAddress).trim();
@@ -216,6 +219,9 @@ class RoomsPageState extends State<RoomsPage> {
         roomUUIDHex,
         serverAddress: effectiveServer,
         openOffline: openOffline,
+        isDirectMessage: isDirectMessage,
+        bootstrapDirectRoom: bootstrapDirectRoom,
+        directPeerPublicKeyHex: directPeerPublicKeyHex,
       ),
     );
   }

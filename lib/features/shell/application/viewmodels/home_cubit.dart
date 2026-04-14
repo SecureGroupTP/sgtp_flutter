@@ -7,9 +7,12 @@ import 'package:sgtp_flutter/core/network/events/connection_events.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_binding.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/key_package_publisher.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_models.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
@@ -31,6 +34,8 @@ class HomeCubit extends Cubit<HomeViewState> {
     required SettingsManagementService settingsManagementService,
     required ChatStorageGateway chatStorageGateway,
     required SgtpConnectionService sgtpConnectionService,
+    required DirectRoomGateway directRoomGateway,
+    required KeyPackagePublisher keyPackagePublisher,
     required SgtpSessionFactory sessionFactory,
     required HomePersistenceService homePersistenceService,
     required HomeUserDirSupportService homeUserDirSupportService,
@@ -46,6 +51,8 @@ class HomeCubit extends Cubit<HomeViewState> {
   })  : _settingsManagementService = settingsManagementService,
         _chatStorageGateway = chatStorageGateway,
         _sgtpConnection = sgtpConnectionService,
+        _directRoomGateway = directRoomGateway,
+        _keyPackagePublisher = keyPackagePublisher,
         _sessionFactory = sessionFactory,
         _homePersistence = homePersistenceService,
         _userDirSupport = homeUserDirSupportService,
@@ -89,6 +96,8 @@ class HomeCubit extends Cubit<HomeViewState> {
   final SettingsManagementService _settingsManagementService;
   final ChatStorageGateway _chatStorageGateway;
   final SgtpConnectionService _sgtpConnection;
+  final DirectRoomGateway _directRoomGateway;
+  final KeyPackagePublisher _keyPackagePublisher;
   final SgtpSessionFactory _sessionFactory;
   final HomePersistenceService _homePersistence;
   final HomeUserDirSupportService _userDirSupport;
@@ -237,44 +246,39 @@ class HomeCubit extends Cubit<HomeViewState> {
 
   // ── Intent: Open DM room ───────────────────────────────────────────────
 
-  void openDm(String roomUUIDHex) {
-    unawaited(_ensureDirectMetadataForRoom(roomUUIDHex));
-    _currentTabIndex = 0;
-    _buildState();
-  }
+  Future<DirectRoomBinding?> openDm(String peerPubkeyHex) async {
+    final peerHex = peerPubkeyHex.trim().toLowerCase();
+    if (peerHex.length != 64) return null;
 
-  Future<void> _ensureDirectMetadataForRoom(String roomUUIDHex) async {
-    final room = roomUUIDHex.trim().toLowerCase().replaceAll('-', '');
-    if (room.length != 32) return;
-
-    String? peerHex;
-    for (final record in _friendStates.values) {
-      final id = (record.roomUUIDHex ?? '').trim().toLowerCase();
-      if (id == room) {
-        peerHex = record.peerPubkeyHex.trim().toLowerCase();
-        break;
-      }
-    }
-    if (peerHex == null || peerHex.isEmpty) return;
-
-    final profile = _contactProfiles[peerHex];
-    final fullName = (profile?.fullname ?? '').trim();
-    final username =
-        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
-    final fallback = (_nicknames[peerHex] ?? '').trim();
-    final displayName = fullName.isNotEmpty
-        ? fullName
-        : (username.isNotEmpty
-            ? username
-            : (fallback.isNotEmpty ? fallback : 'Friend'));
-
+    await _ensureShellConnection();
+    final binding = await _directRoomGateway.ensureDirectRoom(
+      config: _config.copyWith(accountId: _accountId),
+      targetUserPublicKey: _userDirSupport.hexToBytes32(peerHex),
+    );
+    final display = _resolveDirectMessageDisplay(peerHex);
     await _homePersistence.upsertDirectMessageChat(
       accountId: _accountId,
-      roomUUID: room,
+      roomUUID: binding.roomId,
       serverAddress: _serverAddress,
-      displayName: displayName,
-      avatarBytes: profile?.avatarBytes,
+      displayName: display.$1,
+      avatarBytes: display.$2,
+      remoteRoomId: binding.roomId,
     );
+    final existing = _friendStates[peerHex];
+    if (existing != null &&
+        existing.statusEnum == FriendStatus.friend &&
+        existing.roomUUIDHex != binding.roomId) {
+      _friendStates = {
+        ..._friendStates,
+        peerHex: existing.copyWith(
+          roomUUIDHex: binding.roomId,
+          updatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        ),
+      };
+    }
+    _currentTabIndex = 0;
+    _buildState();
+    return binding;
   }
 
   // ── Intent: Show add room sheet (accessed by FAB) ───────────────────────
@@ -358,7 +362,22 @@ class HomeCubit extends Cubit<HomeViewState> {
       serverAddress: _serverAddress,
       displayName: displayName,
       avatarBytes: avatarBytes,
+      remoteRoomId: room,
     );
+  }
+
+  (String, Uint8List?) _resolveDirectMessageDisplay(String peerHex) {
+    final profile = _contactProfiles[peerHex];
+    final fullName = (profile?.fullname ?? '').trim();
+    final username =
+        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+    final fallback = (_nicknames[peerHex] ?? '').trim();
+    final displayName = fullName.isNotEmpty
+        ? fullName
+        : (username.isNotEmpty
+            ? username
+            : (fallback.isNotEmpty ? fallback : 'Friend'));
+    return (displayName, profile?.avatarBytes);
   }
 
   HomeUserDirSession _buildUserDirSession() {
@@ -426,6 +445,9 @@ class HomeCubit extends Cubit<HomeViewState> {
     try {
       await _sgtpConnection.configure(_config);
       await _sgtpConnection.ensureConnected();
+      await _keyPackagePublisher.ensureUploaded(
+        _config.copyWith(accountId: _accountId),
+      );
     } catch (e) {
       _connectionError = '$e';
       _buildState();

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_binding.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
@@ -22,5 +23,5 @@ abstract interface class AppSessionController {
 
   Future<bool> respondToFriend(String peerPubkeyHex, bool accept);
 
-  void openDirectMessage(String roomUUIDHex);
+  Future<DirectRoomBinding?> openDirectMessage(String peerPubkeyHex);
 }

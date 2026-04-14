@@ -222,8 +222,8 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     return _appSessionController.respondToFriend(peerPubkeyHex, accept);
   }
 
-  void openDirectMessage(String roomUUIDHex) {
-    _appSessionController.openDirectMessage(roomUUIDHex);
+  void openDirectMessage(String peerPubkeyHex) {
+    unawaited(_appSessionController.openDirectMessage(peerPubkeyHex));
   }
 
   @override

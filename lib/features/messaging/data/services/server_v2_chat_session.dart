@@ -8,7 +8,6 @@ import 'package:sgtp_chat_core/sgtp_chat_core.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
-import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
@@ -87,6 +86,8 @@ class ServerV2ChatSession implements ISgtpSession {
   bool _connecting = false;
   bool _connected = false;
   bool _readyEmitted = false;
+  bool _isDirectRoom = false;
+  bool _directRoomNeedsBootstrap = false;
   String? _remoteRoomId;
   Uint8List? _userAvatarBytes;
   late final Uint8List _roomUUID;
@@ -101,6 +102,8 @@ class ServerV2ChatSession implements ISgtpSession {
         _metadataRepository = (config.accountId ?? '').trim().isEmpty
             ? null
             : ChatMetadataRepository(accountId: config.accountId) {
+    _isDirectRoom = config.isDirectMessage;
+    _directRoomNeedsBootstrap = config.bootstrapDirectRoom;
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
@@ -434,16 +437,18 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   Future<void> _bootstrapRoomAndMls() async {
+    if (_isDirectRoom) {
+      await _bootstrapDirectRoomAndMls();
+      return;
+    }
     await _ensureRemoteRoomBound();
     if (_isMaster) {
-      await _uploadLocalKeyPackages();
       await _ensureMlsGroupCreated();
       await _publishRoomState();
       await _inviteKnownPeers();
     } else {
       await _joinFromStoredWelcome();
       if (!_mlsGroupReady) {
-        await _uploadLocalKeyPackages();
         if ((_remoteRoomId ?? '').isEmpty) {
           _scheduleRemoteRoomBindRetry();
           _eventController.add(
@@ -457,42 +462,44 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  Future<void> _uploadLocalKeyPackages() async {
-    final mls = _mls;
-    final client = _rpcChat;
-    if (mls == null || client == null) return;
-    final raw = mls.createKeyPackagesSync(8);
-    final generated = _asObjectList(_map(raw)['keypackages']);
-    if (generated.isEmpty) return;
-    final expiresAt = DateTime.now().toUtc().add(const Duration(days: 30));
-    try {
-      await client.uploadKeyPackages(
-        generated
-            .map((item) => KeyPackageDto(
-                  keyPackageBytes: _asBytes(item),
-                  isLastResort: false,
-                  expiresAtUs: expiresAt.microsecondsSinceEpoch,
-                ))
-            .toList(),
-      );
-    } catch (e, st) {
-      _log.warning(
-        'uploadKeyPackages failed; continuing without fresh key packages: {error}',
-        parameters: {'error': e},
-        error: e,
-        stackTrace: st,
-      );
+  Future<void> _bootstrapDirectRoomAndMls() async {
+    await _ensureRemoteRoomBound();
+    if (_directRoomNeedsBootstrap) {
+      await _ensureMlsGroupCreated();
+      await _publishRoomState();
+      await _inviteKnownPeers();
+      _directRoomNeedsBootstrap = false;
       return;
     }
-    try {
-      mls.markKeyPackagesUploadedSync(raw);
-    } catch (_) {}
+    await _joinFromStoredWelcome();
   }
 
   Future<void> _ensureRemoteRoomBound() async {
     if ((_remoteRoomId ?? '').isNotEmpty) return;
     final client = _rpcChat;
     if (client == null) return;
+
+    if (_isDirectRoom) {
+      final targetUserPublicKey = _directPeerPublicKey;
+      if (targetUserPublicKey == null || targetUserPublicKey.isEmpty) {
+        throw StateError('Direct room peer public key is missing');
+      }
+      final created =
+          await client.createDirectRoom(targetUserPublicKey: targetUserPublicKey);
+      final roomId = _normalizeRoomId(created.roomId);
+      if (roomId.isEmpty) {
+        throw StateError('Server returned an empty direct room id');
+      }
+      if (roomId != roomUUIDHex) {
+        throw StateError(
+          'Direct room id mismatch: local=$roomUUIDHex server=$roomId',
+        );
+      }
+      await _saveRemoteRoomId(roomId);
+      _directRoomNeedsBootstrap =
+          _directRoomNeedsBootstrap || !created.alreadyExisted;
+      return;
+    }
 
     if (_isMaster) {
       final created = await client.createChatRoom(
@@ -614,10 +621,17 @@ class ServerV2ChatSession implements ISgtpSession {
     final client = _rpcChat;
     final mls = _mls;
     final remoteRoomId = _remoteRoomId;
-    if (!_isMaster || client == null || mls == null || remoteRoomId == null) {
+    if ((!_isMaster && !_isDirectRoom) ||
+        client == null ||
+        mls == null ||
+        remoteRoomId == null) {
       return;
     }
-    final peerHexes = _whitelist.where((item) => item != myUUIDHex).toList();
+    final peerHexes = _isDirectRoom
+        ? (_config.directPeerPublicKeyHex == null
+            ? const <String>[]
+            : <String>[_config.directPeerPublicKeyHex!.trim().toLowerCase()])
+        : _whitelist.where((item) => item != myUUIDHex).toList();
     if (peerHexes.isEmpty) {
       _emitReadyIfNeeded(force: true);
       return;
@@ -652,10 +666,12 @@ class ServerV2ChatSession implements ISgtpSession {
           welcomeBytes: welcome,
         );
       }
-      await client.sendChatInvitation(
-        roomId: remoteRoomId,
-        inviteePublicKey: item.userPublicKey,
-      );
+      if (!_isDirectRoom) {
+        await client.sendChatInvitation(
+          roomId: remoteRoomId,
+          inviteePublicKey: item.userPublicKey,
+        );
+      }
       try {
         mls.mergePendingCommitSync(_mlsGroupIdJson);
       } catch (_) {}
@@ -1170,13 +1186,21 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _loadRemoteRoomId() async {
     final repo = _metadataRepository;
-    if (repo == null) return;
+    if (repo == null) {
+      if (_isDirectRoom) {
+        _remoteRoomId = roomUUIDHex;
+      }
+      return;
+    }
     final metadata = await repo.loadChat(
       roomUUIDHex,
       serverAddress: _config.serverAddr,
     );
+    _isDirectRoom = metadata?.isDirectMessage ?? _config.isDirectMessage;
     final remote = (metadata?.remoteRoomId ?? '').trim();
-    _remoteRoomId = remote.isEmpty ? null : remote;
+    _remoteRoomId = remote.isEmpty
+        ? (_isDirectRoom ? roomUUIDHex : null)
+        : _normalizeRoomId(remote);
   }
 
   Future<void> _saveRemoteRoomId(String roomId) async {
@@ -1194,7 +1218,7 @@ class ServerV2ChatSession implements ISgtpSession {
               name: _config.chatName,
               serverAddress: _config.serverAddr,
               remoteRoomId: roomId,
-              isDirectMessage: false,
+              isDirectMessage: _isDirectRoom,
               createdAt: now,
               updatedAt: now,
             ))
@@ -1212,7 +1236,7 @@ class ServerV2ChatSession implements ISgtpSession {
 
   void _scheduleInviteRetry() {
     _inviteRetryTimer?.cancel();
-    if (!_isMaster) return;
+    if (!_isMaster || _isDirectRoom) return;
     _inviteRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_connected) return;
       try {
@@ -1225,6 +1249,7 @@ class ServerV2ChatSession implements ISgtpSession {
 
   void _scheduleRemoteRoomBind() {
     if (_isMaster ||
+        _isDirectRoom ||
         !_connected ||
         (_remoteRoomId ?? '').isNotEmpty ||
         _pendingRemoteRoomBind != null) {
@@ -1255,6 +1280,7 @@ class ServerV2ChatSession implements ISgtpSession {
 
   void _scheduleRemoteRoomBindRetry() {
     if (_isMaster ||
+        _isDirectRoom ||
         !_connected ||
         _mlsGroupReady ||
         (_remoteRoomId ?? '').isNotEmpty ||
@@ -1313,17 +1339,18 @@ class ServerV2ChatSession implements ISgtpSession {
   bool _isWelcomeForMe(Uint8List targetUserPublicKey) =>
       _hex(targetUserPublicKey) == myUUIDHex;
 
+  Uint8List? get _directPeerPublicKey {
+    final peerHex = (_config.directPeerPublicKeyHex ?? '').trim().toLowerCase();
+    if (peerHex.length != 64) return null;
+    return hexToBytes(peerHex);
+  }
+
   Map<String, dynamic> _map(Object? value) {
     if (value is Map<String, dynamic>) return value;
     if (value is Map) {
       return value.map((key, item) => MapEntry('$key', item));
     }
     return <String, dynamic>{};
-  }
-
-  List<Object?> _asObjectList(Object? value) {
-    if (value is List) return value.cast<Object?>();
-    return const [];
   }
 
   Uint8List _asBytes(Object? value) {
@@ -1349,3 +1376,6 @@ String _uuidString(Uint8List bytes) {
       '${hex.substring(16, 20)}-'
       '${hex.substring(20)}';
 }
+
+String _normalizeRoomId(String roomId) =>
+    roomId.trim().toLowerCase().replaceAll('-', '');

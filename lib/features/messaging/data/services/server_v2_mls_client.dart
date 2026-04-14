@@ -184,6 +184,16 @@ class ServerV2MlsClient {
     return CreateChatRoomResponse.fromMap(raw);
   }
 
+  Future<CreateDirectRoomResponse> createDirectRoom({
+    required Uint8List targetUserPublicKey,
+  }) async {
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
+      CreateDirectRoomRequest(targetUserPublicKey: targetUserPublicKey),
+    );
+    return CreateDirectRoomResponse.fromMap(raw);
+  }
+
   Future<ListChatRoomsResponse> listChatRooms({
     int? limit,
     String? cursor,

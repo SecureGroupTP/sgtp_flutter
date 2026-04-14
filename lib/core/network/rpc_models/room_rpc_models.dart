@@ -80,6 +80,41 @@ class CreateChatRoomResponse {
       );
 }
 
+class CreateDirectRoomRequest extends RpcRequest {
+  final Uint8List targetUserPublicKey;
+
+  const CreateDirectRoomRequest({
+    required this.targetUserPublicKey,
+  });
+
+  @override
+  String get method => 'createDirectRoom';
+
+  @override
+  Map<String, dynamic> toMap() => {
+        'targetUserPublicKey': targetUserPublicKey,
+      };
+}
+
+class CreateDirectRoomResponse {
+  final String roomId;
+  final bool alreadyExisted;
+  final int createdAtUs;
+
+  const CreateDirectRoomResponse({
+    required this.roomId,
+    required this.alreadyExisted,
+    required this.createdAtUs,
+  });
+
+  static CreateDirectRoomResponse fromMap(Map<String, dynamic> m) =>
+      CreateDirectRoomResponse(
+        roomId: _uuidToString(m['roomId']),
+        alreadyExisted: m['alreadyExisted'] as bool? ?? false,
+        createdAtUs: parseTimestampUs(m['createdAt']),
+      );
+}
+
 class ListChatRoomsRequest extends RpcRequest {
   final int? limit;
   final String? cursor;

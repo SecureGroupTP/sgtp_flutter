@@ -90,6 +90,7 @@ class HomePersistenceService {
     required String serverAddress,
     required String displayName,
     required Uint8List? avatarBytes,
+    String? remoteRoomId,
   }) async {
     final repo = _chatStorageGateway.metadataForAccount(accountId);
     final existing =
@@ -107,7 +108,7 @@ class HomePersistenceService {
         uuid: roomUUID,
         name: displayName,
         serverAddress: serverAddress,
-        remoteRoomId: existing?.remoteRoomId,
+        remoteRoomId: remoteRoomId ?? existing?.remoteRoomId ?? roomUUID,
         // DM metadata must mirror the contact profile exactly:
         // if the friend has no avatar, clear previously saved room avatar.
         avatarBytes: avatarBytes,

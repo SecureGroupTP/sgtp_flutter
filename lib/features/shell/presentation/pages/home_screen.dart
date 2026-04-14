@@ -7,9 +7,12 @@ import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_binding.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/key_package_publisher.dart';
 import 'package:sgtp_flutter/features/shell/presentation/widgets/app_nav_bar.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/pages/contacts_page.dart';
 import 'package:sgtp_flutter/features/setup/presentation/pages/onboarding_page.dart';
@@ -67,6 +70,8 @@ class _HomeScreenState extends State<HomeScreen> {
       settingsManagementService: context.read<SettingsManagementService>(),
       chatStorageGateway: context.read<ChatStorageGateway>(),
       sgtpConnectionService: context.read<SgtpConnectionService>(),
+      directRoomGateway: context.read<DirectRoomGateway>(),
+      keyPackagePublisher: context.read<KeyPackagePublisher>(),
       sessionFactory: context.read<SgtpSessionFactory>(),
       homePersistenceService: context.read<HomePersistenceService>(),
       homeUserDirSupportService: context.read<HomeUserDirSupportService>(),
@@ -235,16 +240,21 @@ class _HomeAppSessionController implements AppSessionController {
   }
 
   @override
-  void openDirectMessage(String roomUUIDHex) {
-    _homeCubit.openDm(roomUUIDHex);
+  Future<DirectRoomBinding?> openDirectMessage(String peerPubkeyHex) async {
+    final binding = await _homeCubit.openDm(peerPubkeyHex);
+    if (binding == null) return null;
     final roomsPage = _roomsPageKey.currentState;
     if (roomsPage != null) {
       roomsPage.openRoomByUuid(
-        roomUUIDHex,
+        binding.roomId,
         serverAddress: _homeCubit.state.serverAddress,
         openOffline: false,
+        isDirectMessage: true,
+        bootstrapDirectRoom: !binding.alreadyExisted,
+        directPeerPublicKeyHex: peerPubkeyHex,
       );
     }
+    return binding;
   }
 }
 

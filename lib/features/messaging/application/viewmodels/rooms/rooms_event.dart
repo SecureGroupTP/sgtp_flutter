@@ -28,16 +28,31 @@ class RoomsJoinRoom extends RoomsEvent {
   final String? serverAddress;
   final SgtpTransportFamily? transport;
   final bool? useTls;
+  final bool isDirectMessage;
+  final bool bootstrapDirectRoom;
+  final String? directPeerPublicKeyHex;
   @Deprecated('Offline room opening is a legacy-only fallback.')
   final bool openOffline;
   const RoomsJoinRoom(this.uuidHex,
       {this.serverAddress,
       this.transport,
       this.useTls,
+      this.isDirectMessage = false,
+      this.bootstrapDirectRoom = false,
+      this.directPeerPublicKeyHex,
       this.openOffline = false});
   @override
   List<Object?> get props =>
-      [uuidHex, serverAddress, transport, useTls, openOffline];
+      [
+        uuidHex,
+        serverAddress,
+        transport,
+        useTls,
+        isDirectMessage,
+        bootstrapDirectRoom,
+        directPeerPublicKeyHex,
+        openOffline,
+      ];
 }
 
 /// Disconnects and removes a room from the list.

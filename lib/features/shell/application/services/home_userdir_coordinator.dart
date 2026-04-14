@@ -412,13 +412,7 @@ class HomeUserDirCoordinator {
       final candidate = FriendStateRecord(
         peerPubkeyHex: peerHex,
         status: status.name,
-        roomUUIDHex: status == FriendStatus.friend
-            ? (item.roomUUIDHex ??
-                await _support.buildDirectMessageRoomUUIDHex(
-                  myPublicKey: session.config.myPublicKey,
-                  peerPublicKey: item.peerPubkey,
-                ))
-            : item.roomUUIDHex,
+        roomUUIDHex: item.roomUUIDHex,
         updatedAt: now,
       );
       final previous = next[peerHex];

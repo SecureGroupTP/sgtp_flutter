@@ -27,8 +27,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
     _cubit.respondToFriend(peerPubkeyHex, accept);
   }
 
-  void _openDirectMessage(String roomUUIDHex) {
-    _cubit.openDirectMessage(roomUUIDHex);
+  void _openDirectMessage(String peerPubkeyHex) {
+    _cubit.openDirectMessage(peerPubkeyHex);
   }
 
   void _disposeControllerNextFrame(TextEditingController controller) {
@@ -716,10 +716,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
                               _respondToFriend(contact.hexKey, false),
                           onAccept: () =>
                               _respondToFriend(contact.hexKey, true),
-                          onMessage: contact.roomUUIDHex == null ||
-                                  contact.roomUUIDHex!.isEmpty
-                              ? null
-                              : () => _openDirectMessage(contact.roomUUIDHex!),
+                          onMessage:
+                              contact.friendStatus != ContactsFriendStatus.friend
+                                  ? null
+                                  : () => _openDirectMessage(contact.hexKey),
                         );
                       },
                     ),
@@ -904,7 +904,6 @@ class _ContactTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = contact.friendStatus;
-    final roomUUID = contact.roomUUIDHex;
     return InkWell(
       onTap: onTap,
       splashColor: AppColors.bgSurfaceActive,
@@ -978,10 +977,7 @@ class _ContactTile extends StatelessWidget {
                     color: const Color(0xFF2E7D32),
                     onTap: onAccept!,
                   ),
-                if (status == ContactsFriendStatus.friend &&
-                    roomUUID != null &&
-                    roomUUID.isNotEmpty &&
-                    onMessage != null)
+                if (status == ContactsFriendStatus.friend && onMessage != null)
                   _MiniTextBtn(
                     label: 'Message',
                     color: AppColors.accent,

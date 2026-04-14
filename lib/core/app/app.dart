@@ -11,7 +11,9 @@ import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/window_size_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/key_package_publisher.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/shell/application/services/app_startup_service.dart';
@@ -81,6 +83,12 @@ RepositoryProvider<ChatStorageGateway>(
         ),
         RepositoryProvider<SgtpConnectionService>(
           create: (_) => widget.dependencies.sgtpConnectionService,
+        ),
+        RepositoryProvider<DirectRoomGateway>(
+          create: (_) => widget.dependencies.directRoomGateway,
+        ),
+        RepositoryProvider<KeyPackagePublisher>(
+          create: (_) => widget.dependencies.keyPackagePublisher,
         ),
         RepositoryProvider<SgtpSessionFactory>(
           create: (_) => widget.dependencies.sgtpSessionFactory,

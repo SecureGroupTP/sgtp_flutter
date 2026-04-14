@@ -18,6 +18,9 @@ class SgtpConfig {
   final String? nodeId;
   final String chatName;
   final Uint8List? chatAvatarBytes;
+  final bool isDirectMessage;
+  final bool bootstrapDirectRoom;
+  final String? directPeerPublicKeyHex;
   final int pingIntervalSeconds;
   final int mediaChunkSizeBytes;
 
@@ -34,6 +37,9 @@ class SgtpConfig {
     this.nodeId,
     this.chatName = 'Chat',
     this.chatAvatarBytes,
+    this.isDirectMessage = false,
+    this.bootstrapDirectRoom = false,
+    this.directPeerPublicKeyHex,
     this.pingIntervalSeconds = 30,
     this.mediaChunkSizeBytes = SgtpConstants.defaultMediaChunkSize,
   });
@@ -51,6 +57,9 @@ class SgtpConfig {
         nodeId: nodeId,
         chatName: chatName,
         chatAvatarBytes: chatAvatarBytes,
+        isDirectMessage: isDirectMessage,
+        bootstrapDirectRoom: bootstrapDirectRoom,
+        directPeerPublicKeyHex: directPeerPublicKeyHex,
         pingIntervalSeconds: pingIntervalSeconds,
         mediaChunkSizeBytes: mediaChunkSizeBytes,
       );
@@ -68,9 +77,39 @@ class SgtpConfig {
         nodeId: nodeId,
         chatName: name ?? chatName,
         chatAvatarBytes: avatar ?? chatAvatarBytes,
+        isDirectMessage: isDirectMessage,
+        bootstrapDirectRoom: bootstrapDirectRoom,
+        directPeerPublicKeyHex: directPeerPublicKeyHex,
         pingIntervalSeconds: pingIntervalSeconds,
         mediaChunkSizeBytes: mediaChunkSizeBytes,
       );
+
+  SgtpConfig copyWithDirectRoom({
+    required bool isDirectMessage,
+    bool? bootstrapDirectRoom,
+    String? directPeerPublicKeyHex,
+  }) {
+    return SgtpConfig(
+      accountId: accountId,
+      serverAddr: serverAddr,
+      roomUUID: roomUUID,
+      identityKeyPair: identityKeyPair,
+      myPublicKey: myPublicKey,
+      whitelist: whitelist,
+      transport: transport,
+      useTls: useTls,
+      fakeSni: fakeSni,
+      nodeId: nodeId,
+      chatName: chatName,
+      chatAvatarBytes: chatAvatarBytes,
+      isDirectMessage: isDirectMessage,
+      bootstrapDirectRoom: bootstrapDirectRoom ?? this.bootstrapDirectRoom,
+      directPeerPublicKeyHex:
+          directPeerPublicKeyHex ?? this.directPeerPublicKeyHex,
+      pingIntervalSeconds: pingIntervalSeconds,
+      mediaChunkSizeBytes: mediaChunkSizeBytes,
+    );
+  }
 
   SgtpConfig copyWith({
     Set<String>? whitelist,
@@ -95,6 +134,9 @@ class SgtpConfig {
       nodeId: nodeId ?? this.nodeId,
       chatName: chatName,
       chatAvatarBytes: chatAvatarBytes,
+      isDirectMessage: isDirectMessage,
+      bootstrapDirectRoom: bootstrapDirectRoom,
+      directPeerPublicKeyHex: directPeerPublicKeyHex,
       pingIntervalSeconds: pingIntervalSeconds,
       mediaChunkSizeBytes: mediaChunkSizeBytes ?? this.mediaChunkSizeBytes,
     );

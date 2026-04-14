@@ -9,10 +9,14 @@ import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
+import 'package:sgtp_flutter/features/messaging/data/repositories/shared_direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
+import 'package:sgtp_flutter/features/messaging/data/services/shared_key_package_publisher.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/key_package_publisher.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
@@ -33,6 +37,8 @@ class AppDependencies {
     required this.homePersistenceService,
     required this.homeUserDirSupportService,
     required this.sgtpConnectionService,
+    required this.directRoomGateway,
+    required this.keyPackagePublisher,
     required this.sgtpSessionFactory,
     required this.homeUserDirCoordinatorFactory,
   });
@@ -44,6 +50,8 @@ class AppDependencies {
   final HomePersistenceService homePersistenceService;
   final HomeUserDirSupportService homeUserDirSupportService;
   final SgtpConnectionService sgtpConnectionService;
+  final DirectRoomGateway directRoomGateway;
+  final KeyPackagePublisher keyPackagePublisher;
   final SgtpSessionFactory sgtpSessionFactory;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
@@ -112,6 +120,12 @@ class AppInjector {
       chatStorageGateway: chatStorageGateway,
     );
     final homeUserDirSupportService = HomeUserDirSupportService();
+    final directRoomGateway = SharedDirectRoomGateway(
+      connectionService: sgtpConnectionService,
+    );
+    final keyPackagePublisher = SharedKeyPackagePublisher(
+      connectionService: sgtpConnectionService,
+    );
 
     // The active chat session runtime is the dedicated chat_core/OpenMLS-backed
     // implementation. `SgtpClient` remains only as a deprecated compatibility
@@ -134,6 +148,8 @@ class AppInjector {
       homePersistenceService: homePersistenceService,
       homeUserDirSupportService: homeUserDirSupportService,
       sgtpConnectionService: sgtpConnectionService,
+      directRoomGateway: directRoomGateway,
+      keyPackagePublisher: keyPackagePublisher,
       sgtpSessionFactory: sgtpSessionFactory,
       homeUserDirCoordinatorFactory: ({
         required onDirectMessageReady,
