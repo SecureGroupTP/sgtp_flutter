@@ -776,6 +776,14 @@ class ServerV2ChatSession implements ISgtpSession {
         _scheduleRemoteRoomBind();
       case MlsMessageReceivedNetworkEvent():
         if (!_ownsRemoteRoom(event.roomId)) return;
+        _log.debug(
+          'Received MLS message event room={roomId} message={messageId} bodyParts={bodyParts}',
+          parameters: {
+            'roomId': event.roomId,
+            'messageId': event.messageId,
+            'bodyParts': event.body.length,
+          },
+        );
         await _handleIncomingMessage(event);
     }
   }
@@ -841,6 +849,13 @@ class ServerV2ChatSession implements ISgtpSession {
     _ensurePeer(senderHex);
     for (final item in event.body) {
       final plaintext = await _handleGroupMessage(item);
+      _log.debug(
+        'MLS message plaintext decoded={decoded} message={messageId}',
+        parameters: {
+          'decoded': plaintext != null,
+          'messageId': event.messageId,
+        },
+      );
       if (plaintext == null) continue;
       await _emitDecodedPayload(
         payload: plaintext,
@@ -1129,6 +1144,7 @@ class ServerV2ChatSession implements ISgtpSession {
     for (final peerHex in _whitelist) {
       if (peerHex == myUUIDHex) continue;
       _peerPublicKeys.putIfAbsent(peerHex, () => peerHex);
+      _ensurePeer(peerHex);
     }
   }
 
