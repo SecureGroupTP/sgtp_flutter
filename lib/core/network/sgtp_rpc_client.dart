@@ -7,6 +7,7 @@ import 'package:cbor/cbor.dart';
 import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
+import 'package:sgtp_flutter/core/network/auth_challenge_validator.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
@@ -61,14 +62,19 @@ class SgtpRpcClient {
     if (_authenticated) return null;
     try {
       _keyPair = keyPair;
+      final clientNonce = _randomBytes(32);
       final challengeReq = RequestAuthChallengeRequest(
         userPublicKey: publicKey,
         publicIp: '',
         deviceId: deviceId,
-        clientNonce: _randomBytes(32),
+        clientNonce: clientNonce,
       );
       final challengeRaw = await callRpc(challengeReq);
       final challengeRes = RequestAuthChallengeResponse.fromMap(challengeRaw);
+      AuthChallengeValidator.validate(
+        challengeRes.challengePayload,
+        expectedClientNonce: clientNonce,
+      );
 
       final sig =
           await Ed25519().sign(challengeRes.challengePayload, keyPair: keyPair);
@@ -295,9 +301,8 @@ class SgtpRpcClient {
       'eventType': eventTypeValue.toString(),
       'parameters': _fromCborMap(paramsValue),
     };
-    for (final callback
-        in List<void Function(Map<String, dynamic> event)>.from(
-            _eventCallbacks.values)) {
+    for (final callback in List<void Function(Map<String, dynamic> event)>.from(
+        _eventCallbacks.values)) {
       try {
         callback(event);
       } catch (e, st) {
