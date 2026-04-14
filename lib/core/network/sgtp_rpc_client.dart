@@ -41,6 +41,7 @@ class SgtpRpcClient {
   final _pending =
       <String, ({Completer<Map<String, dynamic>> completer, String method})>{};
   final _queue = <_QueuedCall>[];
+  Future<void> _transportSendTail = Future<void>.value();
 
   SgtpRpcClient(IProtocolTransport transport) : _transport = transport {
     transport.registerPacketCallback(_onPacket);
@@ -193,7 +194,7 @@ class SgtpRpcClient {
     _pending[requestIdHex] = (completer: completer, method: request.method);
 
     try {
-      await _transport.send(packetBytes);
+      await _sendTransportPacket(packetBytes);
     } catch (e) {
       _pending.remove(requestIdHex);
       rethrow;
@@ -211,22 +212,50 @@ class SgtpRpcClient {
 
   // ── Internal ───────────────────────────────────────────────────────────────
 
+  Future<void> _sendTransportPacket(Uint8List packetBytes) {
+    final previous = _transportSendTail;
+    final completer = Completer<void>();
+    _transportSendTail = completer.future;
+
+    return () async {
+      try {
+        await previous.catchError((_) {});
+        await _transport.send(packetBytes);
+      } finally {
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+      }
+    }();
+  }
+
   void _onPacket(Uint8List bytes) {
     try {
-      final decoded = cbor.decode(bytes);
-      final packets = switch (decoded) {
-        CborMap() => [decoded],
-        CborList() => decoded.whereType<CborMap>().toList(),
-        _ => const <CborMap>[],
-      };
-      for (final packet in packets) {
-        _onResponsePacket(packet, bytes);
+      final decodedValues = _decodeCborSequence(bytes);
+      for (final decoded in decodedValues) {
+        final packets = switch (decoded) {
+          CborMap() => [decoded],
+          CborList() => decoded.whereType<CborMap>().toList(),
+          _ => const <CborMap>[],
+        };
+        for (final packet in packets) {
+          _onResponsePacket(packet, bytes);
+        }
       }
     } catch (e, st) {
       // Packet parse error — silently discard to not break other pending calls.
       // ignore: avoid_print
       Zone.current.handleUncaughtError(e, st);
     }
+  }
+
+  List<CborValue> _decodeCborSequence(Uint8List bytes) {
+    final values = <CborValue>[];
+    final sink =
+        const CborDecoder().startChunkedConversion(_CborValueCollector(values));
+    sink.add(bytes);
+    sink.close();
+    return values;
   }
 
   void _onResponsePacket(CborMap decoded, Uint8List rawBytes) {
@@ -419,4 +448,18 @@ class SgtpRpcClient {
     }
     return value;
   }
+}
+
+class _CborValueCollector implements Sink<CborValue> {
+  _CborValueCollector(this._target);
+
+  final List<CborValue> _target;
+
+  @override
+  void add(CborValue data) {
+    _target.add(data);
+  }
+
+  @override
+  void close() {}
 }

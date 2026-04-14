@@ -28,6 +28,7 @@ class RoomsJoinRoom extends RoomsEvent {
   final String? serverAddress;
   final SgtpTransportFamily? transport;
   final bool? useTls;
+  @Deprecated('Offline room opening is a legacy-only fallback.')
   final bool openOffline;
   const RoomsJoinRoom(this.uuidHex,
       {this.serverAddress,
@@ -42,9 +43,10 @@ class RoomsJoinRoom extends RoomsEvent {
 /// Disconnects and removes a room from the list.
 class RoomsRemoveRoom extends RoomsEvent {
   final String roomUUID;
-  const RoomsRemoveRoom(this.roomUUID);
+  final String serverAddress;
+  const RoomsRemoveRoom(this.roomUUID, {required this.serverAddress});
   @override
-  List<Object?> get props => [roomUUID];
+  List<Object?> get props => [roomUUID, serverAddress];
 }
 
 /// Hot-updates the peer whitelist across all active rooms and the base config.
@@ -100,7 +102,8 @@ class RoomsUpsertChat extends RoomsEvent {
   final String? serverAddress;
   final String? name;
   final Uint8List? avatarBytes;
-  const RoomsUpsertChat(this.uuid, {this.serverAddress, this.name, this.avatarBytes});
+  const RoomsUpsertChat(this.uuid,
+      {this.serverAddress, this.name, this.avatarBytes});
   @override
   List<Object?> get props => [uuid, serverAddress, name, avatarBytes];
 }

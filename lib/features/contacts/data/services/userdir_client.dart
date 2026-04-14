@@ -16,6 +16,7 @@ export 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_cl
 
 class UserDirClient implements IUserDirClient {
   final Future<SgtpRpcClient> Function() _rpcProvider;
+  final bool _providerManagesConnection;
   @override
   final String label;
 
@@ -35,7 +36,9 @@ class UserDirClient implements IUserDirClient {
   UserDirClient({
     required Future<SgtpRpcClient> Function() rpcProvider,
     required this.label,
-  }) : _rpcProvider = rpcProvider;
+    bool providerManagesConnection = false,
+  })  : _rpcProvider = rpcProvider,
+        _providerManagesConnection = providerManagesConnection;
 
   // ── IUserDirClient ───────────────────────────────────────────────────────
 
@@ -52,7 +55,7 @@ class UserDirClient implements IUserDirClient {
   @override
   Future<void> connect() async {
     if (_connected) return;
-    await _resolveRpc();
+    await _resolveRpcConnected();
     _connected = true;
     _log.debug('Connected via {label}', parameters: {'label': label});
   }
@@ -60,6 +63,7 @@ class UserDirClient implements IUserDirClient {
   @override
   void close() {
     _connected = false;
+    _rpc = null;
   }
 
   // ── Auth + profile ─��─────────────────────────────────────────────────────
@@ -73,7 +77,7 @@ class UserDirClient implements IUserDirClient {
     required SimpleKeyPairData identityKeyPair,
   }) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final authError = await rpc.authenticate(pubkey, identityKeyPair);
       if (authError != null) return (ok: false, errorMessage: authError);
 
@@ -83,10 +87,12 @@ class UserDirClient implements IUserDirClient {
       );
       final raw = await rpc.callRpc(req);
       UpdateProfileResponse.fromMap(raw);
-      _log.debug('Profile updated for {pubkey}', parameters: {'pubkey': _hexShort(pubkey)});
+      _log.debug('Profile updated for {pubkey}',
+          parameters: {'pubkey': _hexShort(pubkey)});
       return (ok: true, errorMessage: null);
     } catch (e) {
-      _log.error('registerWithResult failed: {error}', parameters: {'error': e});
+      _log.error('registerWithResult failed: {error}',
+          parameters: {'error': e});
       return (ok: false, errorMessage: e.toString());
     }
   }
@@ -94,13 +100,14 @@ class UserDirClient implements IUserDirClient {
   @override
   Future<UserDirMeta?> getMeta(Uint8List pubkey) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final req = GetProfileRequest(userPublicKey: pubkey);
       final raw = await rpc.callRpc(req);
       final res = GetProfileResponse.fromMap(raw);
       return _profileToMeta(res.profile);
     } catch (e) {
-      _log.warning('getMeta failed for {pubkey}: {error}', parameters: {'pubkey': _hexShort(pubkey), 'error': e});
+      _log.warning('getMeta failed for {pubkey}: {error}',
+          parameters: {'pubkey': _hexShort(pubkey), 'error': e});
       return null;
     }
   }
@@ -108,7 +115,7 @@ class UserDirClient implements IUserDirClient {
   @override
   Future<UserDirProfile?> getProfile(Uint8List pubkey) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final req = GetProfileRequest(userPublicKey: pubkey);
       final profileRaw = await rpc.callRpc(req);
       final profileRes = GetProfileResponse.fromMap(profileRaw);
@@ -131,7 +138,8 @@ class UserDirClient implements IUserDirClient {
         avatarBytes: avatarBytes,
       );
     } catch (e) {
-      _log.warning('getProfile failed for {pubkey}: {error}', parameters: {'pubkey': _hexShort(pubkey), 'error': e});
+      _log.warning('getProfile failed for {pubkey}: {error}',
+          parameters: {'pubkey': _hexShort(pubkey), 'error': e});
       return null;
     }
   }
@@ -139,13 +147,14 @@ class UserDirClient implements IUserDirClient {
   @override
   Future<List<UserDirMeta>> search(String query, {int limit = 20}) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final req = SearchProfilesRequest(query: query, limit: limit);
       final raw = await rpc.callRpc(req);
       final res = SearchProfilesResponse.fromMap(raw);
       return res.items.map(_searchItemToMeta).toList();
     } catch (e) {
-      _log.warning('search failed for "{query}": {error}', parameters: {'query': query, 'error': e});
+      _log.warning('search failed for "{query}": {error}',
+          parameters: {'query': query, 'error': e});
       return [];
     }
   }
@@ -153,7 +162,7 @@ class UserDirClient implements IUserDirClient {
   @override
   Future<bool> subscribe(List<Uint8List> pubkeys) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final req = SubscribeToEventsRequest(
         requestedAtUs: DateTime.now().microsecondsSinceEpoch,
       );
@@ -174,12 +183,13 @@ class UserDirClient implements IUserDirClient {
     required SimpleKeyPairData identityKeyPair,
   }) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final req = SendFriendRequestRequest(receiverPublicKey: peerPubkey);
       await rpc.callRpc(req);
       return true;
     } catch (e) {
-      _log.warning('sendFriendRequest failed: {error}', parameters: {'error': e});
+      _log.warning('sendFriendRequest failed: {error}',
+          parameters: {'error': e});
       return false;
     }
   }
@@ -195,7 +205,9 @@ class UserDirClient implements IUserDirClient {
     var requestId = _incomingRequestIds[requesterHex];
 
     if (requestId == null) {
-      _log.warning('sendFriendResponse: no cached requestId for {requester} — syncing', parameters: {'requester': requesterHex});
+      _log.warning(
+          'sendFriendResponse: no cached requestId for {requester} — syncing',
+          parameters: {'requester': requesterHex});
       await friendSync(myPubkey: myPubkey, identityKeyPair: identityKeyPair);
       requestId = _incomingRequestIds[requesterHex];
     }
@@ -210,7 +222,7 @@ class UserDirClient implements IUserDirClient {
 
   Future<bool> _doRespondToRequest(Uint8List requestId, bool accept) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       if (accept) {
         await rpc.callRpc(AcceptFriendRequestRequest(requestId: requestId));
       } else {
@@ -218,7 +230,8 @@ class UserDirClient implements IUserDirClient {
       }
       return true;
     } catch (e) {
-      _log.warning('friendResponse(accept={accept}) failed: {error}', parameters: {'accept': accept, 'error': e});
+      _log.warning('friendResponse(accept={accept}) failed: {error}',
+          parameters: {'accept': accept, 'error': e});
       return false;
     }
   }
@@ -230,12 +243,13 @@ class UserDirClient implements IUserDirClient {
     required SimpleKeyPairData identityKeyPair,
   }) async {
     try {
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
       final req = RemoveFriendRequest(friendPublicKey: peerPubkey);
       await rpc.callRpc(req);
       return true;
     } catch (e) {
-      _log.warning('sendFriendDelete failed: {error}', parameters: {'error': e});
+      _log.warning('sendFriendDelete failed: {error}',
+          parameters: {'error': e});
       return false;
     }
   }
@@ -247,7 +261,7 @@ class UserDirClient implements IUserDirClient {
   }) async {
     try {
       final states = <String, UserDirFriendState>{};
-      final rpc = await _resolveRpc();
+      final rpc = await _resolveRpcConnected();
 
       final friendsRaw = await rpc.callRpc(ListFriendsRequest());
       final friendsRes = ListFriendsResponse.fromMap(friendsRaw);
@@ -330,4 +344,15 @@ class UserDirClient implements IUserDirClient {
     return resolved;
   }
 
+  Future<SgtpRpcClient> _resolveRpcConnected() async {
+    final rpc = await _resolveRpc();
+    if (!rpc.transport.isConnected) {
+      if (_providerManagesConnection) {
+        _rpc = null;
+        return _resolveRpc();
+      }
+      await rpc.transport.connect();
+    }
+    return rpc;
+  }
 }

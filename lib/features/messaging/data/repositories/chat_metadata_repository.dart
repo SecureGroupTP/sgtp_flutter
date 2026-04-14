@@ -143,8 +143,8 @@ class ChatMetadataRepository {
           final file = File('${chatDir.path}/metadata.json');
           if (!await file.exists()) continue;
           try {
-            final parsed =
-                jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+            final parsed = await _readJsonFile(file);
+            if (parsed == null) continue;
             chats.add(_parseJson(uuid, parsed));
           } catch (e) {
             _log.warning('[ChatMetadata] Error parsing chat {uuid}: {error}',
@@ -174,8 +174,8 @@ class ChatMetadataRepository {
       final chatsDir = await _getChatsDirectory();
       final file = File('${chatsDir.path}/$uuid/metadata.json');
       if (!await file.exists()) return null;
-      final content = await file.readAsString();
-      final json = jsonDecode(content) as Map<String, dynamic>;
+      final json = await _readJsonFile(file);
+      if (json == null) return null;
       return _parseJson(uuid, json);
     } catch (e) {
       _log.warning('[ChatMetadata] Error loading legacy chat {uuid}: {error}',
@@ -200,16 +200,16 @@ class ChatMetadataRepository {
       if (server.isNotEmpty) {
         final file = await _getMetadataFile(uuid, serverAddress: server);
         if (await file.exists()) {
-          final content = await file.readAsString();
-          final json = jsonDecode(content) as Map<String, dynamic>;
+          final json = await _readJsonFile(file);
+          if (json == null) return null;
           return _parseJson(uuid, json, fallbackServerAddress: server);
         }
         // Backward-compat: read old non-server-scoped location for this UUID.
         final chatsDir = await _getChatsDirectory();
         final legacyFile = File('${chatsDir.path}/$uuid/metadata.json');
         if (await legacyFile.exists()) {
-          final content = await legacyFile.readAsString();
-          final json = jsonDecode(content) as Map<String, dynamic>;
+          final json = await _readJsonFile(legacyFile);
+          if (json == null) return null;
           return _parseJson(uuid, json, fallbackServerAddress: server);
         }
         // Important: when server is specified, never fallback to another server.
@@ -319,6 +319,20 @@ class ChatMetadataRepository {
       'windowWidth': metadata.windowWidth,
       'windowHeight': metadata.windowHeight,
     };
+  }
+
+  Future<Map<String, dynamic>?> _readJsonFile(File file) async {
+    final content = await file.readAsString();
+    if (content.trim().isEmpty) {
+      _log.warning('[ChatMetadata] Skipping empty metadata file: {path}',
+          parameters: {'path': file.path});
+      return null;
+    }
+    final decoded = jsonDecode(content);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Metadata payload is not a JSON object');
+    }
+    return decoded;
   }
 
   ChatMetadata _parseJson(

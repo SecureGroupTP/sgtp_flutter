@@ -76,6 +76,9 @@ class RoomsPageState extends State<RoomsPage> {
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<RoomsBloc, RoomsState>(
+      listenWhen: (previous, current) =>
+          previous.error != current.error ||
+          _syncSignature(previous) != _syncSignature(current),
       listener: (context, state) {
         context.read<RoomsBloc>().add(const RoomsSyncStoredChats());
         if (state.error != null) {
@@ -115,16 +118,16 @@ class RoomsPageState extends State<RoomsPage> {
         // ── Active rooms ─────────────────────────────────────────────────
         ...state.rooms.map((entry) => ActiveRoomTile(
               entry: entry,
-              onTap: () => _openRoom(context, entry),
+              onTap: () => _openRoom(entry),
               onReconnect: () => entry.chatBloc.add(const ChatReconnect()),
-              onRemove: () => context
-                  .read<RoomsBloc>()
-                  .add(RoomsRemoveRoom(entry.roomUUID)),
+              onRemove: () => context.read<RoomsBloc>().add(RoomsRemoveRoom(
+                  entry.roomUUID,
+                  serverAddress: entry.serverAddress)),
             )),
 
-        // ── Stored chats (not currently joined) ──────────────────────────
+        // ── Cached chats (not currently online) ──────────────────────────
         if (storedNotActive.isNotEmpty) ...[
-          const _SectionHeader(title: 'Stored Chats'),
+          const _SectionHeader(title: 'Offline Cache'),
           ...storedNotActive.map((chat) => SavedChatTile(
                 uuid: chat.uuid,
                 metadata: chat,
@@ -146,7 +149,7 @@ class RoomsPageState extends State<RoomsPage> {
       serverAddress: metadata.serverAddress,
     );
     if (existing != null) {
-      _openRoom(context, existing);
+      _openRoom(existing);
       return;
     }
 
@@ -160,7 +163,7 @@ class RoomsPageState extends State<RoomsPage> {
       if (created != null) {
         sub?.cancel();
         if (!mounted) return;
-        _openRoom(context, created);
+        _openRoom(created);
       }
     });
     Future<void>.delayed(const Duration(seconds: 5), () {
@@ -177,7 +180,7 @@ class RoomsPageState extends State<RoomsPage> {
   void openRoomByUuid(
     String roomUUIDHex, {
     String? serverAddress,
-    bool openOffline = true,
+    bool openOffline = false,
   }) {
     final roomsBloc = context.read<RoomsBloc>();
     final effectiveServer = (serverAddress ?? widget.serverAddress).trim();
@@ -187,7 +190,7 @@ class RoomsPageState extends State<RoomsPage> {
       serverAddress: effectiveServer,
     );
     if (existing != null) {
-      _openRoom(context, existing);
+      _openRoom(existing);
       return;
     }
 
@@ -201,7 +204,7 @@ class RoomsPageState extends State<RoomsPage> {
       if (created != null) {
         sub?.cancel();
         if (!mounted) return;
-        _openRoom(context, created);
+        _openRoom(created);
       }
     });
     Future<void>.delayed(const Duration(seconds: 5), () {
@@ -233,13 +236,28 @@ class RoomsPageState extends State<RoomsPage> {
     return null;
   }
 
-  void _openRoom(BuildContext context, RoomEntry entry) {
+  void _openRoom(RoomEntry entry) {
+    if (!mounted) return;
+    final status = entry.chatBloc.state.status;
+    final errorMessage = entry.chatBloc.state.errorMessage;
+    if (status == ChatStatus.disconnected ||
+        (status == ChatStatus.error &&
+            !_isNonRecoverableConnectionError(errorMessage))) {
+      entry.chatBloc.add(const ChatReconnect());
+    }
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => BlocProvider.value(
         value: entry.chatBloc,
         child: ChatPage(accountId: widget.accountId),
       ),
     ));
+  }
+
+  bool _isNonRecoverableConnectionError(String? error) {
+    final message = error ?? '';
+    return message.contains('MLS welcome is missing') ||
+        message.contains('MLS welcome failed') ||
+        message.contains('Waiting for chat invitation');
   }
 
   void showAddSheet() {
@@ -250,6 +268,21 @@ class RoomsPageState extends State<RoomsPage> {
         defaultServerAddress: widget.serverAddress,
       ),
     );
+  }
+
+  String _syncSignature(RoomsState state) {
+    return state.rooms.map((room) {
+      final chat = room.chatBloc.state;
+      final avatarSize = chat.chatAvatarBytes?.length ?? 0;
+      return [
+        room.roomUUID,
+        _serverKey(room.serverAddress),
+        chat.status.name,
+        chat.chatName,
+        '$avatarSize',
+        '${chat.isDirectChat}',
+      ].join('|');
+    }).join('||');
   }
 }
 
@@ -499,8 +532,8 @@ class SavedChatTile extends StatelessWidget {
     final hasMetadataName = metadata != null && metadata!.name.isNotEmpty;
     final title = hasMetadataName ? metadata!.name : '${uuid.substring(0, 8)}…';
     final subtitle = metadata?.updatedAt != null
-        ? 'Stored · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
-        : 'Stored · tap to open';
+        ? 'Cached locally · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
+        : 'Cached locally · tap to open offline';
     return _ChatTile(
       onTap: onOpen,
       leading: metadata?.avatarBytes != null

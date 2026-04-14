@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/events/event_decode.dart';
 import 'package:sgtp_flutter/core/network/events/sgtp_server_event.dart';
 
 class MlsWelcomeReceivedNetworkEvent extends SgtpServerEvent {
@@ -15,9 +16,8 @@ class MlsWelcomeReceivedNetworkEvent extends SgtpServerEvent {
     Map<String, dynamic> parameters,
   ) {
     return MlsWelcomeReceivedNetworkEvent(
-      targetUserPublicKey:
-          (parameters['targetUserPublicKey'] as Uint8List?) ?? Uint8List(0),
-      welcomeBytes: (parameters['welcomeBytes'] as Uint8List?) ?? Uint8List(0),
+      targetUserPublicKey: decodeEventBytes(parameters['targetUserPublicKey']),
+      welcomeBytes: decodeEventBytes(parameters['welcomeBytes']),
     );
   }
 

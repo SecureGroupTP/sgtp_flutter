@@ -19,8 +19,10 @@ class ChatConnect extends ChatEvent {
   List<Object?> get props => [config, nicknames];
 }
 
-/// Open chat in offline mode: load local persisted history without network
-/// connection. User can later press Connect to establish a live session.
+/// Deprecated legacy mode: opens chat from persisted history without network
+/// connection. Main UI flows should use [ChatConnect] instead.
+@Deprecated(
+    'Use ChatConnect for main UI flows; offline preview is legacy-only.')
 class ChatOpenOffline extends ChatEvent {
   final SgtpConfig config;
   final Map<String, String> nicknames;

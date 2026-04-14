@@ -95,12 +95,19 @@ class HomePersistenceService {
     final existing =
         await repo.loadChat(roomUUID, serverAddress: serverAddress);
     final now = DateTime.now();
-    _log.info('[HomePersistence] upsertDirectMessageChat room={room} direct=true name="{name}" avatar={avatarSize}B', parameters: {'room': roomUUID, 'name': displayName, 'avatarSize': avatarBytes?.length ?? 0});
+    _log.info(
+        '[HomePersistence] upsertDirectMessageChat room={room} direct=true name="{name}" avatar={avatarSize}B',
+        parameters: {
+          'room': roomUUID,
+          'name': displayName,
+          'avatarSize': avatarBytes?.length ?? 0
+        });
     await repo.saveChat(
       ChatMetadata(
         uuid: roomUUID,
         name: displayName,
         serverAddress: serverAddress,
+        remoteRoomId: existing?.remoteRoomId,
         // DM metadata must mirror the contact profile exactly:
         // if the friend has no avatar, clear previously saved room avatar.
         avatarBytes: avatarBytes,

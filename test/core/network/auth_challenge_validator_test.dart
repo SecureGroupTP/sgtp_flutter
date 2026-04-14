@@ -32,6 +32,30 @@ void main() {
       );
     });
 
+    test('accepts challenge with full uint64 server nonce', () {
+      final payload = Uint8List.fromList(
+        cbor.encode(
+          CborMap({
+            CborString('type'): CborString('authenticationChallenge'),
+            CborString('expirationTimestamp'): CborInt(BigInt.from(futureUs)),
+            CborString('serverNonce'): CborInt(
+              BigInt.parse('18446744073709551615'),
+            ),
+            CborString('clientNonce'): CborBytes(nonce),
+          }),
+        ),
+      );
+
+      expect(
+        () => AuthChallengeValidator.validate(
+          payload,
+          expectedClientNonce: nonce,
+          now: now,
+        ),
+        returnsNormally,
+      );
+    });
+
     test('rejects unexpected type', () {
       final payload = Uint8List.fromList(
         cbor.encode(

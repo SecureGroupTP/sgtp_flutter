@@ -78,6 +78,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       nicknames: _nicknames,
       settingsRepository: settingsManagementService,
       chatStorage: chatStorageGateway,
+      connectionService: sgtpConnectionService,
       serverAddress: serverAddress,
       sessionFactory: sessionFactory,
       userAvatar: userAvatar,
@@ -157,6 +158,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       nicknames: _nicknames,
       settingsRepository: _settingsManagementService,
       chatStorage: _chatStorageGateway,
+      connectionService: _sgtpConnection,
       serverAddress: newServer,
       userAvatar: null,
       sessionFactory: _sessionFactory,
@@ -239,13 +241,6 @@ class HomeCubit extends Cubit<HomeViewState> {
     unawaited(_ensureDirectMetadataForRoom(roomUUIDHex));
     _currentTabIndex = 0;
     _buildState();
-    _roomsBloc.add(
-      RoomsJoinRoom(
-        roomUUIDHex,
-        serverAddress: _serverAddress,
-        openOffline: true,
-      ),
-    );
   }
 
   Future<void> _ensureDirectMetadataForRoom(String roomUUIDHex) async {
@@ -409,7 +404,8 @@ class HomeCubit extends Cubit<HomeViewState> {
 
   Future<void> _syncProfileToUserDir({required bool force}) async {
     await _ensureShellConnection();
-    await _userDirCoordinator.registerSelf(_buildUserDirSession(), force: force);
+    await _userDirCoordinator.registerSelf(_buildUserDirSession(),
+        force: force);
   }
 
   Future<void> _syncWhitelistWithUserDir(

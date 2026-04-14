@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:sgtp_flutter/core/network/events/event_decode.dart';
 import 'package:sgtp_flutter/core/network/events/sgtp_server_event.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 
@@ -23,9 +24,8 @@ class MlsMessageReceivedNetworkEvent extends SgtpServerEvent {
     return MlsMessageReceivedNetworkEvent(
       roomId: (parameters['roomId'] as String?) ?? '',
       messageId: _uuidToString(parameters['messageId']),
-      senderPublicKey:
-          (parameters['senderPublicKey'] as Uint8List?) ?? Uint8List(0),
-      body: rawBody.whereType<Uint8List>().toList(growable: false),
+      senderPublicKey: decodeEventBytes(parameters['senderPublicKey']),
+      body: rawBody.map(decodeEventBytes).toList(growable: false),
     );
   }
 

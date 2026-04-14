@@ -242,7 +242,7 @@ class _HomeAppSessionController implements AppSessionController {
       roomsPage.openRoomByUuid(
         roomUUIDHex,
         serverAddress: _homeCubit.state.serverAddress,
-        openOffline: true,
+        openOffline: false,
       );
     }
   }

@@ -177,12 +177,23 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 
           final status = bloc.state.status;
           if (status == ChatStatus.ready) {
-            _log.info('[Chat] probing live connection after background ({duration}s, status={status})', parameters: {'duration': bgDuration.inSeconds, 'status': status});
+            _log.info(
+                '[Chat] probing live connection after background ({duration}s, status={status})',
+                parameters: {
+                  'duration': bgDuration.inSeconds,
+                  'status': status
+                });
             bloc.add(const ChatProbeConnection());
-          } else if (status == ChatStatus.error) {
+          } else if (status == ChatStatus.error &&
+              !_isNonRecoverableConnectionError(bloc.state.errorMessage)) {
             // Error state may represent a broken transport session.
             // Attempt recovery automatically, but keep "disconnected" manual.
-            _log.warning('[Chat] reconnecting after background ({duration}s, status={status})', parameters: {'duration': bgDuration.inSeconds, 'status': status});
+            _log.warning(
+                '[Chat] reconnecting after background ({duration}s, status={status})',
+                parameters: {
+                  'duration': bgDuration.inSeconds,
+                  'status': status
+                });
             bloc.add(const ChatReconnect());
           }
         }
@@ -200,6 +211,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         // Do NOT disconnect here — see note in original code.
         break;
     }
+  }
+
+  bool _isNonRecoverableConnectionError(String? error) {
+    final message = error ?? '';
+    return message.contains('MLS welcome is missing') ||
+        message.contains('MLS welcome failed') ||
+        message.contains('Waiting for chat invitation');
   }
 
   /// Send read receipts for all messages that have not been acknowledged yet.
@@ -272,7 +290,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     selectedCameraName ??= cameras.isNotEmpty ? cameras.first.id : null;
 
     final hasMic = microphones.isNotEmpty;
-    final hasCam = _isDesktop ? cameras.isNotEmpty : true; // mobile always has camera
+    final hasCam =
+        _isDesktop ? cameras.isNotEmpty : true; // mobile always has camera
     var videoMode = _isVideoNoteMode;
     if (!hasCam) videoMode = false;
     if (!hasMic && hasCam) videoMode = true;
@@ -388,7 +407,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickAndSendMedia(BuildContext context) async {
-    final choice = await showAppBottomSheet<String>(context,
+    final choice = await showAppBottomSheet<String>(
+      context,
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -487,18 +507,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     if (preparedFiles.length > 1 || existingText.isNotEmpty) {
       // Show caption bottom sheet
       final captionResult = await _showCaptionSheet(
-        context,
+        this.context,
         imageCount: preparedFiles.length,
         initialCaption: existingText,
       );
-      if (!context.mounted) return;
+      if (!mounted) return;
       if (captionResult == null) return; // user cancelled
       caption = captionResult;
     } else {
       caption = existingText;
     }
 
-    final bloc = context.read<ChatBloc>();
+    if (!mounted) return;
+    final bloc = this.context.read<ChatBloc>();
 
     // Send caption as text first if non-empty
     if (caption.isNotEmpty) {
@@ -532,7 +553,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     String initialCaption = '',
   }) async {
     final ctrl = TextEditingController(text: initialCaption);
-    final result = await showAppBottomSheet<String>(context,
+    final result = await showAppBottomSheet<String>(
+      context,
       builder: (ctx) => Padding(
         padding: EdgeInsets.fromLTRB(
             16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
@@ -865,11 +887,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     try {
       final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
       final imageBytes = preloadedBytes ?? await Pasteboard.image;
+      if (!mounted) return;
       if (imageBytes == null) {
-        _showSnack(context, 'No image in clipboard');
+        _showSnack(this.context, 'No image in clipboard');
         return;
       }
-      if (!context.mounted) return;
+      if (!mounted) return;
 
       // Show preview sheet — let user confirm or cancel before sending.
       final confirmed = await showAppBottomSheet<bool>(
@@ -934,14 +957,16 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               mime: 'image/png',
             );
 
-      context.read<ChatBloc>().add(ChatSendImage(
+      if (!mounted) return;
+      this.context.read<ChatBloc>().add(ChatSendImage(
             bytes: prepared.bytes,
             name: prepared.name,
             mime: prepared.mime,
           ));
       _scrollToBottom();
     } catch (e) {
-      _showSnack(context, 'Failed to paste image: $e');
+      if (!mounted) return;
+      _showSnack(this.context, 'Failed to paste image: $e');
     }
   }
 
@@ -1045,7 +1070,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     try {
       final imageBytes = await Pasteboard.image;
       if (!mounted || imageBytes == null) return;
-      await _pasteImageFromClipboard(context, preloadedBytes: imageBytes);
+      await _pasteImageFromClipboard(this.context, preloadedBytes: imageBytes);
     } catch (_) {
       // Let native text paste continue silently when image clipboard is blocked.
     }
@@ -1110,25 +1135,21 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                   style: const TextStyle(color: AppColors.textPrimary),
                   decoration: InputDecoration(
                     labelText: 'Chat Name',
-                    labelStyle:
-                        const TextStyle(color: AppColors.textSecondary),
+                    labelStyle: const TextStyle(color: AppColors.textSecondary),
                     filled: true,
                     fillColor: AppColors.bgSurfaceActive,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide:
-                          const BorderSide(color: AppColors.border),
+                      borderSide: const BorderSide(color: AppColors.border),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide:
-                          const BorderSide(color: AppColors.border),
+                      borderSide: const BorderSide(color: AppColors.border),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide(
-                          color: AppColors.accent.withAlpha(180),
-                          width: 1.5),
+                          color: AppColors.accent.withAlpha(180), width: 1.5),
                     ),
                   ),
                   maxLength: 100,
@@ -1149,8 +1170,8 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                       onTap: () {
                         final name = nameCtrl.text.trim();
                         if (name.isEmpty) return;
-                        context.read<ChatBloc>().add(
-                            ChatUpdateMetadata(name: name, avatarBytes: newAvatar));
+                        context.read<ChatBloc>().add(ChatUpdateMetadata(
+                            name: name, avatarBytes: newAvatar));
                         Navigator.pop(ctx);
                       },
                     ),
@@ -1522,12 +1543,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             ),
             const SizedBox(width: 8),
           ],
-          Text(
-            text,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: color,
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: color,
+              ),
             ),
           ),
         ],
@@ -2205,7 +2231,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
 }
 
 enum _ChatMenuAction { disconnect }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mobile mode button (mic ↔ video-note) — single button, tap = swap, hold = record

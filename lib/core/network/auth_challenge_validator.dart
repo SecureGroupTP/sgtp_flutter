@@ -34,8 +34,10 @@ class AuthChallengeValidator {
       );
     }
 
-    final currentTime = (now ?? DateTime.now()).toUtc().microsecondsSinceEpoch;
-    if (challenge.expirationTimestamp < 0 ||
+    final currentTime = BigInt.from(
+      (now ?? DateTime.now()).toUtc().microsecondsSinceEpoch,
+    );
+    if (challenge.expirationTimestamp < BigInt.zero ||
         challenge.expirationTimestamp < currentTime) {
       throw const AuthChallengeValidationException(
         'Authentication challenge has expired',
@@ -60,8 +62,8 @@ class AuthChallengeValidator {
 
 class _ParsedAuthChallenge {
   final String type;
-  final int expirationTimestamp;
-  final int serverNonce;
+  final BigInt expirationTimestamp;
+  final BigInt serverNonce;
   final Uint8List clientNonce;
 
   const _ParsedAuthChallenge({
@@ -92,8 +94,8 @@ class _CborReader {
 
     final seenKeys = <String>{};
     String? type;
-    int? expirationTimestamp;
-    int? serverNonce;
+    BigInt? expirationTimestamp;
+    BigInt? serverNonce;
     Uint8List? clientNonce;
 
     void readPair() {
@@ -129,7 +131,7 @@ class _CborReader {
       _offset++;
     } else {
       final pairCount = _readArgument(additionalInfo);
-      for (var i = 0; i < pairCount; i++) {
+      for (var i = 0; i < pairCount.toInt(); i++) {
         readPair();
       }
     }
@@ -210,23 +212,23 @@ class _CborReader {
           );
         }
         final chunkLength = _readArgument(chunkAdditionalInfo);
-        out.add(_readBytes(chunkLength));
+        out.add(_readBytes(chunkLength.toInt()));
       }
       _offset++;
       return out.takeBytes();
     }
 
     final length = _readArgument(additionalInfo);
-    return _readBytes(length);
+    return _readBytes(length.toInt());
   }
 
-  int _readUint() {
+  BigInt _readUint() {
     final initialByte = _readByte();
     final majorType = initialByte >> 5;
     final additionalInfo = initialByte & 0x1f;
     if (majorType != 0) {
       throw const AuthChallengeValidationException(
-        'Authentication challenge expirationTimestamp must be a CBOR uint',
+        'Authentication challenge integer field must be a CBOR uint',
       );
     }
     return _readArgument(additionalInfo);
@@ -280,14 +282,14 @@ class _CborReader {
           );
         }
         final chunkLength = _readArgument(chunkAdditionalInfo);
-        _readBytes(chunkLength);
+        _readBytes(chunkLength.toInt());
       }
       _offset++;
       return;
     }
 
     final length = _readArgument(additionalInfo);
-    _readBytes(length);
+    _readBytes(length.toInt());
   }
 
   void _skipArray(int additionalInfo) {
@@ -300,7 +302,7 @@ class _CborReader {
     }
 
     final length = _readArgument(additionalInfo);
-    for (var i = 0; i < length; i++) {
+    for (var i = 0; i < length.toInt(); i++) {
       _skipItem();
     }
   }
@@ -321,7 +323,7 @@ class _CborReader {
     }
 
     final length = _readArgument(additionalInfo);
-    for (var i = 0; i < length; i++) {
+    for (var i = 0; i < length.toInt(); i++) {
       _skipItem();
       _skipItem();
     }
@@ -359,28 +361,25 @@ class _CborReader {
     return _bytes[_offset] == 0xff;
   }
 
-  int _readArgument(int additionalInfo) {
+  BigInt _readArgument(int additionalInfo) {
     switch (additionalInfo) {
       case < 24:
-        return additionalInfo;
+        return BigInt.from(additionalInfo);
       case 24:
-        return _readByte();
+        return BigInt.from(_readByte());
       case 25:
         final bytes = _readBytes(2);
-        return (bytes[0] << 8) | bytes[1];
+        return BigInt.from((bytes[0] << 8) | bytes[1]);
       case 26:
         final bytes = _readBytes(4);
-        return (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+        return BigInt.from(
+          (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3],
+        );
       case 27:
         final bytes = _readBytes(8);
-        var value = 0;
+        var value = BigInt.zero;
         for (final byte in bytes) {
-          value = (value << 8) | byte;
-        }
-        if (value < 0) {
-          throw const AuthChallengeValidationException(
-            'Authentication challenge integer is out of supported range',
-          );
+          value = (value << 8) | BigInt.from(byte);
         }
         return value;
       case 31:

@@ -22,7 +22,7 @@ class HomeUserDirCoordinator {
       Uint8List? avatarBytes,
     ) onDirectMessageReady,
     required void Function(HomeUserDirState state) onStateChanged,
-    })  : _persistence = persistenceService,
+  })  : _persistence = persistenceService,
         _support = supportService,
         _userDirClient = userDirClient,
         _onDirectMessageReady = onDirectMessageReady,
@@ -412,7 +412,13 @@ class HomeUserDirCoordinator {
       final candidate = FriendStateRecord(
         peerPubkeyHex: peerHex,
         status: status.name,
-        roomUUIDHex: item.roomUUIDHex,
+        roomUUIDHex: status == FriendStatus.friend
+            ? (item.roomUUIDHex ??
+                await _support.buildDirectMessageRoomUUIDHex(
+                  myPublicKey: session.config.myPublicKey,
+                  peerPublicKey: item.peerPubkey,
+                ))
+            : item.roomUUIDHex,
         updatedAt: now,
       );
       final previous = next[peerHex];
@@ -457,7 +463,7 @@ class HomeUserDirCoordinator {
       }
 
       if (item.status == UserDirFriendStatus.friend &&
-          item.roomUUIDHex != null) {
+          candidate.roomUUIDHex != null) {
         final profile = _contactProfiles[peerHex];
         final nickname = (_nicknames[peerHex] ?? '').trim();
         final fullName = profile?.fullname?.trim() ?? '';
@@ -469,7 +475,7 @@ class HomeUserDirCoordinator {
           fallback: nickname.isNotEmpty ? nickname : 'Friend',
         );
         await _onDirectMessageReady(
-          item.roomUUIDHex!,
+          candidate.roomUUIDHex!,
           peerHex,
           displayName,
           profile?.avatarBytes,

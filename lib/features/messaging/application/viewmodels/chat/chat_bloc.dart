@@ -177,9 +177,22 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
   Future<void> _onReconnect(
       ChatReconnect event, Emitter<ChatState> emit) async {
+    if (_isNonRecoverableConnectionError(state.errorMessage)) {
+      _log.warning(
+        '[ChatBloc] Reconnect skipped for non-recoverable MLS connection state',
+      );
+      return;
+    }
     final last = _lastConnectEvent;
     if (last == null) return;
     await _doConnect(last, emit);
+  }
+
+  bool _isNonRecoverableConnectionError(String? error) {
+    final message = error ?? '';
+    return message.contains('MLS welcome is missing') ||
+        message.contains('MLS welcome failed') ||
+        message.contains('Waiting for chat invitation');
   }
 
   Future<void> _onProbeConnection(
@@ -648,11 +661,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ));
 
       case SgtpReady(:final isMaster, :final roomUUIDHex):
+        final updatedPubKeys = Map<String, String>.from(state.peerPublicKeys)
+          ..addAll(_client?.peerPublicKeys ?? const {});
         emit(state.copyWith(
           status: ChatStatus.ready, isMaster: isMaster,
           roomUUID: roomUUIDHex, myUUID: _client?.myUUIDHex ?? '',
           // Use a Set to ensure no duplicates survive across reconnects
           peerUUIDs: (_client?.peerUUIDs ?? []).toSet().toList(),
+          peerPublicKeys: updatedPubKeys,
+          peerAvatars: _peerAvatarsFor(updatedPubKeys),
         ));
         _saveMetadata(roomUUIDHex, state.chatName, state.chatAvatarBytes);
 
@@ -784,7 +801,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         // is still set but _client is null — we guard against that.
         if (_lastConnectEvent != null && _client != null) {
           Future.delayed(const Duration(seconds: 3), () {
-            if (!isClosed && state.status == ChatStatus.disconnected) {
+            if (!isClosed &&
+                state.status == ChatStatus.disconnected &&
+                !_isNonRecoverableConnectionError(state.errorMessage)) {
               _log.info(
                   '[ChatBloc] Auto-reconnecting after unexpected disconnect');
               add(const ChatReconnect());

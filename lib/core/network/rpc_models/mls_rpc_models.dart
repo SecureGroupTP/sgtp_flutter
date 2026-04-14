@@ -124,10 +124,12 @@ class SendCommitResponse {
 }
 
 class SendWelcomeRequest extends RpcRequest {
+  final String? roomId;
   final Uint8List targetUserPublicKey;
   final Uint8List welcomeBytes;
 
   const SendWelcomeRequest({
+    this.roomId,
     required this.targetUserPublicKey,
     required this.welcomeBytes,
   });
@@ -137,6 +139,7 @@ class SendWelcomeRequest extends RpcRequest {
 
   @override
   Map<String, dynamic> toMap() => {
+        if (roomId != null && roomId!.isNotEmpty) 'roomId': roomId,
         'targetUserPublicKey': targetUserPublicKey,
         'welcomeBytes': welcomeBytes,
       };
@@ -150,6 +153,112 @@ class SendWelcomeResponse {
   static SendWelcomeResponse fromMap(Map<String, dynamic> m) =>
       SendWelcomeResponse(
         acceptedAtUs: parseTimestampUs(m['acceptedAt']),
+      );
+}
+
+class UploadGroupInfoRequest extends RpcRequest {
+  final String roomId;
+  final Uint8List groupInfoBytes;
+
+  const UploadGroupInfoRequest({
+    required this.roomId,
+    required this.groupInfoBytes,
+  });
+
+  @override
+  String get method => 'uploadGroupInfo';
+
+  @override
+  Map<String, dynamic> toMap() => {
+        'roomId': roomId,
+        'groupInfoBytes': groupInfoBytes,
+      };
+}
+
+class UploadGroupInfoResponse {
+  final int acceptedAtUs;
+
+  const UploadGroupInfoResponse({required this.acceptedAtUs});
+
+  static UploadGroupInfoResponse fromMap(Map<String, dynamic> m) =>
+      UploadGroupInfoResponse(
+        acceptedAtUs: parseTimestampUs(m['acceptedAt']),
+      );
+}
+
+class FetchGroupInfoRequest extends RpcRequest {
+  final String roomId;
+
+  const FetchGroupInfoRequest({required this.roomId});
+
+  @override
+  String get method => 'fetchGroupInfo';
+
+  @override
+  Map<String, dynamic> toMap() => {'roomId': roomId};
+}
+
+class FetchGroupInfoResponse {
+  final Uint8List groupInfoBytes;
+
+  const FetchGroupInfoResponse({required this.groupInfoBytes});
+
+  static FetchGroupInfoResponse fromMap(Map<String, dynamic> m) =>
+      FetchGroupInfoResponse(
+        groupInfoBytes: _decodeBytes(m['groupInfoBytes']),
+      );
+}
+
+class SendExternalCommitRequest extends RpcRequest {
+  final String roomId;
+  final Uint8List commitBytes;
+
+  const SendExternalCommitRequest({
+    required this.roomId,
+    required this.commitBytes,
+  });
+
+  @override
+  String get method => 'sendExternalCommit';
+
+  @override
+  Map<String, dynamic> toMap() => {
+        'roomId': roomId,
+        'commitBytes': commitBytes,
+      };
+}
+
+class SendExternalCommitResponse {
+  final int acceptedAtUs;
+
+  const SendExternalCommitResponse({required this.acceptedAtUs});
+
+  static SendExternalCommitResponse fromMap(Map<String, dynamic> m) =>
+      SendExternalCommitResponse(
+        acceptedAtUs: parseTimestampUs(m['acceptedAt']),
+      );
+}
+
+class FetchWelcomeRequest extends RpcRequest {
+  final String roomId;
+
+  const FetchWelcomeRequest({required this.roomId});
+
+  @override
+  String get method => 'fetchWelcome';
+
+  @override
+  Map<String, dynamic> toMap() => {'roomId': roomId};
+}
+
+class FetchWelcomeResponse {
+  final Uint8List welcomeBytes;
+
+  const FetchWelcomeResponse({required this.welcomeBytes});
+
+  static FetchWelcomeResponse fromMap(Map<String, dynamic> m) =>
+      FetchWelcomeResponse(
+        welcomeBytes: _decodeBytes(m['welcomeBytes']),
       );
 }
 
@@ -182,6 +291,27 @@ class MlsWelcomeReceivedEvent {
       MlsWelcomeReceivedEvent(
         targetUserPublicKey: _decodeBytes(m['targetUserPublicKey']),
         welcomeBytes: _decodeBytes(m['welcomeBytes']),
+      );
+}
+
+class MlsExternalCommitReceivedEvent {
+  final String roomId;
+  final Uint8List commitBytes;
+  final Uint8List joinerPublicKey;
+
+  const MlsExternalCommitReceivedEvent({
+    required this.roomId,
+    required this.commitBytes,
+    required this.joinerPublicKey,
+  });
+
+  static MlsExternalCommitReceivedEvent fromParameters(
+    Map<String, dynamic> m,
+  ) =>
+      MlsExternalCommitReceivedEvent(
+        roomId: (m['roomId'] as String?) ?? '',
+        commitBytes: _decodeBytes(m['commitBytes']),
+        joinerPublicKey: _decodeBytes(m['joinerPublicKey']),
       );
 }
 

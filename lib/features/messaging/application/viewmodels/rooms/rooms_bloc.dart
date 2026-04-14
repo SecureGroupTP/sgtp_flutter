@@ -3,11 +3,14 @@ import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'package:sgtp_flutter/core/app_log.dart';
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
+import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_state.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
@@ -23,14 +26,17 @@ class _RoomsRefresh extends RoomsEvent {
 }
 
 class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
+  final _log = AppLog('RoomsBloc');
   final String _accountId;
   SgtpConfig _baseConfig;
   final Map<String, String> _nicknames;
   final SettingsManagementService _settings;
   final ChatStorageGateway _chatStorage;
+  final SgtpConnectionService _connectionService;
   final SgtpSessionFactory _sessionFactory;
   Map<String, Uint8List> _contactAvatarsByPub = const {};
   Uint8List? _userAvatar;
+  DateTime? _lastServerRoomSyncAt;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
   late final ChatMetadataStore _chatMetadataRepo;
 
@@ -40,6 +46,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     required Map<String, String> nicknames,
     required SettingsManagementService settingsRepository,
     required ChatStorageGateway chatStorage,
+    required SgtpConnectionService connectionService,
     required String serverAddress,
     required SgtpSessionFactory sessionFactory,
     Uint8List? userAvatar,
@@ -48,6 +55,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         _nicknames = nicknames,
         _settings = settingsRepository,
         _chatStorage = chatStorage,
+        _connectionService = connectionService,
         _sessionFactory = sessionFactory,
         _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
@@ -162,6 +170,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         .toLowerCase();
   }
 
+  String _roomKey(String roomUUID, String serverAddress) =>
+      '${roomUUID.trim().toLowerCase()}@${_normalizeAddress(serverAddress)}';
+
   void _onUpdateWhitelist(
       RoomsUpdateWhitelist event, Emitter<RoomsState> emit) {
     // Update base config so future rooms use the new whitelist.
@@ -196,11 +207,13 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
   Future<void> _onLoadStoredChats(
       RoomsLoadStoredChats event, Emitter<RoomsState> emit) async {
+    await _syncServerRoomsIntoMetadata();
     final allMetadata = await _chatMetadataRepo.loadAllChats();
     final targetServer = _normalizeAddress(state.serverAddress);
     final filtered = allMetadata
         .where((m) => _normalizeAddress(m.serverAddress) == targetServer)
-        .toList();
+        .toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     emit(state.copyWith(storedChats: filtered));
   }
 
@@ -231,6 +244,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       await _chatMetadataRepo.saveChat(ChatMetadata(
         uuid: room.roomUUID,
         serverAddress: room.serverAddress,
+        remoteRoomId: existing?.remoteRoomId,
         name:
             shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
         avatarBytes:
@@ -278,6 +292,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           ? event.name!
           : (existing?.name ?? 'Chat'),
       serverAddress: server,
+      remoteRoomId: existing?.remoteRoomId,
       avatarBytes: event.avatarBytes ?? existing?.avatarBytes,
       isDirectMessage: existing?.isDirectMessage ?? false,
       createdAt: existing?.createdAt ?? now,
@@ -286,6 +301,96 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       windowHeight: existing?.windowHeight,
     ));
     add(const RoomsLoadStoredChats());
+  }
+
+  Future<bool> _syncServerRoomsIntoMetadata() async {
+    final targetServer = state.serverAddress.trim();
+    if (targetServer.isEmpty) return false;
+
+    final lastSync = _lastServerRoomSyncAt;
+    final now = DateTime.now();
+    if (lastSync != null && now.difference(lastSync).inSeconds < 15) {
+      return true;
+    }
+
+    final config = _baseConfig
+        .copyWith(accountId: _accountId)
+        .copyWith(serverAddr: targetServer);
+    final client = ServerV2MlsClient(
+      rpcProvider: () => _connectionService.acquireRpc(config),
+      sharedServerEvents: _connectionService.serverEvents,
+    );
+    var synced = 0;
+    try {
+      String? cursor;
+      do {
+        final page = await client.listChatRooms(limit: 100, cursor: cursor);
+        for (final item in page.items) {
+          final room = await client.getChatRoom(item.roomId);
+          final localRoomUUID = _localRoomUUIDFromDescription(
+            room.room.description,
+          );
+          if (localRoomUUID == null) continue;
+
+          final existing = await _chatMetadataRepo.loadChat(
+            localRoomUUID,
+            serverAddress: targetServer,
+          );
+          final updatedAt = item.updatedAtUs > 0
+              ? DateTime.fromMicrosecondsSinceEpoch(
+                  item.updatedAtUs,
+                  isUtc: true,
+                ).toLocal()
+              : now;
+          final serverName = room.room.title.trim();
+          final existingName = (existing?.name ?? '').trim();
+          await _chatMetadataRepo.saveChat(ChatMetadata(
+            uuid: localRoomUUID,
+            name: existingName.isNotEmpty
+                ? existingName
+                : (serverName.isNotEmpty ? serverName : 'Chat'),
+            serverAddress: targetServer,
+            remoteRoomId: room.room.roomId,
+            avatarBytes: existing?.avatarBytes,
+            isDirectMessage: existing?.isDirectMessage ?? false,
+            createdAt: existing?.createdAt ?? updatedAt,
+            updatedAt: updatedAt.isAfter(existing?.updatedAt ?? DateTime(0))
+                ? updatedAt
+                : (existing?.updatedAt ?? updatedAt),
+            windowWidth: existing?.windowWidth,
+            windowHeight: existing?.windowHeight,
+          ));
+          synced++;
+        }
+        cursor = page.nextCursor;
+      } while (cursor != null && cursor.isNotEmpty);
+      if (synced > 0) {
+        _log.info('Synced {count} server rooms into local metadata',
+            parameters: {'count': synced});
+      }
+      _lastServerRoomSyncAt = DateTime.now();
+      return true;
+    } catch (e, st) {
+      _log.warning(
+        'Server room sync failed; keeping local cached rooms: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+      return false;
+    } finally {
+      await client.close();
+    }
+  }
+
+  String? _localRoomUUIDFromDescription(String? description) {
+    final raw = (description ?? '').trim().toLowerCase();
+    if (!raw.startsWith('sgtp:')) return null;
+    final clean = raw.substring(5).replaceAll('-', '');
+    if (clean.length != 32 || !RegExp(r'^[0-9a-f]{32}$').hasMatch(clean)) {
+      return null;
+    }
+    return clean;
   }
 
   // ── Room management ─────────────────────────────────────────────────────
@@ -323,7 +428,8 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       chatBloc.add(ChatUpdateContactAvatars(_contactAvatarsByPub));
     }
 
-    _chatSubs[hexUUID] = chatBloc.stream.listen((_) {
+    _chatSubs[_roomKey(hexUUID, config.serverAddr)] =
+        chatBloc.stream.listen((_) {
       add(const _RoomsRefresh());
     });
 
@@ -338,17 +444,27 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     ));
   }
 
-  Future<void> _onRemove(RoomsRemoveRoom event, Emitter<RoomsState> emit) async {
-    await _chatSubs[event.roomUUID]?.cancel();
-    _chatSubs.remove(event.roomUUID);
-    final room =
-        state.rooms.where((r) => r.roomUUID == event.roomUUID).firstOrNull;
+  Future<void> _onRemove(
+      RoomsRemoveRoom event, Emitter<RoomsState> emit) async {
+    final roomKey = _roomKey(event.roomUUID, event.serverAddress);
+    await _chatSubs[roomKey]?.cancel();
+    _chatSubs.remove(roomKey);
+    final room = state.rooms
+        .where((r) =>
+            r.roomUUID == event.roomUUID &&
+            _normalizeAddress(r.serverAddress) ==
+                _normalizeAddress(event.serverAddress))
+        .firstOrNull;
     if (room != null) {
       room.chatBloc.add(const ChatDisconnect());
       await room.chatBloc.close();
     }
     emit(state.copyWith(
-      rooms: state.rooms.where((r) => r.roomUUID != event.roomUUID).toList(),
+      rooms: state.rooms
+          .where((r) => !(r.roomUUID == event.roomUUID &&
+              _normalizeAddress(r.serverAddress) ==
+                  _normalizeAddress(event.serverAddress)))
+          .toList(),
       clearError: true,
     ));
   }

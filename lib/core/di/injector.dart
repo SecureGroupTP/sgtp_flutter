@@ -105,6 +105,7 @@ class AppInjector {
     final sharedUserDirClient = UserDirClient(
       rpcProvider: sgtpConnectionService.ensureConnected,
       label: 'shared-sgtp',
+      providerManagesConnection: true,
     );
     final homePersistenceService = HomePersistenceService(
       settingsManagementService: settingsManagementService,
@@ -115,8 +116,7 @@ class AppInjector {
     // The active chat session runtime is the dedicated chat_core/OpenMLS-backed
     // implementation. `SgtpClient` remains only as a deprecated compatibility
     // alias and is intentionally not wired here.
-    ISgtpSession sgtpSessionFactory(SgtpConfig config) =>
-        ServerV2ChatSession(
+    ISgtpSession sgtpSessionFactory(SgtpConfig config) => ServerV2ChatSession(
           config,
           connectionService: sgtpConnectionService,
         );

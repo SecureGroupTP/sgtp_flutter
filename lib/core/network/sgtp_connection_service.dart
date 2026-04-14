@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/connection_events.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
@@ -12,25 +13,33 @@ import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 
 class SgtpConnectionService {
+  final _log = AppLog('SgtpConnectionService');
   final _events = StreamController<SgtpConnectionStateChanged>.broadcast();
+  final _serverEvents = StreamController<Map<String, dynamic>>.broadcast();
 
   SgtpConfig? _config;
   SgtpRpcClient? _rpc;
   IProtocolTransport? _transport;
+  void Function()? _removeServerEventsCallback;
   Future<SgtpRpcClient>? _connectFuture;
-  SgtpConnectionStateChanged _state =
-      const SgtpConnectionStateChanged(status: SgtpConnectionStatus.disconnected);
+  SgtpConnectionStateChanged _state = const SgtpConnectionStateChanged(
+      status: SgtpConnectionStatus.disconnected);
 
   Stream<SgtpConnectionStateChanged> get events => _events.stream;
+  Stream<Map<String, dynamic>> get serverEvents => _serverEvents.stream;
   SgtpConnectionStatus get status => _state.status;
   String? get lastError => _state.errorMessage;
   bool get isConnected => _transport?.isConnected == true;
 
   Future<void> configure(SgtpConfig config) async {
     if (_config != null && _isSameConnection(_config!, config)) {
+      _log.debug('Reusing configured server connection for {server}',
+          parameters: {'server': config.serverAddr});
       _config = config;
       return;
     }
+    _log.info('Configuring server connection for {server}',
+        parameters: {'server': config.serverAddr});
     await disconnect();
     _config = config;
   }
@@ -42,6 +51,7 @@ class SgtpConnectionService {
 
   Future<SgtpRpcClient> ensureConnected() async {
     if (_rpc != null && _transport?.isConnected == true) {
+      _log.debug('Reusing active RPC transport');
       if (_state.status != SgtpConnectionStatus.connected) {
         _emit(const SgtpConnectionStateChanged(
           status: SgtpConnectionStatus.connected,
@@ -50,7 +60,10 @@ class SgtpConnectionService {
       return _rpc!;
     }
     final pending = _connectFuture;
-    if (pending != null) return pending;
+    if (pending != null) {
+      _log.debug('Reusing pending RPC connection attempt');
+      return pending;
+    }
     final future = _open();
     _connectFuture = future;
     try {
@@ -67,6 +80,8 @@ class SgtpConnectionService {
     final transport = _transport;
     _transport = null;
     _rpc = null;
+    _removeServerEventsCallback?.call();
+    _removeServerEventsCallback = null;
     if (transport != null) {
       try {
         await transport.close();
@@ -85,18 +100,34 @@ class SgtpConnectionService {
     _emit(const SgtpConnectionStateChanged(
       status: SgtpConnectionStatus.connecting,
     ));
+    IProtocolTransport? openedTransport;
     try {
       final parsed = _parseHostPortOrThrow(config.serverAddr);
       final endpoint = await _resolveEndpoint(config, parsed);
+      final family = SgtpTransportFamilyCodec.resolve(config.transport);
       final transport = _buildTransport(
         host: endpoint.host,
         port: endpoint.port,
-        family: SgtpTransportFamilyCodec.resolve(config.transport),
+        family: family,
         tls: config.useTls,
         fakeSni: config.fakeSni,
       );
+      _log.info(
+        'Opening shared SGTP transport {family}://{host}:{port} tls={tls}',
+        parameters: {
+          'family': family.name,
+          'host': endpoint.host,
+          'port': endpoint.port,
+          'tls': config.useTls,
+        },
+      );
       await transport.connect();
+      openedTransport = transport;
       final rpc = SgtpRpcClient(transport);
+      _removeServerEventsCallback?.call();
+      _removeServerEventsCallback = rpc.registerEventsCallback((event) {
+        _serverEvents.add(event);
+      });
       final authError = await rpc.authenticate(
         config.myPublicKey,
         config.identityKeyPair,
@@ -112,6 +143,14 @@ class SgtpConnectionService {
       ));
       return rpc;
     } catch (e) {
+      _removeServerEventsCallback?.call();
+      _removeServerEventsCallback = null;
+      final transport = _transport ?? openedTransport;
+      _transport = null;
+      _rpc = null;
+      try {
+        await transport?.close();
+      } catch (_) {}
       _emit(SgtpConnectionStateChanged(
         status: SgtpConnectionStatus.error,
         errorMessage: '$e',
@@ -175,11 +214,14 @@ class SgtpConnectionService {
       }
       final host = s.substring(1, end);
       final rest = s.substring(end + 1);
-      final port = rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null;
+      final port =
+          rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null;
       return (host: host, explicitPort: port);
     }
     final index = s.lastIndexOf(':');
-    if (index <= 0 || index == s.length - 1 || s.substring(0, index).contains(':')) {
+    if (index <= 0 ||
+        index == s.length - 1 ||
+        s.substring(0, index).contains(':')) {
       return (host: s, explicitPort: null);
     }
     return (

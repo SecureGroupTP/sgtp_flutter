@@ -124,3 +124,35 @@ class SubscribeToEventsResponse {
         subscribedAtUs: parseTimestampUs(m['subscribedAt']),
       );
 }
+
+// ── unsubscribeFromEvents ───────────────────────────────────────────────────
+
+class UnsubscribeFromEventsRequest extends RpcRequest {
+  final String subscriptionId;
+  final int requestedAtUs; // microseconds since epoch
+
+  const UnsubscribeFromEventsRequest({
+    required this.subscriptionId,
+    required this.requestedAtUs,
+  });
+
+  @override
+  String get method => 'unsubscribeFromEvents';
+
+  @override
+  Map<String, dynamic> toMap() => {
+        'subscriptionId': hexToBytes(subscriptionId.replaceAll('-', '')),
+        'requestedAt': requestedAtUs,
+      };
+}
+
+class UnsubscribeFromEventsResponse {
+  final int unsubscribedAtUs;
+
+  const UnsubscribeFromEventsResponse({required this.unsubscribedAtUs});
+
+  static UnsubscribeFromEventsResponse fromMap(Map<String, dynamic> m) =>
+      UnsubscribeFromEventsResponse(
+        unsubscribedAtUs: parseTimestampUs(m['unsubscribedAt']),
+      );
+}
