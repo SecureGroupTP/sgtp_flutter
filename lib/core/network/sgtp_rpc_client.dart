@@ -35,6 +35,11 @@ class SgtpRpcClient {
   final _eventCallbacks = <int, void Function(Map<String, dynamic> event)>{};
   int _nextEventCallbackId = 0;
 
+  // CBOR decoder must be stream-oriented because TCP/WebSocket chunking does not
+  // preserve packet boundaries.
+  final List<CborValue> _decodedValues = <CborValue>[];
+  late Sink<List<int>> _cborSink;
+
   SimpleKeyPairData? _keyPair;
   bool _authenticated = false;
 
@@ -44,6 +49,7 @@ class SgtpRpcClient {
   Future<void> _transportSendTail = Future<void>.value();
 
   SgtpRpcClient(IProtocolTransport transport) : _transport = transport {
+    _resetCborDecoder();
     transport.registerPacketCallback(_onPacket);
   }
 
@@ -231,7 +237,10 @@ class SgtpRpcClient {
 
   void _onPacket(Uint8List bytes) {
     try {
-      final decodedValues = _decodeCborSequence(bytes);
+      _cborSink.add(bytes);
+      if (_decodedValues.isEmpty) return;
+      final decodedValues = List<CborValue>.from(_decodedValues);
+      _decodedValues.clear();
       for (final decoded in decodedValues) {
         final packets = switch (decoded) {
           CborMap() => [decoded],
@@ -245,17 +254,15 @@ class SgtpRpcClient {
     } catch (e, st) {
       // Packet parse error — silently discard to not break other pending calls.
       // ignore: avoid_print
+      _resetCborDecoder();
       Zone.current.handleUncaughtError(e, st);
     }
   }
 
-  List<CborValue> _decodeCborSequence(Uint8List bytes) {
-    final values = <CborValue>[];
-    final sink =
-        const CborDecoder().startChunkedConversion(_CborValueCollector(values));
-    sink.add(bytes);
-    sink.close();
-    return values;
+  void _resetCborDecoder() {
+    _decodedValues.clear();
+    _cborSink = const CborDecoder()
+        .startChunkedConversion(_CborValueCollector(_decodedValues));
   }
 
   void _onResponsePacket(CborMap decoded, Uint8List rawBytes) {

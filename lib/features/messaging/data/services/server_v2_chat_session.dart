@@ -67,6 +67,13 @@ class _PendingMedia {
   }
 }
 
+class _PendingSelfAck {
+  final String localMessageId;
+  final int createdAtUs;
+  const _PendingSelfAck(
+      {required this.localMessageId, required this.createdAtUs});
+}
+
 class ServerV2ChatSession implements ISgtpSession {
   final SgtpConfig _config;
   final SgtpConnectionService _connectionService;
@@ -77,6 +84,10 @@ class ServerV2ChatSession implements ISgtpSession {
   final Set<String> _invitedPeerDevices = {};
   final ChatMetadataRepository? _metadataRepository;
   Set<String> _whitelist;
+  final Map<String, ChatMessage> _pendingOutgoingMessagesByLocalId = {};
+  final Map<String, _PendingSelfAck> _pendingSelfAcksByFingerprint = {};
+  final Map<String, String> _pendingSelfAckFingerprintByLocalId = {};
+  Timer? _pendingSelfAckCleanupTimer;
 
   MessengerMls? _mls;
   ServerV2MlsClient? _rpcChat;
@@ -181,6 +192,11 @@ class ServerV2ChatSession implements ISgtpSession {
     _remoteRoomBindRetryTimer?.cancel();
     _remoteRoomBindRetryTimer = null;
     _pendingRemoteRoomBind = null;
+    _pendingSelfAckCleanupTimer?.cancel();
+    _pendingSelfAckCleanupTimer = null;
+    _pendingSelfAcksByFingerprint.clear();
+    _pendingSelfAckFingerprintByLocalId.clear();
+    _pendingOutgoingMessagesByLocalId.clear();
     await _rpcEventSub?.cancel();
     _rpcEventSub = null;
     final rpcChat = _rpcChat;
@@ -195,6 +211,8 @@ class ServerV2ChatSession implements ISgtpSession {
   Future<void> close() async {
     _persistMlsStateTimer?.cancel();
     _persistMlsStateTimer = null;
+    _pendingSelfAckCleanupTimer?.cancel();
+    _pendingSelfAckCleanupTimer = null;
     await _persistMlsState();
     await disconnect();
     _mls?.close();
@@ -251,23 +269,40 @@ class ServerV2ChatSession implements ISgtpSession {
     _attachSenderAvatar(payload);
 
     final localId = uuidBytesToHex(generateUUIDv7());
+    final optimistic = ChatMessage(
+      id: localId,
+      senderUUID: myUUIDHex,
+      senderPublicKeyHex: myUUIDHex,
+      content: text,
+      receivedAt: DateTime.now(),
+      isFromHistory: false,
+      isFromMe: true,
+      isSending: true,
+      sendProgress: 0,
+      replyToId: replyToId,
+      replyToContent: replyToContent,
+      replyToSender: replyToSender,
+    );
+    _pendingOutgoingMessagesByLocalId[localId] = optimistic;
     _eventController.add(
       SgtpMessageReceived(
-        message: ChatMessage(
-          id: localId,
-          senderUUID: myUUIDHex,
-          senderPublicKeyHex: myUUIDHex,
-          content: text,
-          receivedAt: DateTime.now(),
-          isFromHistory: false,
-          isFromMe: true,
-          replyToId: replyToId,
-          replyToContent: replyToContent,
-          replyToSender: replyToSender,
-        ),
+        message: optimistic,
       ),
     );
-    await _sendPayload(payload);
+    try {
+      await _sendPayload(payload, localEchoId: localId);
+    } catch (_) {
+      // Don't error the whole chat; just stop showing "sending" for this
+      // message. A later reconnect may still deliver it.
+      _dropPendingSelfAckForLocalId(localId);
+      final failed = _pendingOutgoingMessagesByLocalId.remove(localId);
+      if (failed != null) {
+        _eventController.add(
+          SgtpMessageReceived(message: failed.copyWith(isSending: false)),
+        );
+      }
+      rethrow;
+    }
   }
 
   @override
@@ -629,7 +664,8 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _bootstrapDirectRoomAndMls() async {
     await _ensureRemoteRoomBound();
-    final roomId = (_remoteRoomId ?? '').isNotEmpty ? _remoteRoomId! : roomUUIDHex;
+    final roomId =
+        (_remoteRoomId ?? '').isNotEmpty ? _remoteRoomId! : roomUUIDHex;
     await _resolveDirectRoomPeerAndOwner(roomId);
     if (_directRoomNeedsBootstrap) {
       await _ensureMlsGroupCreated();
@@ -872,7 +908,10 @@ class ServerV2ChatSession implements ISgtpSession {
     return sentWelcome;
   }
 
-  Future<void> _sendPayload(Map<String, dynamic> payload) async {
+  Future<void> _sendPayload(
+    Map<String, dynamic> payload, {
+    String? localEchoId,
+  }) async {
     final client = _rpcChat;
     final mls = _mls;
     final remoteRoomId = _remoteRoomId;
@@ -897,6 +936,9 @@ class ServerV2ChatSession implements ISgtpSession {
       'plaintext': plaintext,
       'aad': _roomUUID,
     }));
+    if (localEchoId != null && localEchoId.isNotEmpty) {
+      _trackPendingSelfAck(localEchoId, encrypted);
+    }
     await client.sendMessage(
       roomId: remoteRoomId,
       clientMsgId: generateUUIDv7(),
@@ -1108,6 +1150,13 @@ class ServerV2ChatSession implements ISgtpSession {
   Future<void> _handleIncomingMessage(
       MlsMessageReceivedNetworkEvent event) async {
     final senderHex = _hex(event.senderPublicKey);
+    // Server echoes our own MLS application messages back to us. chat_core
+    // rejects decrypting self-sent messages with "Cannot decrypt own messages."
+    // We use the echo as a send-ack and never attempt to decrypt it.
+    if (senderHex.isNotEmpty && senderHex == myUUIDHex) {
+      _handleSelfEchoAck(event);
+      return;
+    }
     _peerPublicKeys[senderHex] = senderHex;
     _ensurePeer(senderHex);
     for (final item in event.body) {
@@ -1125,6 +1174,40 @@ class ServerV2ChatSession implements ISgtpSession {
         messageId: event.messageId,
         senderUUID: senderHex,
         recvAt: DateTime.now(),
+      );
+    }
+  }
+
+  void _handleSelfEchoAck(MlsMessageReceivedNetworkEvent event) {
+    var matched = false;
+    for (final part in event.body) {
+      final fingerprint = _ciphertextFingerprint(part);
+      final pending = _pendingSelfAcksByFingerprint.remove(fingerprint);
+      if (pending == null) continue;
+      matched = true;
+      _pendingSelfAckFingerprintByLocalId.remove(pending.localMessageId);
+      final msg =
+          _pendingOutgoingMessagesByLocalId.remove(pending.localMessageId);
+      if (msg != null) {
+        _eventController.add(
+          SgtpMessageReceived(
+            message: msg.copyWith(
+              isSending: false,
+              sendProgress: 1,
+            ),
+          ),
+        );
+      }
+    }
+    if (matched) {
+      _log.debug(
+        'Outgoing message acked via self-echo message={messageId}',
+        parameters: {'messageId': event.messageId},
+      );
+    } else {
+      _log.debug(
+        'Self-echo did not match any pending outgoing message message={messageId}',
+        parameters: {'messageId': event.messageId},
       );
     }
   }
@@ -1154,6 +1237,13 @@ class ServerV2ChatSession implements ISgtpSession {
       }
       await _maybeMergePendingCommit();
     } catch (e) {
+      if (_isCannotDecryptOwnMessagesError(e)) {
+        _log.debug(
+          'MLS incoming ignored (self message) for room {roomId}: {error}',
+          parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
+        );
+        return null;
+      }
       if (_isBadEpochError(e)) {
         _log.warning(
           'MLS incoming failed due to bad epoch for room {roomId}: {error}',
@@ -1179,6 +1269,64 @@ class ServerV2ChatSession implements ISgtpSession {
         (lower.contains('epoch') && lower.contains('wrong')) ||
         (lower.contains('epoch') && lower.contains('mismatch'));
   }
+
+  bool _isCannotDecryptOwnMessagesError(Object error) {
+    final msg = error is MlsException ? error.message : error.toString();
+    return msg.toLowerCase().contains('cannot decrypt own messages');
+  }
+
+  void _trackPendingSelfAck(String localMessageId, Uint8List ciphertext) {
+    // We use the echoed ciphertext to confirm the message was accepted and
+    // broadcast by the server (same bytes come back to the sender).
+    final fingerprint = _ciphertextFingerprint(ciphertext);
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    _pendingSelfAcksByFingerprint[fingerprint] =
+        _PendingSelfAck(localMessageId: localMessageId, createdAtUs: nowUs);
+    _pendingSelfAckFingerprintByLocalId[localMessageId] = fingerprint;
+    _schedulePendingSelfAckCleanup();
+  }
+
+  void _dropPendingSelfAckForLocalId(String localMessageId) {
+    final fingerprint =
+        _pendingSelfAckFingerprintByLocalId.remove(localMessageId);
+    if (fingerprint != null) {
+      _pendingSelfAcksByFingerprint.remove(fingerprint);
+    }
+  }
+
+  void _schedulePendingSelfAckCleanup() {
+    _pendingSelfAckCleanupTimer ??=
+        Timer.periodic(const Duration(seconds: 10), (_) {
+      if (_pendingSelfAcksByFingerprint.isEmpty) {
+        _pendingSelfAckCleanupTimer?.cancel();
+        _pendingSelfAckCleanupTimer = null;
+        return;
+      }
+      final nowUs = DateTime.now().microsecondsSinceEpoch;
+      const ttlUs = 60 * 1000 * 1000; // 60s
+      final expired = <String>[];
+      for (final e in _pendingSelfAcksByFingerprint.entries) {
+        if (nowUs - e.value.createdAtUs > ttlUs) expired.add(e.key);
+      }
+      for (final key in expired) {
+        final pending = _pendingSelfAcksByFingerprint.remove(key);
+        if (pending != null) {
+          _pendingSelfAckFingerprintByLocalId.remove(pending.localMessageId);
+          // Mark as no longer "sending" so the UI doesn't spin forever.
+          final msg =
+              _pendingOutgoingMessagesByLocalId.remove(pending.localMessageId);
+          if (msg != null) {
+            _eventController.add(
+              SgtpMessageReceived(message: msg.copyWith(isSending: false)),
+            );
+          }
+        }
+      }
+    });
+  }
+
+  String _ciphertextFingerprint(Uint8List ciphertext) =>
+      base64.encode(ciphertext);
 
   Future<void> _maybeMergePendingCommit() async {
     final mls = _mls;
@@ -1533,9 +1681,7 @@ class ServerV2ChatSession implements ISgtpSession {
     if (!_isMaster && !_isDirectRoom) return;
     _inviteRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_connected) return;
-      if (_isDirectRoom &&
-          !_directRoomNeedsBootstrap &&
-          !_mlsGroupReady) {
+      if (_isDirectRoom && !_directRoomNeedsBootstrap && !_mlsGroupReady) {
         try {
           final joined = await _joinFromStoredWelcome(reportMissing: false);
           if (joined) {
@@ -1575,8 +1721,8 @@ class ServerV2ChatSession implements ISgtpSession {
   bool _isMissingKeyPackageForWelcomeError(Object error) {
     if (error is! MlsException) return false;
     return error.message.toLowerCase().contains(
-      'no matching key package was found in the key store',
-    );
+          'no matching key package was found in the key store',
+        );
   }
 
   bool _isNotFoundRpcError(Object error) {
