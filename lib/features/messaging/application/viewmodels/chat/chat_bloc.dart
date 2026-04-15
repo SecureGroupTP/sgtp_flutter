@@ -183,6 +183,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       );
       return;
     }
+    final client = _client;
+    // Prefer in-place reconnect to preserve MLS in-memory state. Recreating the
+    // session forces a fresh welcome fetch, which may be unavailable for direct
+    // rooms.
+    if (client != null) {
+      await _doReconnectExisting(client, emit);
+      return;
+    }
     final last = _lastConnectEvent;
     if (last == null) return;
     await _doConnect(last, emit);
@@ -314,6 +322,42 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       ));
     }
 
+    try {
+      await client.connect();
+    } catch (e) {
+      if (!isClosed) {
+        emit(state.copyWith(
+          status: ChatStatus.error,
+          errorMessage: 'Connection failed: $e',
+        ));
+      }
+    }
+  }
+
+  Future<void> _doReconnectExisting(
+    ISgtpSession client,
+    Emitter<ChatState> emit,
+  ) async {
+    // Cancel & re-subscribe so we can stamp a new sessionId and ignore any
+    // stale queued events from a previous connection attempt.
+    final oldSub = _eventSub;
+    _eventSub = null;
+    await oldSub?.cancel();
+
+    final sessionId = ++_sessionId;
+    _eventSub = client.events.listen(
+      (sgtpEvent) =>
+          add(ChatInternalSgtpEvent(sgtpEvent, sessionId: sessionId)),
+      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()),
+          sessionId: sessionId)),
+    );
+
+    if (!isClosed) {
+      emit(state.copyWith(status: ChatStatus.connecting, clearError: true));
+    }
+    try {
+      await client.disconnect();
+    } catch (_) {}
     try {
       await client.connect();
     } catch (e) {

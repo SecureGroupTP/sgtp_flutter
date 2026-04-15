@@ -23,12 +23,14 @@ class ChatRoomListItem {
 
 class ChatRoomData {
   final String roomId;
+  final Uint8List ownerPublicKey;
   final String title;
   final String? description;
   final int visibility;
 
   const ChatRoomData({
     required this.roomId,
+    required this.ownerPublicKey,
     required this.title,
     required this.description,
     required this.visibility,
@@ -36,6 +38,7 @@ class ChatRoomData {
 
   static ChatRoomData fromMap(Map<String, dynamic> m) => ChatRoomData(
         roomId: _uuidToString(m['roomId']),
+        ownerPublicKey: _decodeBytes(m['ownerPublicKey']),
         title: m['title'] as String? ?? '',
         description: m['description'] as String?,
         visibility: (m['visibility'] as num?)?.toInt() ?? 0,

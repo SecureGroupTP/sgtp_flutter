@@ -355,7 +355,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
             serverAddress: targetServer,
             remoteRoomId: room.room.roomId,
             avatarBytes: existing?.avatarBytes,
-            isDirectMessage: existing?.isDirectMessage ?? false,
+            isDirectMessage: false,
             createdAt: existing?.createdAt ?? updatedAt,
             updatedAt: updatedAt.isAfter(existing?.updatedAt ?? DateTime(0))
                 ? updatedAt

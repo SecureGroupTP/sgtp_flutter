@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:convert' show base64, json, utf8;
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:path_provider/path_provider.dart';
 import 'package:sgtp_chat_core/sgtp_chat_core.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
+import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
@@ -88,8 +92,15 @@ class ServerV2ChatSession implements ISgtpSession {
   bool _readyEmitted = false;
   bool _isDirectRoom = false;
   bool _directRoomNeedsBootstrap = false;
+  bool _directRoomInviteComplete = false;
+  bool _keyPackagesUploaded = false;
   String? _remoteRoomId;
+  String? _directRoomOwnerPublicKeyHex;
+  Uint8List? _directPeerPublicKeyOverride;
+  String? _directPeerPublicKeyHexOverride;
   Uint8List? _userAvatarBytes;
+  Future<void>? _directWelcomeRecoveryInFlight;
+  Timer? _persistMlsStateTimer;
   late final Uint8List _roomUUID;
   late final String _deviceId;
 
@@ -134,6 +145,11 @@ class ServerV2ChatSession implements ISgtpSession {
 
   @override
   Future<void> connect() async {
+    if (_eventController.isClosed) {
+      _log.warning('connect called after session close for room {roomId}',
+          parameters: {'roomId': roomUUIDHex});
+      return;
+    }
     if (_connecting || _connected) return;
     _connecting = true;
     _eventController.add(SgtpConnecting());
@@ -142,6 +158,7 @@ class ServerV2ChatSession implements ISgtpSession {
       await _initMls();
       await _loadRemoteRoomId();
       await _connectRpc();
+      await _ensureKeyPackagesUploaded();
       _seedKnownPeerPublicKeys();
       await _bootstrapRoomAndMls();
       _scheduleInviteRetry();
@@ -169,11 +186,16 @@ class ServerV2ChatSession implements ISgtpSession {
     final rpcChat = _rpcChat;
     _rpcChat = null;
     await rpcChat?.close();
-    _eventController.add(SgtpDisconnected());
+    if (!_eventController.isClosed) {
+      _eventController.add(SgtpDisconnected());
+    }
   }
 
   @override
   Future<void> close() async {
+    _persistMlsStateTimer?.cancel();
+    _persistMlsStateTimer = null;
+    await _persistMlsState();
     await disconnect();
     _mls?.close();
     _mls = null;
@@ -414,26 +436,169 @@ class ServerV2ChatSession implements ISgtpSession {
   Future<void> _initMls() async {
     if (_mlsClientReady) return;
     final privateKey = await _config.identityKeyPair.extractPrivateKeyBytes();
-    final userId =
-        (_config.accountId ?? _config.nodeId ?? _hex(_config.myPublicKey))
-            .trim();
+    // MLS client_id.user_id MUST be stable & match what we use for invites.
+    // Server-side key packages are indexed by the authenticated public key, and
+    // inviteSync below uses peer public key hex as user_id. Using accountId
+    // here breaks welcome processing with:
+    // "No matching key package was found in the key store."
+    final userId = _hex(_config.myPublicKey).trim();
     final clientId = {
       'user_id': userId.isEmpty ? _hex(_config.myPublicKey) : userId,
       'device_id': _deviceId,
     };
     final mls = MessengerMls.create();
-    mls.createClientSync({
-      'client_id': clientId,
-      'device_signature_private_key': privateKey,
-      'binding': {
+    var restored = false;
+    try {
+      final snapshot = await _loadPersistedMlsState();
+      if (snapshot != null && snapshot.isNotEmpty) {
+        mls.restoreClientSync(snapshot);
+        // Validate that restored snapshot matches our expected client_id.
+        final restoredId = _map(mls.getClientIdSync());
+        final restoredUser = (restoredId['user_id'] as String?)?.trim() ?? '';
+        final restoredDevice =
+            (restoredId['device_id'] as String?)?.trim() ?? '';
+        if (restoredUser == clientId['user_id'] &&
+            restoredDevice == clientId['device_id']) {
+          restored = true;
+          _log.info(
+            'Restored MLS client state from disk ({bytes}B) for device {deviceId}',
+            parameters: {'bytes': snapshot.length, 'deviceId': _deviceId},
+          );
+        } else {
+          _log.warning(
+            'Ignoring MLS snapshot with mismatched client_id restoredUser={restoredUser} restoredDevice={restoredDevice} expectedUser={expectedUser} expectedDevice={expectedDevice}',
+            parameters: {
+              'restoredUser': restoredUser,
+              'restoredDevice': restoredDevice,
+              'expectedUser': clientId['user_id'],
+              'expectedDevice': clientId['device_id'],
+            },
+          );
+        }
+      }
+    } catch (e, st) {
+      _log.warning(
+        'MLS restoreClient failed; falling back to createClient: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
+    if (!restored) {
+      mls.createClientSync({
         'client_id': clientId,
-        'serialized_binding': _config.myPublicKey,
-        'account_signature': <int>[],
-      },
-      'identity_data': _config.myPublicKey,
-    });
+        'device_signature_private_key': privateKey,
+        'binding': {
+          'client_id': clientId,
+          'serialized_binding': _config.myPublicKey,
+          'account_signature': <int>[],
+        },
+        'identity_data': _config.myPublicKey,
+      });
+    }
     _mls = mls;
     _mlsClientReady = true;
+
+    // If the group already exists locally (restored client), mark it ready so
+    // we don't depend on server-side welcome retention to re-join.
+    try {
+      mls.getGroupStateSync(_mlsGroupIdJson);
+      _mlsGroupCreated = true;
+      _mlsGroupReady = true;
+    } catch (_) {}
+  }
+
+  Future<Uint8List?> _loadPersistedMlsState() async {
+    if (kIsWeb) return null;
+    try {
+      final file = await _getMlsStateFile();
+      if (file == null) return null;
+      if (!await file.exists()) return null;
+      final bytes = await file.readAsBytes();
+      return bytes.isEmpty ? null : Uint8List.fromList(bytes);
+    } catch (e) {
+      _log.warning('Failed to load persisted MLS state: {error}',
+          parameters: {'error': e});
+      return null;
+    }
+  }
+
+  Future<void> _persistMlsState() async {
+    if (kIsWeb) return;
+    final mls = _mls;
+    if (mls == null) return;
+    try {
+      final file = await _getMlsStateFile();
+      if (file == null) return;
+      final bytes = mls.exportClientStateSync();
+      if (bytes.isEmpty) return;
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes, flush: true);
+    } catch (e, st) {
+      _log.warning(
+        'Failed to persist MLS state: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
+  void _schedulePersistMlsState() {
+    if (kIsWeb) return;
+    _persistMlsStateTimer?.cancel();
+    _persistMlsStateTimer = Timer(const Duration(milliseconds: 750), () {
+      unawaited(_persistMlsState());
+    });
+  }
+
+  Future<File?> _getMlsStateFile() async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final accountId = (_config.accountId ?? '').trim();
+    final base = accountId.isEmpty
+        ? Directory('${docsDir.path}/sgtp_mls')
+        : Directory('${docsDir.path}/sgtp_accounts/$accountId/sgtp_mls');
+    final key = _hex(_config.myPublicKey);
+    return File('${base.path}/client_state_${key.substring(0, 16)}.bin');
+  }
+
+  Future<void> _ensureKeyPackagesUploaded() async {
+    if (_keyPackagesUploaded) return;
+    final client = _rpcChat;
+    final mls = _mls;
+    if (client == null || mls == null) return;
+
+    final raw = _map(mls.createKeyPackagesSync(8));
+    final generated = _asObjectList(raw['keypackages']);
+    if (generated.isEmpty) {
+      throw StateError('chat_core returned no key packages');
+    }
+
+    final expiresAt = DateTime.now().toUtc().add(const Duration(days: 30));
+    await client.uploadKeyPackages(
+      generated
+          .map((item) => KeyPackageDto(
+                keyPackageBytes: _asBytes(item),
+                isLastResort: false,
+                expiresAtUs: expiresAt.microsecondsSinceEpoch,
+              ))
+          .toList(),
+    );
+    try {
+      mls.markKeyPackagesUploadedSync(raw);
+    } catch (e, st) {
+      _log.warning(
+        'markKeyPackagesUploaded failed after server upload: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
+    _keyPackagesUploaded = true;
+    _log.info(
+      'Uploaded MLS key packages for active chat session room {roomId}',
+      parameters: {'roomId': roomUUIDHex},
+    );
   }
 
   Future<void> _bootstrapRoomAndMls() async {
@@ -464,28 +629,32 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _bootstrapDirectRoomAndMls() async {
     await _ensureRemoteRoomBound();
+    final roomId = (_remoteRoomId ?? '').isNotEmpty ? _remoteRoomId! : roomUUIDHex;
+    await _resolveDirectRoomPeerAndOwner(roomId);
     if (_directRoomNeedsBootstrap) {
       await _ensureMlsGroupCreated();
       await _publishRoomState();
-      await _inviteKnownPeers();
-      _directRoomNeedsBootstrap = false;
+      final invited = await _inviteKnownPeers();
+      if (invited) {
+        _directRoomNeedsBootstrap = false;
+      }
       return;
     }
-    await _joinFromStoredWelcome();
+    await _joinFromStoredWelcome(reportMissing: false);
   }
 
   Future<void> _ensureRemoteRoomBound() async {
-    if ((_remoteRoomId ?? '').isNotEmpty) return;
     final client = _rpcChat;
     if (client == null) return;
 
     if (_isDirectRoom) {
       final targetUserPublicKey = _directPeerPublicKey;
       if (targetUserPublicKey == null || targetUserPublicKey.isEmpty) {
+        if ((_remoteRoomId ?? '').isNotEmpty) return;
         throw StateError('Direct room peer public key is missing');
       }
-      final created =
-          await client.createDirectRoom(targetUserPublicKey: targetUserPublicKey);
+      final created = await client.createDirectRoom(
+          targetUserPublicKey: targetUserPublicKey);
       final roomId = _normalizeRoomId(created.roomId);
       if (roomId.isEmpty) {
         throw StateError('Server returned an empty direct room id');
@@ -495,11 +664,18 @@ class ServerV2ChatSession implements ISgtpSession {
           'Direct room id mismatch: local=$roomUUIDHex server=$roomId',
         );
       }
+      try {
+        final room = await client.getChatRoom(roomId);
+        _directRoomOwnerPublicKeyHex = _hex(room.room.ownerPublicKey);
+      } catch (_) {}
+      await _resolveDirectRoomPeerAndOwner(roomId);
       await _saveRemoteRoomId(roomId);
       _directRoomNeedsBootstrap =
           _directRoomNeedsBootstrap || !created.alreadyExisted;
       return;
     }
+
+    if ((_remoteRoomId ?? '').isNotEmpty) return;
 
     if (_isMaster) {
       final created = await client.createChatRoom(
@@ -565,10 +741,12 @@ class ServerV2ChatSession implements ISgtpSession {
       mls.createGroupSync(_mlsGroupIdJson);
       _mlsGroupCreated = true;
       _mlsGroupReady = true;
+      _schedulePersistMlsState();
     } on MlsException catch (e) {
       if (!e.message.toLowerCase().contains('exists')) rethrow;
       _mlsGroupCreated = true;
       _mlsGroupReady = true;
+      _schedulePersistMlsState();
     }
   }
 
@@ -617,7 +795,7 @@ class ServerV2ChatSession implements ISgtpSession {
         message.contains('chat_room_states_room_id_epoch_key');
   }
 
-  Future<void> _inviteKnownPeers() async {
+  Future<bool> _inviteKnownPeers() async {
     final client = _rpcChat;
     final mls = _mls;
     final remoteRoomId = _remoteRoomId;
@@ -625,20 +803,28 @@ class ServerV2ChatSession implements ISgtpSession {
         client == null ||
         mls == null ||
         remoteRoomId == null) {
-      return;
+      return false;
     }
     final peerHexes = _isDirectRoom
-        ? (_config.directPeerPublicKeyHex == null
-            ? const <String>[]
-            : <String>[_config.directPeerPublicKeyHex!.trim().toLowerCase()])
+        ? (_directPeerPublicKeyHexEffective.length == 64
+            ? <String>[_directPeerPublicKeyHexEffective]
+            : const <String>[])
         : _whitelist.where((item) => item != myUUIDHex).toList();
     if (peerHexes.isEmpty) {
       _emitReadyIfNeeded(force: true);
-      return;
+      return false;
     }
     final response = await client.fetchKeyPackages(
       peerHexes.map(hexToBytes).toList(),
     );
+    if (_isDirectRoom && response.items.isEmpty) {
+      _log.info(
+        'Direct-room peer has no MLS key packages yet for room {roomId}',
+        parameters: {'roomId': remoteRoomId},
+      );
+      return false;
+    }
+    var sentWelcome = false;
     for (final item in response.items) {
       final peerHex = _hex(item.userPublicKey);
       final keyPackageFingerprint = base64.encode(item.keyPackageBytes);
@@ -665,6 +851,7 @@ class ServerV2ChatSession implements ISgtpSession {
           targetUserPublicKey: item.userPublicKey,
           welcomeBytes: welcome,
         );
+        sentWelcome = true;
       }
       if (!_isDirectRoom) {
         await client.sendChatInvitation(
@@ -678,7 +865,11 @@ class ServerV2ChatSession implements ISgtpSession {
       await _publishRoomState();
       _invitedPeerDevices.add(peerDeviceKey);
     }
+    if (_isDirectRoom && sentWelcome) {
+      _directRoomInviteComplete = true;
+    }
     _emitReadyIfNeeded(force: _mlsGroupReady);
+    return sentWelcome;
   }
 
   Future<void> _sendPayload(Map<String, dynamic> payload) async {
@@ -693,6 +884,11 @@ class ServerV2ChatSession implements ISgtpSession {
     }
     if (!_mlsGroupReady) {
       throw StateError('MLS group is not ready yet');
+    }
+    if (_isDirectRoom &&
+        _directRoomNeedsBootstrap &&
+        !_directRoomInviteComplete) {
+      throw StateError('Direct room MLS invite is not ready yet');
     }
 
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
@@ -806,6 +1002,8 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _handleCommit(Uint8List commitBytes) async {
     await _handleGroupMessage(commitBytes);
+    await _maybeMergePendingCommit();
+    _schedulePersistMlsState();
   }
 
   Future<void> _handleWelcome(Uint8List welcomeBytes) async {
@@ -818,8 +1016,36 @@ class ServerV2ChatSession implements ISgtpSession {
       _remoteRoomBindRetryTimer = null;
       _log.info('Joined MLS group from welcome for room {roomId}',
           parameters: {'roomId': _remoteRoomId ?? roomUUIDHex});
+      _schedulePersistMlsState();
       _emitReadyIfNeeded(force: true);
     } catch (e, st) {
+      if (_isGroupAlreadyExistsError(e)) {
+        _mlsGroupReady = true;
+        _directRoomNeedsBootstrap = false;
+        _directRoomInviteComplete = true;
+        _log.info(
+          'Ignoring duplicate MLS welcome for room {roomId}; group already exists locally',
+          parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
+        );
+        _schedulePersistMlsState();
+        _emitReadyIfNeeded(force: true);
+        return;
+      }
+      if (_isMissingKeyPackageForWelcomeError(e) && _isDirectRoom) {
+        if (_shouldRecoverDirectWelcomeAsOwner) {
+          _log.info(
+            'Direct-room welcome is stale for room {roomId}; reissuing fresh welcome as recovery owner',
+            parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
+          );
+          _ensureDirectWelcomeRecovery();
+        } else {
+          _log.info(
+            'Direct-room welcome is stale for room {roomId}; waiting for peer to refresh welcome',
+            parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
+          );
+        }
+        return;
+      }
       _log.warning(
         'MLS welcome failed for room {roomId}: {error}',
         parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
@@ -833,15 +1059,18 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  Future<void> _joinFromStoredWelcome() async {
-    if (_mlsGroupReady) return;
+  Future<bool> _joinFromStoredWelcome({bool reportMissing = true}) async {
+    if (_mlsGroupReady) return true;
     final client = _rpcChat;
     final remoteRoomId = _remoteRoomId;
-    if (client == null || remoteRoomId == null || remoteRoomId.isEmpty) return;
+    if (client == null || remoteRoomId == null || remoteRoomId.isEmpty) {
+      return false;
+    }
     try {
       final welcome = await client.fetchWelcome(roomId: remoteRoomId);
-      if (welcome.welcomeBytes.isEmpty) return;
+      if (welcome.welcomeBytes.isEmpty) return false;
       await _handleWelcome(welcome.welcomeBytes);
+      return _mlsGroupReady;
     } catch (e, st) {
       _log.warning(
         'fetchWelcome failed for room {roomId}: {error}',
@@ -849,12 +1078,30 @@ class ServerV2ChatSession implements ISgtpSession {
         error: e,
         stackTrace: st,
       );
-      _eventController.add(
-        SgtpError(
-          error:
-              'MLS welcome is missing for this room. Ask the other participant to reconnect or recreate the chat.',
-        ),
-      );
+      if (_isDirectRoom && _isNotFoundRpcError(e)) {
+        if (_shouldRecoverDirectWelcomeAsOwner) {
+          _log.info(
+            'Stored direct-room welcome is missing for room {roomId}; reissuing fresh welcome as recovery owner',
+            parameters: {'roomId': remoteRoomId},
+          );
+          _ensureDirectWelcomeRecovery();
+        } else {
+          _log.info(
+            'Stored direct-room welcome is missing for room {roomId}; waiting for peer to refresh welcome',
+            parameters: {'roomId': remoteRoomId},
+          );
+        }
+        return false;
+      }
+      if (reportMissing) {
+        _eventController.add(
+          SgtpError(
+            error:
+                'MLS welcome is missing for this room. Ask the other participant to reconnect or recreate the chat.',
+          ),
+        );
+      }
+      return false;
     }
   }
 
@@ -902,13 +1149,54 @@ class ServerV2ChatSession implements ISgtpSession {
             kind == 'MemberAdded') {
           _mlsGroupReady = true;
           _emitReadyIfNeeded(force: true);
+          _schedulePersistMlsState();
         }
       }
+      await _maybeMergePendingCommit();
     } catch (e) {
+      if (_isBadEpochError(e)) {
+        _log.warning(
+          'MLS incoming failed due to bad epoch for room {roomId}: {error}',
+          parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
+        );
+        // Avoid destructive local state resets: for direct rooms the welcome may
+        // be ephemeral server-side. Dropping local group state can trap the
+        // client in a permanent "fetchWelcome not_found" loop.
+        if (_isDirectRoom && _shouldRecoverDirectWelcomeAsOwner) {
+          _ensureDirectWelcomeRecovery();
+        }
+        return null;
+      }
       _eventController.add(SgtpError(error: 'MLS incoming failed: $e'));
     }
     return null;
   }
+
+  bool _isBadEpochError(Object error) {
+    final msg = error is MlsException ? error.message : error.toString();
+    final lower = msg.toLowerCase();
+    return lower.contains('bad epoch') ||
+        (lower.contains('epoch') && lower.contains('wrong')) ||
+        (lower.contains('epoch') && lower.contains('mismatch'));
+  }
+
+  Future<void> _maybeMergePendingCommit() async {
+    final mls = _mls;
+    if (mls == null) return;
+    try {
+      final has = mls.hasPendingCommitSync(_mlsGroupIdJson);
+      if (has is bool && has) {
+        try {
+          mls.mergePendingCommitSync(_mlsGroupIdJson);
+          _schedulePersistMlsState();
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  // NOTE: We intentionally do not attempt automatic epoch resync by dropping
+  // local group state. Without durable server-side rejoin material, that would
+  // brick direct rooms into permanent "fetchWelcome not_found" loops.
 
   Future<void> _emitDecodedPayload({
     required Uint8List payload,
@@ -1204,7 +1492,8 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   Future<void> _saveRemoteRoomId(String roomId) async {
-    _remoteRoomId = roomId;
+    final normalized = _normalizeRoomId(roomId);
+    _remoteRoomId = normalized;
     final repo = _metadataRepository;
     if (repo == null) return;
     final existing = await repo.loadChat(
@@ -1217,17 +1506,22 @@ class ServerV2ChatSession implements ISgtpSession {
               uuid: roomUUIDHex,
               name: _config.chatName,
               serverAddress: _config.serverAddr,
-              remoteRoomId: roomId,
+              remoteRoomId: normalized,
               isDirectMessage: _isDirectRoom,
               createdAt: now,
               updatedAt: now,
             ))
-        .copyWith(remoteRoomId: roomId, updatedAt: now);
+        .copyWith(remoteRoomId: normalized, updatedAt: now);
     await repo.saveChat(metadata);
   }
 
   void _emitReadyIfNeeded({required bool force}) {
     if (_readyEmitted || !force) return;
+    if (_isDirectRoom &&
+        _directRoomNeedsBootstrap &&
+        !_directRoomInviteComplete) {
+      return;
+    }
     _readyEmitted = true;
     _eventController.add(
       SgtpReady(isMaster: _isMaster, roomUUIDHex: roomUUIDHex),
@@ -1236,15 +1530,110 @@ class ServerV2ChatSession implements ISgtpSession {
 
   void _scheduleInviteRetry() {
     _inviteRetryTimer?.cancel();
-    if (!_isMaster || _isDirectRoom) return;
+    if (!_isMaster && !_isDirectRoom) return;
     _inviteRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_connected) return;
+      if (_isDirectRoom &&
+          !_directRoomNeedsBootstrap &&
+          !_mlsGroupReady) {
+        try {
+          final joined = await _joinFromStoredWelcome(reportMissing: false);
+          if (joined) {
+            _inviteRetryTimer?.cancel();
+            _inviteRetryTimer = null;
+          }
+        } catch (e) {
+          _log.warning(
+            'direct welcome retry failed: {error}',
+            parameters: {'error': e},
+          );
+        }
+        return;
+      }
+      if (_isDirectRoom &&
+          (!_directRoomNeedsBootstrap || _directRoomInviteComplete)) {
+        _inviteRetryTimer?.cancel();
+        _inviteRetryTimer = null;
+        return;
+      }
       try {
-        await _inviteKnownPeers();
+        final invited = await _inviteKnownPeers();
+        if (_isDirectRoom && invited) {
+          _directRoomNeedsBootstrap = false;
+        }
       } catch (e) {
         _log.warning('invite retry failed: {error}', parameters: {'error': e});
       }
     });
+  }
+
+  bool _isGroupAlreadyExistsError(Object error) {
+    if (error is! MlsException) return false;
+    return error.message.toLowerCase().contains('already exists');
+  }
+
+  bool _isMissingKeyPackageForWelcomeError(Object error) {
+    if (error is! MlsException) return false;
+    return error.message.toLowerCase().contains(
+      'no matching key package was found in the key store',
+    );
+  }
+
+  bool _isNotFoundRpcError(Object error) {
+    if (error is! StateError) return false;
+    return error.message.toString().contains('not_found');
+  }
+
+  bool get _shouldRecoverDirectWelcomeAsOwner {
+    final ownerHex = (_directRoomOwnerPublicKeyHex ?? '').trim().toLowerCase();
+    if (ownerHex.length == 64) {
+      return ownerHex == myUUIDHex;
+    }
+    final peerHex = (_config.directPeerPublicKeyHex ?? '').trim().toLowerCase();
+    if (peerHex.length != 64) return false;
+    return myUUIDHex.compareTo(peerHex) < 0;
+  }
+
+  Future<void> _recoverDirectWelcome() async {
+    if (!_isDirectRoom || !_shouldRecoverDirectWelcomeAsOwner) {
+      return;
+    }
+    try {
+      _directRoomNeedsBootstrap = true;
+      _directRoomInviteComplete = false;
+      await _ensureRemoteRoomBound();
+      await _ensureMlsGroupCreated();
+      await _publishRoomState();
+      final invited = await _inviteKnownPeers();
+      if (invited) {
+        _directRoomNeedsBootstrap = false;
+      }
+    } catch (e, st) {
+      _log.warning(
+        'Direct-room welcome recovery failed for room {roomId}: {error}',
+        parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
+        error: e,
+        stackTrace: st,
+      );
+      _eventController.add(SgtpError(
+        error:
+            'Direct chat recovery failed: $e. Ask the other participant to reopen the chat.',
+      ));
+    }
+  }
+
+  void _ensureDirectWelcomeRecovery() {
+    final inFlight = _directWelcomeRecoveryInFlight;
+    if (inFlight != null) {
+      return;
+    }
+    final future = _recoverDirectWelcome();
+    _directWelcomeRecoveryInFlight = future;
+    unawaited(future.whenComplete(() {
+      if (identical(_directWelcomeRecoveryInFlight, future)) {
+        _directWelcomeRecoveryInFlight = null;
+      }
+    }));
   }
 
   void _scheduleRemoteRoomBind() {
@@ -1333,16 +1722,34 @@ class ServerV2ChatSession implements ISgtpSession {
         .toSet();
   }
 
-  bool _ownsRemoteRoom(String roomId) =>
-      roomId.isNotEmpty && roomId == (_remoteRoomId ?? '');
+  bool _ownsRemoteRoom(String roomId) {
+    final local = _normalizeRoomId(_remoteRoomId ?? '');
+    final incoming = _normalizeRoomId(roomId);
+    final ok = incoming.isNotEmpty && local.isNotEmpty && incoming == local;
+    if (!ok && incoming.isNotEmpty && local.isNotEmpty) {
+      _log.debug(
+        'Dropping server event for other room incoming={incoming} local={local}',
+        parameters: {'incoming': incoming, 'local': local},
+      );
+    }
+    return ok;
+  }
 
   bool _isWelcomeForMe(Uint8List targetUserPublicKey) =>
       _hex(targetUserPublicKey) == myUUIDHex;
 
   Uint8List? get _directPeerPublicKey {
+    final override = _directPeerPublicKeyOverride;
+    if (override != null && override.isNotEmpty) return override;
     final peerHex = (_config.directPeerPublicKeyHex ?? '').trim().toLowerCase();
     if (peerHex.length != 64) return null;
     return hexToBytes(peerHex);
+  }
+
+  String get _directPeerPublicKeyHexEffective {
+    final override = (_directPeerPublicKeyHexOverride ?? '').trim();
+    if (override.isNotEmpty) return override.toLowerCase();
+    return (_config.directPeerPublicKeyHex ?? '').trim().toLowerCase();
   }
 
   Map<String, dynamic> _map(Object? value) {
@@ -1353,6 +1760,11 @@ class ServerV2ChatSession implements ISgtpSession {
     return <String, dynamic>{};
   }
 
+  List<Object?> _asObjectList(Object? value) {
+    if (value is List) return value.cast<Object?>();
+    return const <Object?>[];
+  }
+
   Uint8List _asBytes(Object? value) {
     if (value is Uint8List) return value;
     if (value is List<int>) return Uint8List.fromList(value);
@@ -1361,6 +1773,31 @@ class ServerV2ChatSession implements ISgtpSession {
     }
     if (value is String) return base64.decode(value);
     return Uint8List(0);
+  }
+
+  Future<void> _resolveDirectRoomPeerAndOwner(String roomId) async {
+    if (!_isDirectRoom) return;
+    final client = _rpcChat;
+    if (client == null) return;
+    if ((_directPeerPublicKeyOverride ?? Uint8List(0)).isNotEmpty &&
+        (_directRoomOwnerPublicKeyHex ?? '').trim().isNotEmpty) {
+      return;
+    }
+    try {
+      final members = await client.listChatMembers(roomId: roomId, limit: 10);
+      for (final item in members.items) {
+        final hex = _hex(item.userPublicKey);
+        if (item.role == 3) {
+          _directRoomOwnerPublicKeyHex = hex;
+        }
+        if (hex.isNotEmpty && hex != myUUIDHex) {
+          _directPeerPublicKeyOverride = item.userPublicKey;
+          _directPeerPublicKeyHexOverride = hex;
+          _peerPublicKeys[hex] = hex;
+          _ensurePeer(hex);
+        }
+      }
+    } catch (_) {}
   }
 }
 

@@ -211,6 +211,18 @@ class ServerV2MlsClient {
     return GetChatRoomResponse.fromMap(raw);
   }
 
+  Future<ListChatMembersResponse> listChatMembers({
+    required String roomId,
+    int? limit,
+    String? cursor,
+  }) async {
+    final rpc = await _ensureRpc();
+    final raw = await rpc.callRpc(
+      ListChatMembersRequest(roomId: roomId, limit: limit, cursor: cursor),
+    );
+    return ListChatMembersResponse.fromMap(raw);
+  }
+
   Future<SendChatInvitationResponse> sendChatInvitation({
     required String roomId,
     required Uint8List inviteePublicKey,

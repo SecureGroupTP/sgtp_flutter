@@ -292,7 +292,12 @@ class SgtpRpcClient {
       if (error is Map<String, dynamic>) {
         final code = error['code'] ?? 'rpc_error';
         final message = error['message'] ?? '';
-        _log.warning(
+        final isExpectedIdempotencyConflict =
+            pending.method == 'updateChatRoomState' &&
+                message.contains('duplicate key value') &&
+                message.contains('chat_room_states_room_id_epoch_key');
+        final logFn = isExpectedIdempotencyConflict ? _log.debug : _log.warning;
+        logFn(
           'RPC error response. Method: {methodName}. RequestId: {requestIdShort}. Code: {code}. Message: {message}',
           parameters: {
             'methodName': pending.method,
