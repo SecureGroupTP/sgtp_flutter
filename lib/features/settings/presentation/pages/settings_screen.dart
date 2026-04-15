@@ -30,6 +30,7 @@ import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.
 import 'package:sgtp_flutter/features/settings/presentation/pages/logs_page.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
+import 'package:sgtp_flutter/features/settings/application/models/app_storage_models.dart';
 import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_cubit.dart';
@@ -1471,116 +1472,280 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _storageRow(String label, int bytes) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+            ),
+          ),
+          Text(
+            _formatBytes(bytes),
+            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showUsageSheet() {
     showAppBottomSheet<void>(
       context,
       builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-          child: FutureBuilder<UsageStatsSummary>(
-            future: _cubit.loadMyUsageStats(),
-            builder: (ctx, snap) {
-              final child = switch (snap.connectionState) {
-                ConnectionState.none ||
-                ConnectionState.waiting =>
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: CircularProgressIndicator(),
-                    ),
-                  ),
-                _ => snap.hasError
-                    ? Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Usage',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
-                            ),
+        child: DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (ctx, controller) => SingleChildScrollView(
+            controller: controller,
+            physics: const ClampingScrollPhysics(),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: FutureBuilder<UsageStatsSummary>(
+                  future: _cubit.loadMyUsageStats(),
+                  builder: (ctx, snap) {
+                    final child = switch (snap.connectionState) {
+                      ConnectionState.none ||
+                      ConnectionState.waiting =>
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: CircularProgressIndicator(),
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Failed to load usage stats: ${snap.error}',
-                            style: const TextStyle(
-                                fontSize: 14, color: AppColors.statusRed),
-                          ),
-                          const SizedBox(height: 16),
-                          AppSheetButton(
-                            label: 'Close',
-                            secondary: true,
-                            onTap: () => Navigator.of(ctx).pop(),
-                          ),
-                        ],
-                      )
-                    : () {
-                        final s = snap.data!;
-                        return Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                        ),
+                      _ => snap.hasError
+                          ? Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Expanded(
-                                  child: Text(
-                                    'Usage',
+                                const Text(
+                                  'Usage',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Failed to load usage stats: ${snap.error}',
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      color: AppColors.statusRed),
+                                ),
+                                const SizedBox(height: 16),
+                                AppSheetButton(
+                                  label: 'Close',
+                                  secondary: true,
+                                  onTap: () => Navigator.of(ctx).pop(),
+                                ),
+                              ],
+                            )
+                          : () {
+                              final s = snap.data!;
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Expanded(
+                                        child: Text(
+                                          'Usage',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.textPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                      GestureDetector(
+                                        onTap: () => Navigator.of(ctx).pop(),
+                                        child: const SizedBox(
+                                          width: 36,
+                                          height: 36,
+                                          child: Icon(Icons.close,
+                                              size: 20,
+                                              color: AppColors.textSecondary),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'Buckets are calculated in UTC.',
                                     style: TextStyle(
-                                      fontSize: 18,
+                                        fontSize: 13,
+                                        color: AppColors.textSecondary),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  _usageTile('Minute', s.minute),
+                                  const SizedBox(height: 10),
+                                  _usageTile('Hour', s.hour),
+                                  const SizedBox(height: 10),
+                                  _usageTile('Day', s.day),
+                                  const SizedBox(height: 10),
+                                  _usageTile('Week', s.week),
+                                  const SizedBox(height: 10),
+                                  _usageTile('Month', s.month),
+                                  const SizedBox(height: 10),
+                                  _usageTile('All time', s.allTime),
+                                  const SizedBox(height: 16),
+                                  const Divider(
+                                      height: 1, color: AppColors.border),
+                                  const SizedBox(height: 16),
+                                  const Text(
+                                    'App storage (local)',
+                                    style: TextStyle(
+                                      fontSize: 16,
                                       fontWeight: FontWeight.w700,
                                       color: AppColors.textPrimary,
                                     ),
                                   ),
-                                ),
-                                GestureDetector(
-                                  onTap: () => Navigator.of(ctx).pop(),
-                                  child: const SizedBox(
-                                    width: 36,
-                                    height: 36,
-                                    child: Icon(Icons.close,
-                                        size: 20,
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                    'This is the disk space used by the app on this device.',
+                                    style: TextStyle(
+                                        fontSize: 13,
                                         color: AppColors.textSecondary),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Buckets are calculated in UTC.',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textSecondary),
-                            ),
-                            const SizedBox(height: 16),
-                            _usageTile('Minute', s.minute),
-                            const SizedBox(height: 10),
-                            _usageTile('Hour', s.hour),
-                            const SizedBox(height: 10),
-                            _usageTile('Day', s.day),
-                            const SizedBox(height: 10),
-                            _usageTile('Week', s.week),
-                            const SizedBox(height: 10),
-                            _usageTile('Month', s.month),
-                            const SizedBox(height: 10),
-                            _usageTile('All time', s.allTime),
-                            const SizedBox(height: 16),
-                            AppSheetButton(
-                              label: 'Close',
-                              secondary: true,
-                              onTap: () => Navigator.of(ctx).pop(),
-                            ),
-                          ],
-                        );
-                      }(),
-              };
+                                  const SizedBox(height: 12),
+                                  FutureBuilder<AppStorageBreakdown>(
+                                    future: _cubit.loadAppStorageBreakdown(),
+                                    builder: (ctx, snap) {
+                                      if (snap.connectionState ==
+                                              ConnectionState.waiting ||
+                                          snap.connectionState ==
+                                              ConnectionState.none) {
+                                        return const Padding(
+                                          padding: EdgeInsets.symmetric(
+                                              vertical: 12),
+                                          child: Center(
+                                            child: CircularProgressIndicator(),
+                                          ),
+                                        );
+                                      }
+                                      if (snap.hasError || snap.data == null) {
+                                        return Text(
+                                          'Failed to calculate storage usage: ${snap.error}',
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              color: AppColors.statusRed),
+                                        );
+                                      }
 
-              return AnimatedSwitcher(
-                duration: const Duration(milliseconds: 150),
-                child: child,
-              );
-            },
+                                      final b = snap.data!;
+                                      return Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          _storageRow('Total', b.totalBytes),
+                                          _storageRow(
+                                            'Persistent (docs + support)',
+                                            b.persistentBytes,
+                                          ),
+                                          _storageRow(
+                                            'Temporary artifacts',
+                                            b.tempBytes,
+                                          ),
+                                          const SizedBox(height: 10),
+                                          const Text(
+                                            'Media cache',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.textPrimary,
+                                            ),
+                                          ),
+                                          _storageRow(
+                                            'Images',
+                                            b.mediaImagesBytes,
+                                          ),
+                                          _storageRow(
+                                            'Videos',
+                                            b.mediaVideosBytes,
+                                          ),
+                                          _storageRow(
+                                            'Other media',
+                                            b.mediaOtherBytes,
+                                          ),
+                                          const SizedBox(height: 10),
+                                          const Text(
+                                            'Chats',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.textPrimary,
+                                            ),
+                                          ),
+                                          _storageRow(
+                                            'Message history',
+                                            b.chatHistoryBytes,
+                                          ),
+                                          _storageRow(
+                                            'Chat metadata',
+                                            b.chatMetadataBytes,
+                                          ),
+                                          const SizedBox(height: 10),
+                                          const Text(
+                                            'Accounts & config',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.textPrimary,
+                                            ),
+                                          ),
+                                          _storageRow(
+                                            'MLS state',
+                                            b.mlsStateBytes,
+                                          ),
+                                          _storageRow(
+                                            'Accounts (other)',
+                                            b.accountsOtherBytes,
+                                          ),
+                                          _storageRow(
+                                            'Shared SGTP data',
+                                            b.sharedSgtpBytes,
+                                          ),
+                                          _storageRow(
+                                            'App support (prefs/db)',
+                                            b.appSupportBytes,
+                                          ),
+                                          _storageRow(
+                                            'Other documents',
+                                            b.docsOtherBytes,
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  AppSheetButton(
+                                    label: 'Close',
+                                    secondary: true,
+                                    onTap: () => Navigator.of(ctx).pop(),
+                                  ),
+                                ],
+                              );
+                            }(),
+                    };
+
+                    return AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 150),
+                      child: child,
+                    );
+                  },
+                ),
+              ),
+            ),
           ),
         ),
       ),

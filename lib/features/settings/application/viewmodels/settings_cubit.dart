@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
@@ -11,6 +13,7 @@ import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/settings/application/models/app_storage_models.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
 import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
@@ -96,6 +99,192 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       week: toApp(parsed.week),
       month: toApp(parsed.month),
       allTime: toApp(parsed.allTime),
+    );
+  }
+
+  Future<AppStorageBreakdown> loadAppStorageBreakdown() async {
+    final docs = await getApplicationDocumentsDirectory();
+    final support = await getApplicationSupportDirectory();
+    final tmp = await getTemporaryDirectory();
+
+    Future<int> sumEntity(FileSystemEntity entity) async {
+      try {
+        if (entity is File) return await entity.length();
+        return 0;
+      } catch (_) {
+        return 0;
+      }
+    }
+
+    Future<int> sumDir(Directory dir) async {
+      if (!await dir.exists()) return 0;
+      var total = 0;
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        total += await sumEntity(entity);
+      }
+      return total;
+    }
+
+    bool hasSegment(String path, String segment) {
+      final normalized = path.replaceAll('\\', '/');
+      return normalized.contains('/$segment/');
+    }
+
+    String extension(String path) {
+      final normalized = path.replaceAll('\\', '/');
+      final slash = normalized.lastIndexOf('/');
+      final name = slash >= 0 ? normalized.substring(slash + 1) : normalized;
+      final dot = name.lastIndexOf('.');
+      if (dot <= 0 || dot == name.length - 1) return '';
+      return name.substring(dot + 1).toLowerCase();
+    }
+
+    const imageExt = <String>{
+      'png',
+      'jpg',
+      'jpeg',
+      'gif',
+      'webp',
+      'heic',
+      'heif',
+      'bmp',
+      'tiff',
+      'svg',
+    };
+    const videoExt = <String>{'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'};
+
+    // ── Docs-root SGTP folders ───────────────────────────────────────────
+    final mediaDir = Directory('${docs.path}/sgtp_media_cache');
+    var mediaImages = 0;
+    var mediaVideos = 0;
+    var mediaOther = 0;
+    if (await mediaDir.exists()) {
+      await for (final entity
+          in mediaDir.list(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        final size = await sumEntity(entity);
+        final ext = extension(entity.path);
+        if (imageExt.contains(ext)) {
+          mediaImages += size;
+        } else if (videoExt.contains(ext)) {
+          mediaVideos += size;
+        } else {
+          mediaOther += size;
+        }
+      }
+    }
+
+    // ── Per-account docs ────────────────────────────────────────────────
+    final accountsDir = Directory('${docs.path}/sgtp_accounts');
+    var chatHistory = 0;
+    var chatMetadata = 0;
+    var mlsState = 0;
+    var accountsOther = 0;
+    if (await accountsDir.exists()) {
+      await for (final entity
+          in accountsDir.list(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        final size = await sumEntity(entity);
+        final p = entity.path;
+        if (hasSegment(p, 'sgtp_history')) {
+          chatHistory += size;
+          continue;
+        }
+        if (hasSegment(p, 'sgtp_chats')) {
+          chatMetadata += size;
+          continue;
+        }
+        if (hasSegment(p, 'sgtp_mls')) {
+          mlsState += size;
+          continue;
+        }
+        accountsOther += size;
+      }
+    }
+
+    // Legacy chats root (rare on fresh installs).
+    final legacyChatsDir = Directory('${docs.path}/sgtp_chats');
+    chatMetadata += await sumDir(legacyChatsDir);
+
+    final sharedSgtpDir = Directory('${docs.path}/sgtp');
+    final sharedSgtpBytes = await sumDir(sharedSgtpDir);
+
+    // Docs root miscellaneous (e.g. window state files).
+    var docsOther = 0;
+    await for (final entity in docs.list(recursive: false, followLinks: false)) {
+      if (entity is Directory) {
+        final name = entity.path.replaceAll('\\', '/').split('/').last;
+        if (name == 'sgtp' ||
+            name == 'sgtp_accounts' ||
+            name == 'sgtp_chats' ||
+            name == 'sgtp_media_cache') {
+          continue;
+        }
+        docsOther += await sumDir(entity);
+      } else {
+        docsOther += await sumEntity(entity);
+      }
+    }
+
+    // ── Application support (SharedPreferences, etc.) ────────────────────
+    final appSupportBytes = await sumDir(support);
+
+    // ── Temp artifacts (only known app patterns) ─────────────────────────
+    const tempPrefixes = <String>[
+      'sgtp_av_',
+      'voice_play_',
+      'voice_',
+      'vnote_',
+      'videonote_',
+      'videonote_thumb_',
+      'mic_loop_',
+    ];
+    Future<int> sumTempDir(Directory d) async {
+      if (!await d.exists()) return 0;
+      var total = 0;
+      await for (final entity in d.list(recursive: false, followLinks: false)) {
+        if (entity is! File) continue;
+        final name = entity.path.replaceAll('\\', '/').split('/').last;
+        final lower = name.toLowerCase();
+        if (!tempPrefixes.any((p) => lower.startsWith(p))) continue;
+        total += await sumEntity(entity);
+      }
+      final cache = Directory('${d.path}/sgtp_media_cache');
+      total += await sumDir(cache);
+      return total;
+    }
+
+    final tempArtifacts =
+        await sumTempDir(tmp) + await sumTempDir(Directory.systemTemp);
+
+    final docsTotal = mediaImages +
+        mediaVideos +
+        mediaOther +
+        chatHistory +
+        chatMetadata +
+        mlsState +
+        accountsOther +
+        sharedSgtpBytes +
+        docsOther;
+
+    final persistent = docsTotal + appSupportBytes;
+    final total = persistent + tempArtifacts;
+
+    return AppStorageBreakdown(
+      totalBytes: total,
+      persistentBytes: persistent,
+      tempBytes: tempArtifacts,
+      mediaImagesBytes: mediaImages,
+      mediaVideosBytes: mediaVideos,
+      mediaOtherBytes: mediaOther,
+      chatHistoryBytes: chatHistory,
+      chatMetadataBytes: chatMetadata,
+      mlsStateBytes: mlsState,
+      accountsOtherBytes: accountsOther,
+      sharedSgtpBytes: sharedSgtpBytes,
+      docsOtherBytes: docsOther,
+      appSupportBytes: appSupportBytes,
+      tempArtifactsBytes: tempArtifacts,
     );
   }
 
