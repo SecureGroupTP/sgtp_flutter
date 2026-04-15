@@ -15,6 +15,7 @@ import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
+import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_metadata_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
@@ -25,6 +26,14 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metad
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 
 final _log = AppLog('ServerV2ChatSession');
+
+const Set<String> _persistedPayloadTypes = {
+  'text',
+  'image',
+  'video',
+  'voice',
+  'video_note',
+};
 
 class _PendingMedia {
   final String id;
@@ -88,6 +97,7 @@ class ServerV2ChatSession implements ISgtpSession {
   final Map<String, _PendingSelfAck> _pendingSelfAcksByFingerprint = {};
   final Map<String, String> _pendingSelfAckFingerprintByLocalId = {};
   Timer? _pendingSelfAckCleanupTimer;
+  ChatHistoryRepository? _historyRepository;
 
   MessengerMls? _mls;
   ServerV2MlsClient? _rpcChat;
@@ -131,6 +141,7 @@ class ServerV2ChatSession implements ISgtpSession {
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
     _deviceId = 'flutter-${_hex(config.myPublicKey).substring(0, 16)}';
+    _historyRepository = _buildHistoryRepository();
   }
 
   @override
@@ -268,6 +279,7 @@ class ServerV2ChatSession implements ISgtpSession {
       if (replyToSender != null) 'reply_to_sender': replyToSender,
     };
     _attachSenderAvatar(payload);
+    final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
 
     final localId = uuidBytesToHex(generateUUIDv7());
     final optimistic = ChatMessage(
@@ -292,6 +304,14 @@ class ServerV2ChatSession implements ISgtpSession {
     );
     try {
       await _sendPayload(payload, localEchoId: localId);
+      unawaited(
+        _persistHistoryRecord(
+          senderUUID: _config.myPublicKey,
+          messageUUID: hexToBytes(localId),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          plaintext: plaintext,
+        ),
+      );
     } catch (_) {
       // Don't error the whole chat; just stop showing "sending" for this
       // message. A later reconnect may still deliver it.
@@ -450,7 +470,115 @@ class ServerV2ChatSession implements ISgtpSession {
     required int offsetFromEnd,
     required int limit,
   }) async {
-    return const PersistedHistoryBatchResult(loaded: 0, total: 0);
+    final repo = _historyRepository;
+    if (repo == null) {
+      return const PersistedHistoryBatchResult(loaded: 0, total: 0);
+    }
+    final total = await repo.count();
+    // Media messages are stored chunk-by-chunk; pull a larger tail window on
+    // initial open so we more reliably include full files.
+    final effectiveLimit = offsetFromEnd == 0 ? max(limit, 1200) : limit;
+    final records = await repo.readBatchFromEnd(
+      offsetFromEnd: offsetFromEnd,
+      limit: effectiveLimit,
+    );
+    var loaded = records.length;
+    for (final record in records) {
+      await _emitRecordFromHistory(record);
+    }
+
+    if (offsetFromEnd == 0 && _pendingMedia.isNotEmpty) {
+      const backfillStep = 400;
+      const maxBackfillRecords = 8000;
+      var backfilled = 0;
+
+      while (_pendingMedia.isNotEmpty &&
+          (offsetFromEnd + loaded) < total &&
+          backfilled < maxBackfillRecords) {
+        final take = min(backfillStep, maxBackfillRecords - backfilled);
+        final older = await repo.readBatchFromEnd(
+          offsetFromEnd: offsetFromEnd + loaded,
+          limit: take,
+        );
+        if (older.isEmpty) break;
+        for (final record in older) {
+          await _emitRecordFromHistory(record);
+        }
+        loaded += older.length;
+        backfilled += older.length;
+      }
+
+      // Avoid keeping dangling partial media if the history range ended mid-file.
+      if (_pendingMedia.isNotEmpty) {
+        _pendingMedia.clear();
+      }
+    }
+
+    return PersistedHistoryBatchResult(loaded: loaded, total: total);
+  }
+
+  ChatHistoryRepository? _buildHistoryRepository() {
+    final accountId = (_config.accountId ?? '').trim();
+    final chatUUID = roomUUIDHex.trim();
+    if (accountId.isEmpty || chatUUID.isEmpty) return null;
+    return ChatHistoryRepository(
+      accountId: accountId,
+      serverAddress: _config.serverAddr,
+      chatUUID: chatUUID,
+    );
+  }
+
+  Future<void> _emitRecordFromHistory(PersistedHistoryRecord record) async {
+    final senderHex = _hex(record.senderUUID);
+    final isFromMe = senderHex == myUUIDHex;
+    final messageId =
+        isFromMe ? uuidBytesToHex(record.messageUUID) : _uuidString(record.messageUUID);
+    final ts = record.timestamp > 0
+        ? DateTime.fromMillisecondsSinceEpoch(record.timestamp)
+        : DateTime.now();
+    await _emitDecodedPayload(
+      payload: record.plaintext,
+      messageId: messageId,
+      senderUUID: senderHex,
+      recvAt: ts,
+      isFromHistory: true,
+    );
+  }
+
+  Uint8List _uuidBytesFromMessageId(String messageId) {
+    final normalized = messageId.trim().toLowerCase().replaceAll('-', '');
+    if (normalized.length != 32) {
+      throw ArgumentError('Invalid messageId uuid: $messageId');
+    }
+    return hexToBytes(normalized);
+  }
+
+  Future<void> _persistHistoryRecord({
+    required Uint8List senderUUID,
+    required Uint8List messageUUID,
+    required int timestampMs,
+    required Uint8List plaintext,
+  }) async {
+    final repo = _historyRepository;
+    if (repo == null) return;
+    try {
+      await repo.appendIfAbsent(
+        PersistedHistoryRecord(
+          senderUUID: senderUUID,
+          messageUUID: messageUUID,
+          timestamp: timestampMs,
+          nonce: 0,
+          plaintext: plaintext,
+        ),
+      );
+    } catch (e, st) {
+      _log.debug(
+        'Failed to persist history record: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
   }
 
   Future<void> _connectRpc() async {
@@ -988,6 +1116,15 @@ class ServerV2ChatSession implements ISgtpSession {
         payload.addAll(extraPayload);
       }
       await _sendPayload(payload);
+      final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
+      unawaited(
+        _persistHistoryRecord(
+          senderUUID: _config.myPublicKey,
+          messageUUID: generateUUIDv7(),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          plaintext: plain,
+        ),
+      );
       if (echoMessage != null) {
         _eventController.add(
           SgtpMediaProgress(
@@ -1216,8 +1353,10 @@ class ServerV2ChatSession implements ISgtpSession {
     }
     _peerPublicKeys[senderHex] = senderHex;
     _ensurePeer(senderHex);
+    final recvAt = DateTime.now();
     var decodedAny = false;
-    for (final item in event.body) {
+    for (var index = 0; index < event.body.length; index++) {
+      final item = event.body[index];
       final plaintext = await _handleGroupMessage(item);
       _log.debug(
         'MLS message plaintext decoded={decoded} message={messageId}',
@@ -1228,11 +1367,31 @@ class ServerV2ChatSession implements ISgtpSession {
       );
       if (plaintext == null) continue;
       decodedAny = true;
+      if (_shouldPersistPlaintext(plaintext)) {
+        Uint8List messageUUID;
+        if (index == 0) {
+          try {
+            messageUUID = _uuidBytesFromMessageId(event.messageId);
+          } catch (_) {
+            messageUUID = generateUUIDv7();
+          }
+        } else {
+          messageUUID = generateUUIDv7();
+        }
+        unawaited(
+          _persistHistoryRecord(
+            senderUUID: event.senderPublicKey,
+            messageUUID: messageUUID,
+            timestampMs: recvAt.millisecondsSinceEpoch,
+            plaintext: plaintext,
+          ),
+        );
+      }
       await _emitDecodedPayload(
         payload: plaintext,
         messageId: event.messageId,
         senderUUID: senderHex,
-        recvAt: DateTime.now(),
+        recvAt: recvAt,
       );
     }
     if (!decodedAny && _mlsGroupReady) {
@@ -1241,6 +1400,19 @@ class ServerV2ChatSession implements ISgtpSession {
       _queueInboundMessage(event);
     }
     return decodedAny;
+  }
+
+  bool _shouldPersistPlaintext(Uint8List plaintext) {
+    try {
+      final decoded = json.decode(utf8.decode(plaintext));
+      if (decoded is Map && decoded['v'] == 1) {
+        final type = decoded['type'] as String?;
+        if (type != null && _persistedPayloadTypes.contains(type)) {
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
   }
 
   void _handleSelfEchoAck(MlsMessageReceivedNetworkEvent event) {
@@ -1417,6 +1589,7 @@ class ServerV2ChatSession implements ISgtpSession {
     required String messageId,
     required String senderUUID,
     required DateTime recvAt,
+    bool isFromHistory = false,
   }) async {
     Map<String, dynamic>? decoded;
     try {
@@ -1432,7 +1605,7 @@ class ServerV2ChatSession implements ISgtpSession {
             senderPublicKeyHex: senderUUID.isEmpty ? null : senderUUID,
             content: utf8.decode(payload),
             receivedAt: recvAt,
-            isFromHistory: false,
+            isFromHistory: isFromHistory,
             isFromMe: senderUUID == myUUIDHex,
           ),
         ),
@@ -1457,7 +1630,7 @@ class ServerV2ChatSession implements ISgtpSession {
               senderPublicKeyHex: senderPub,
               content: (decoded['text'] as String?) ?? '',
               receivedAt: recvAt,
-              isFromHistory: false,
+              isFromHistory: isFromHistory,
               isFromMe: effectiveSender == myUUIDHex,
               replyToId: decoded['reply_to_id'] as String?,
               replyToContent: decoded['reply_to_content'] as String?,
@@ -1476,6 +1649,7 @@ class ServerV2ChatSession implements ISgtpSession {
           recvAt: recvAt,
           payload: decoded,
           type: decoded['type'] as String,
+          isFromHistory: isFromHistory,
         );
       case 'message_read':
         final readId = decoded['msg_id'] as String?;
@@ -1522,6 +1696,7 @@ class ServerV2ChatSession implements ISgtpSession {
     required DateTime recvAt,
     required Map<String, dynamic> payload,
     required String type,
+    bool isFromHistory = false,
   }) async {
     final chunk = base64.decode((payload['data'] as String?) ?? '');
     final fileId = (payload['file_id'] as String?) ?? messageId;
@@ -1546,6 +1721,7 @@ class ServerV2ChatSession implements ISgtpSession {
             bytes: chunk,
             type: type,
             videoNoteMetadata: videoNoteMetadata,
+            isFromHistory: isFromHistory,
           ),
         ),
       );
@@ -1581,6 +1757,7 @@ class ServerV2ChatSession implements ISgtpSession {
           bytes: pending.assemble(),
           type: pending.type,
           videoNoteMetadata: pending.videoNoteMetadata,
+          isFromHistory: isFromHistory,
         ),
       ),
     );
@@ -1596,6 +1773,7 @@ class ServerV2ChatSession implements ISgtpSession {
     required Uint8List bytes,
     required String type,
     VideoNoteMetadata? videoNoteMetadata,
+    bool isFromHistory = false,
   }) {
     switch (type) {
       case 'image':
@@ -1609,7 +1787,7 @@ class ServerV2ChatSession implements ISgtpSession {
           mediaName: name,
           type: MessageType.image,
           receivedAt: recvAt,
-          isFromHistory: false,
+          isFromHistory: isFromHistory,
           isFromMe: senderUUID == myUUIDHex,
         );
       case 'video':
@@ -1623,7 +1801,7 @@ class ServerV2ChatSession implements ISgtpSession {
           mediaName: name,
           type: MessageType.video,
           receivedAt: recvAt,
-          isFromHistory: false,
+          isFromHistory: isFromHistory,
           isFromMe: senderUUID == myUUIDHex,
         );
       case 'video_note':
@@ -1638,7 +1816,7 @@ class ServerV2ChatSession implements ISgtpSession {
           type: MessageType.videoNote,
           videoNoteMetadata: videoNoteMetadata,
           receivedAt: recvAt,
-          isFromHistory: false,
+          isFromHistory: isFromHistory,
           isFromMe: senderUUID == myUUIDHex,
         );
       default:
@@ -1652,7 +1830,7 @@ class ServerV2ChatSession implements ISgtpSession {
           mediaName: name,
           type: MessageType.voice,
           receivedAt: recvAt,
-          isFromHistory: false,
+          isFromHistory: isFromHistory,
           isFromMe: senderUUID == myUUIDHex,
         );
     }
