@@ -351,6 +351,14 @@ class SgtpRpcClient {
       'eventType': eventTypeValue.toString(),
       'parameters': _fromCborMap(paramsValue),
     };
+    _log.info(
+      'RPC event received. EventType: {eventType}. RequestId: {requestIdShort}. Parameters: {parameters}',
+      parameters: {
+        'eventType': eventTypeValue.toString(),
+        'requestIdShort': requestId == null ? '-' : requestId.substring(0, 8),
+        'parameters': _jsonEncode(_cborToJsonLog(paramsValue)),
+      },
+    );
     for (final callback in List<void Function(Map<String, dynamic> event)>.from(
         _eventCallbacks.values)) {
       try {

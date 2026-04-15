@@ -1004,9 +1004,11 @@ packages:
   sgtp_chat_core:
     dependency: "direct main"
     description:
-      path: "../../Rust/chat_core/flutter/sgtp_chat_core"
-      relative: true
-    source: path
+      path: "flutter/sgtp_chat_core"
+      ref: "v0.0.15"
+      resolved-ref: ae860792ba2c1a4e4bcafdebb745159af3b291aa
+      url: "https://github.com/SecureGroupTP/chat_core.git"
+    source: git
     version: "0.1.1"
   shared_preferences:
     dependency: "direct main"
