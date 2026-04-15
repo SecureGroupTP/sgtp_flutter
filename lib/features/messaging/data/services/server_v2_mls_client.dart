@@ -309,7 +309,15 @@ class ServerV2MlsClient {
 
   Future<SgtpRpcClient> _ensureRpc() async {
     final existing = _rpc;
-    if (existing != null) return existing;
+    if (existing != null) {
+      if (existing.transport.isConnected == true) return existing;
+      _log.warning('RPC transport disconnected; reacquiring RPC client');
+      _rpc = null;
+      _removeEventsCallback?.call();
+      _removeEventsCallback = null;
+      await _sharedEventsSub?.cancel();
+      _sharedEventsSub = null;
+    }
     final rpc = await _rpcProvider();
     final sharedServerEvents = _sharedServerEvents;
     if (sharedServerEvents != null) {

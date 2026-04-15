@@ -148,6 +148,7 @@ class TcpSgtpTransport implements IProtocolTransport {
         }
       },
       onError: (e, st) {
+        _socket = null;
         _log.error('Socket error on {host}:{port} (tls={useTls}): {error}',
             parameters: {
               'host': host,
@@ -159,6 +160,7 @@ class TcpSgtpTransport implements IProtocolTransport {
         _inbound.addError(e, st);
       },
       onDone: () {
+        _socket = null;
         if (!headerDone.isCompleted) {
           final err =
               StateError('Connection closed before 25-byte banner on $host:$port');

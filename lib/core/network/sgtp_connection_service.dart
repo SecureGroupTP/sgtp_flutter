@@ -59,6 +59,12 @@ class SgtpConnectionService {
       }
       return _rpc!;
     }
+    // If we have a cached RPC but the underlying transport is no longer
+    // connected, fully disconnect to avoid reusing a dead socket.
+    if (_rpc != null || _transport != null) {
+      _log.warning('RPC transport is not connected; reconnecting');
+      await disconnect();
+    }
     final pending = _connectFuture;
     if (pending != null) {
       _log.debug('Reusing pending RPC connection attempt');

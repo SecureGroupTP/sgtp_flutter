@@ -21,6 +21,7 @@ class WebSocketSgtpTransport implements IProtocolTransport {
 
   Socket? _socket;
   StreamSubscription? _sub;
+  Timer? _pingTimer;
 
   final _buf = <int>[];
   bool _upgraded = false;
@@ -74,12 +75,16 @@ class WebSocketSgtpTransport implements IProtocolTransport {
     _sub = sock.listen(
       _onRawData,
       onError: (e, st) {
+        _socket = null;
+        _stopPingTimer();
         if (!_upgradeCompleter.isCompleted) {
           _upgradeCompleter.completeError(e, st);
         }
         if (!_inbound.isClosed) _inbound.addError(e, st);
       },
       onDone: () {
+        _socket = null;
+        _stopPingTimer();
         if (!_upgradeCompleter.isCompleted) {
           _upgradeCompleter
               .completeError(StateError('Socket closed during WS upgrade'));
@@ -102,6 +107,7 @@ class WebSocketSgtpTransport implements IProtocolTransport {
     await sock.flush();
 
     await _upgradeCompleter.future;
+    _startPingTimer();
   }
 
   Future<SecureSocket> _connectTlsSocket() async {
@@ -130,6 +136,7 @@ class WebSocketSgtpTransport implements IProtocolTransport {
   Future<void> close() async {
     final sock = _socket;
     _socket = null;
+    _stopPingTimer();
     try {
       await _sub?.cancel();
     } catch (_) {}
@@ -270,6 +277,9 @@ class WebSocketSgtpTransport implements IProtocolTransport {
           sock.flush();
         }
         break;
+      case 0xA:
+        // pong
+        break;
       case 0x8:
         close();
         break;
@@ -339,6 +349,49 @@ class WebSocketSgtpTransport implements IProtocolTransport {
     frame[5] = mask[3];
     for (int i = 0; i < len; i++) {
       frame[6 + i] = pingPayload[i] ^ mask[i & 3];
+    }
+    return frame;
+  }
+
+  void _startPingTimer() {
+    _pingTimer ??= Timer.periodic(const Duration(seconds: 15), (_) {
+      final sock = _socket;
+      if (sock == null) return;
+      try {
+        sock.add(_encodePing(_randomPingPayload()));
+        sock.flush();
+      } catch (_) {}
+    });
+  }
+
+  void _stopPingTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+  }
+
+  static Uint8List _randomPingPayload() {
+    // Small payload helps some intermediaries keep the connection open.
+    final now = DateTime.now().microsecondsSinceEpoch;
+    return Uint8List.fromList([
+      (now >> 24) & 0xFF,
+      (now >> 16) & 0xFF,
+      (now >> 8) & 0xFF,
+      now & 0xFF,
+    ]);
+  }
+
+  static Uint8List _encodePing(Uint8List payload) {
+    final mask = _randomMask();
+    final len = payload.length;
+    final frame = Uint8List(2 + 4 + len);
+    frame[0] = 0x89;
+    frame[1] = 0x80 | len;
+    frame[2] = mask[0];
+    frame[3] = mask[1];
+    frame[4] = mask[2];
+    frame[5] = mask[3];
+    for (int i = 0; i < len; i++) {
+      frame[6 + i] = payload[i] ^ mask[i & 3];
     }
     return frame;
   }
