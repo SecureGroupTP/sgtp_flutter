@@ -116,6 +116,62 @@ class GetGroupLimitsResponse {
       );
 }
 
+class UsageStatData {
+  final int requests;
+  final int bytesIn;
+  final int bytesOut;
+
+  const UsageStatData({
+    required this.requests,
+    required this.bytesIn,
+    required this.bytesOut,
+  });
+
+  static UsageStatData fromMap(Map<String, dynamic> m) => UsageStatData(
+        requests: (m['requests'] as num?)?.toInt() ?? 0,
+        bytesIn: (m['bytesIn'] as num?)?.toInt() ?? 0,
+        bytesOut: (m['bytesOut'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class GetMyUsageStatsRequest extends RpcRequest {
+  const GetMyUsageStatsRequest();
+
+  @override
+  String get method => 'getMyUsageStats';
+
+  @override
+  Map<String, dynamic> toMap() => const {};
+}
+
+class GetMyUsageStatsResponse {
+  final UsageStatData minute;
+  final UsageStatData hour;
+  final UsageStatData day;
+  final UsageStatData week;
+  final UsageStatData month;
+  final UsageStatData allTime;
+
+  const GetMyUsageStatsResponse({
+    required this.minute,
+    required this.hour,
+    required this.day,
+    required this.week,
+    required this.month,
+    required this.allTime,
+  });
+
+  static GetMyUsageStatsResponse fromMap(Map<String, dynamic> m) =>
+      GetMyUsageStatsResponse(
+        minute: UsageStatData.fromMap(_mapValue(m['minute'])),
+        hour: UsageStatData.fromMap(_mapValue(m['hour'])),
+        day: UsageStatData.fromMap(_mapValue(m['day'])),
+        week: UsageStatData.fromMap(_mapValue(m['week'])),
+        month: UsageStatData.fromMap(_mapValue(m['month'])),
+        allTime: UsageStatData.fromMap(_mapValue(m['allTime'])),
+      );
+}
+
 Map<String, dynamic> _mapValue(Object? value) {
   if (value is Map<String, dynamic>) return value;
   if (value is Map) {

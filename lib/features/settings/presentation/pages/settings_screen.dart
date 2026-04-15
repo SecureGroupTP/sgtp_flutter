@@ -30,6 +30,7 @@ import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.
 import 'package:sgtp_flutter/features/settings/presentation/pages/logs_page.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
+import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_cubit.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
@@ -1414,6 +1415,178 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  String _formatBytes(int bytes) {
+    final value = bytes.toDouble();
+    if (value < 1024) return '$bytes B';
+    final kb = value / 1024.0;
+    if (kb < 1024) return '${kb.toStringAsFixed(kb < 10 ? 1 : 0)} KB';
+    final mb = kb / 1024.0;
+    if (mb < 1024) return '${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB';
+    final gb = mb / 1024.0;
+    return '${gb.toStringAsFixed(gb < 10 ? 1 : 0)} GB';
+  }
+
+  Widget _usageTile(String label, UsageStat stat) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B1B1F),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '${stat.requests} req',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'in ${_formatBytes(stat.bytesIn)} · out ${_formatBytes(stat.bytesOut)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showUsageSheet() {
+    showAppBottomSheet<void>(
+      context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          child: FutureBuilder<UsageStatsSummary>(
+            future: _cubit.loadMyUsageStats(),
+            builder: (ctx, snap) {
+              final child = switch (snap.connectionState) {
+                ConnectionState.none ||
+                ConnectionState.waiting =>
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: CircularProgressIndicator(),
+                    ),
+                  ),
+                _ => snap.hasError
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Usage',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Failed to load usage stats: ${snap.error}',
+                            style: const TextStyle(
+                                fontSize: 14, color: AppColors.statusRed),
+                          ),
+                          const SizedBox(height: 16),
+                          AppSheetButton(
+                            label: 'Close',
+                            secondary: true,
+                            onTap: () => Navigator.of(ctx).pop(),
+                          ),
+                        ],
+                      )
+                    : () {
+                        final s = snap.data!;
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Expanded(
+                                  child: Text(
+                                    'Usage',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () => Navigator.of(ctx).pop(),
+                                  child: const SizedBox(
+                                    width: 36,
+                                    height: 36,
+                                    child: Icon(Icons.close,
+                                        size: 20,
+                                        color: AppColors.textSecondary),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Buckets are calculated in UTC.',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary),
+                            ),
+                            const SizedBox(height: 16),
+                            _usageTile('Minute', s.minute),
+                            const SizedBox(height: 10),
+                            _usageTile('Hour', s.hour),
+                            const SizedBox(height: 10),
+                            _usageTile('Day', s.day),
+                            const SizedBox(height: 10),
+                            _usageTile('Week', s.week),
+                            const SizedBox(height: 10),
+                            _usageTile('Month', s.month),
+                            const SizedBox(height: 10),
+                            _usageTile('All time', s.allTime),
+                            const SizedBox(height: 16),
+                            AppSheetButton(
+                              label: 'Close',
+                              secondary: true,
+                              onTap: () => Navigator.of(ctx).pop(),
+                            ),
+                          ],
+                        );
+                      }(),
+              };
+
+              return AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: child,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildProfileSection(SettingsViewState state) {
     final nickname = state.nickname;
     final userAvatar = state.userAvatar;
@@ -1577,6 +1750,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color: Colors.black),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Usage button ────────────────────────────────────────────────
+          GestureDetector(
+            onTap: _showUsageSheet,
+            child: Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.bgSurfaceActive,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.data_usage_outlined,
+                      size: 20, color: AppColors.textPrimary),
+                  SizedBox(width: 8),
+                  Text(
+                    'Usage',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ],
               ),

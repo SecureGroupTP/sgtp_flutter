@@ -7,9 +7,12 @@ import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
+import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
+import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
+import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
 
@@ -19,11 +22,13 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   SettingsCubit({
     required SettingsManagementService settings,
     required AppSessionController appSessionController,
+    required SgtpConnectionService sgtpConnectionService,
     required SgtpConfig? initialConfig,
     required Uint8List? currentUserAvatar,
     required void Function()? onAllDataDeleted,
   })  : _settings = settings,
         _appSessionController = appSessionController,
+        _sgtpConnection = sgtpConnectionService,
         _onAllDataDeleted = onAllDataDeleted,
         super(const SettingsViewState()) {
     _userAvatar = currentUserAvatar;
@@ -36,6 +41,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   final SettingsManagementService _settings;
   final AppSessionController _appSessionController;
+  final SgtpConnectionService _sgtpConnection;
   final void Function()? _onAllDataDeleted;
 
   String? _privateKeyPath;
@@ -76,6 +82,22 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Public getters ──────────────────────────────────────────────────────
   SettingsManagementService get settings => _settings;
+
+  Future<UsageStatsSummary> loadMyUsageStats() async {
+    final rpc = await _sgtpConnection.ensureConnected();
+    final raw = await rpc.callRpc(const GetMyUsageStatsRequest());
+    final parsed = GetMyUsageStatsResponse.fromMap(raw);
+    UsageStat toApp(UsageStatData s) =>
+        UsageStat(requests: s.requests, bytesIn: s.bytesIn, bytesOut: s.bytesOut);
+    return UsageStatsSummary(
+      minute: toApp(parsed.minute),
+      hour: toApp(parsed.hour),
+      day: toApp(parsed.day),
+      week: toApp(parsed.week),
+      month: toApp(parsed.month),
+      allTime: toApp(parsed.allTime),
+    );
+  }
 
   // ── Intent: Load ────────────────────────────────────────────────────────
 
