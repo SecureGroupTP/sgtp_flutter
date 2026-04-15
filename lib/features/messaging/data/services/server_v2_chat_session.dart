@@ -114,6 +114,7 @@ class ServerV2ChatSession implements ISgtpSession {
   Timer? _persistMlsStateTimer;
   late final Uint8List _roomUUID;
   late final String _deviceId;
+  final List<_PendingInboundMessage> _pendingInboundMessages = [];
 
   ServerV2ChatSession(
     SgtpConfig config, {
@@ -1030,6 +1031,13 @@ class ServerV2ChatSession implements ISgtpSession {
         _scheduleRemoteRoomBind();
       case MlsMessageReceivedNetworkEvent():
         if (!_ownsRemoteRoom(event.roomId)) return;
+        // During reconnect, server may flush pending message events before we
+        // have re-joined/restored the MLS group. If we try to decrypt too early,
+        // chat_core returns null/bad-epoch and we'd permanently drop the message.
+        if (!_mlsGroupReady) {
+          _queueInboundMessage(event);
+          return;
+        }
         _log.debug(
           'Received MLS message event room={roomId} message={messageId} bodyParts={bodyParts}',
           parameters: {
@@ -1039,6 +1047,53 @@ class ServerV2ChatSession implements ISgtpSession {
           },
         );
         await _handleIncomingMessage(event);
+    }
+  }
+
+  void _queueInboundMessage(MlsMessageReceivedNetworkEvent event) {
+    // Prevent unbounded growth if many messages arrive while we're not ready.
+    const maxBuffered = 500;
+    if (_pendingInboundMessages.length >= maxBuffered) {
+      _pendingInboundMessages.removeAt(0);
+    }
+    _pendingInboundMessages.add(
+      _PendingInboundMessage(
+        event: event,
+        createdAtUs: DateTime.now().microsecondsSinceEpoch,
+      ),
+    );
+    _log.debug(
+      'Queued MLS message until group is ready room={roomId} message={messageId} buffered={buffered}',
+      parameters: {
+        'roomId': event.roomId,
+        'messageId': event.messageId,
+        'buffered': _pendingInboundMessages.length,
+      },
+    );
+  }
+
+  Future<void> _drainPendingInboundMessages() async {
+    if (!_mlsGroupReady || _pendingInboundMessages.isEmpty) return;
+    final queued = List<_PendingInboundMessage>.from(_pendingInboundMessages);
+    _pendingInboundMessages.clear();
+    _log.debug(
+      'Draining queued MLS messages room={roomId} count={count}',
+      parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'count': queued.length},
+    );
+    for (final pending in queued) {
+      final msg = pending.event;
+      if (!_ownsRemoteRoom(msg.roomId)) continue;
+      final decodedAny = await _handleIncomingMessage(msg);
+      if (!decodedAny) {
+        // If we still can't decrypt, keep it for a later retry (commits/welcome
+        // may arrive after messages in some edge cases).
+        final next = pending.bump();
+        if (next.shouldDrop) continue;
+        if (_pendingInboundMessages.length >= 500) {
+          _pendingInboundMessages.removeAt(0);
+        }
+        _pendingInboundMessages.add(next);
+      }
     }
   }
 
@@ -1060,6 +1115,7 @@ class ServerV2ChatSession implements ISgtpSession {
           parameters: {'roomId': _remoteRoomId ?? roomUUIDHex});
       _schedulePersistMlsState();
       _emitReadyIfNeeded(force: true);
+      await _drainPendingInboundMessages();
     } catch (e, st) {
       if (_isGroupAlreadyExistsError(e)) {
         _mlsGroupReady = true;
@@ -1071,6 +1127,7 @@ class ServerV2ChatSession implements ISgtpSession {
         );
         _schedulePersistMlsState();
         _emitReadyIfNeeded(force: true);
+        await _drainPendingInboundMessages();
         return;
       }
       if (_isMissingKeyPackageForWelcomeError(e) && _isDirectRoom) {
@@ -1147,7 +1204,7 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  Future<void> _handleIncomingMessage(
+  Future<bool> _handleIncomingMessage(
       MlsMessageReceivedNetworkEvent event) async {
     final senderHex = _hex(event.senderPublicKey);
     // Server echoes our own MLS application messages back to us. chat_core
@@ -1155,10 +1212,11 @@ class ServerV2ChatSession implements ISgtpSession {
     // We use the echo as a send-ack and never attempt to decrypt it.
     if (senderHex.isNotEmpty && senderHex == myUUIDHex) {
       _handleSelfEchoAck(event);
-      return;
+      return true;
     }
     _peerPublicKeys[senderHex] = senderHex;
     _ensurePeer(senderHex);
+    var decodedAny = false;
     for (final item in event.body) {
       final plaintext = await _handleGroupMessage(item);
       _log.debug(
@@ -1169,6 +1227,7 @@ class ServerV2ChatSession implements ISgtpSession {
         },
       );
       if (plaintext == null) continue;
+      decodedAny = true;
       await _emitDecodedPayload(
         payload: plaintext,
         messageId: event.messageId,
@@ -1176,6 +1235,12 @@ class ServerV2ChatSession implements ISgtpSession {
         recvAt: DateTime.now(),
       );
     }
+    if (!decodedAny && _mlsGroupReady) {
+      // We were "ready" but couldn't decrypt; keep for retry after we process
+      // any lagging commits/welcome/state changes.
+      _queueInboundMessage(event);
+    }
+    return decodedAny;
   }
 
   void _handleSelfEchoAck(MlsMessageReceivedNetworkEvent event) {
@@ -1233,6 +1298,7 @@ class ServerV2ChatSession implements ISgtpSession {
           _mlsGroupReady = true;
           _emitReadyIfNeeded(force: true);
           _schedulePersistMlsState();
+          await _drainPendingInboundMessages();
         }
       }
       await _maybeMergePendingCommit();
@@ -1944,6 +2010,32 @@ class ServerV2ChatSession implements ISgtpSession {
         }
       }
     } catch (_) {}
+  }
+}
+
+class _PendingInboundMessage {
+  final MlsMessageReceivedNetworkEvent event;
+  final int createdAtUs;
+  final int attempts;
+
+  const _PendingInboundMessage({
+    required this.event,
+    required this.createdAtUs,
+    this.attempts = 0,
+  });
+
+  _PendingInboundMessage bump() => _PendingInboundMessage(
+        event: event,
+        createdAtUs: createdAtUs,
+        attempts: attempts + 1,
+      );
+
+  bool get shouldDrop {
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    final ageUs = nowUs - createdAtUs;
+    if (ageUs > const Duration(minutes: 5).inMicroseconds) return true;
+    if (attempts >= 5) return true;
+    return false;
   }
 }
 

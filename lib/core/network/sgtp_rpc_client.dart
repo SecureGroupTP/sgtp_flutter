@@ -333,12 +333,21 @@ class SgtpRpcClient {
   }
 
   void _emitServerEvent(CborMap decoded) {
+    final requestIdValue = decoded[CborString('requestId')];
     final eventTypeValue = decoded[CborString('eventType')];
     final paramsValue = decoded[CborString('parameters')];
     if (eventTypeValue is! CborString || paramsValue is! CborMap) {
       return;
     }
+    final requestId = switch (requestIdValue) {
+      CborBytes() => requestIdValue.bytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join(),
+      CborString() => requestIdValue.toString(),
+      _ => null,
+    };
     final event = <String, dynamic>{
+      if (requestId != null) 'requestId': requestId,
       'eventType': eventTypeValue.toString(),
       'parameters': _fromCborMap(paramsValue),
     };

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/connection_events.dart';
@@ -15,7 +16,10 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart
 class SgtpConnectionService {
   final _log = AppLog('SgtpConnectionService');
   final _events = StreamController<SgtpConnectionStateChanged>.broadcast();
-  final _serverEvents = StreamController<Map<String, dynamic>>.broadcast();
+  final _serverEventsLive = StreamController<_ServerEventEnvelope>.broadcast();
+  final Queue<_ServerEventEnvelope> _serverEventsBuffer =
+      Queue<_ServerEventEnvelope>();
+  int _serverEventSeq = 0;
 
   SgtpConfig? _config;
   SgtpRpcClient? _rpc;
@@ -26,10 +30,47 @@ class SgtpConnectionService {
       status: SgtpConnectionStatus.disconnected);
 
   Stream<SgtpConnectionStateChanged> get events => _events.stream;
-  Stream<Map<String, dynamic>> get serverEvents => _serverEvents.stream;
+  Stream<Map<String, dynamic>> get serverEvents => Stream.multi((multi) {
+        final snapshotSeq = _serverEventSeq;
+        for (final env in _serverEventsBuffer) {
+          if (env.seq <= snapshotSeq) {
+            multi.add(env.event);
+          }
+        }
+        final sub = _serverEventsLive.stream.listen(
+          (env) {
+            if (env.seq <= snapshotSeq) return;
+            multi.add(env.event);
+          },
+          onError: multi.addError,
+          onDone: multi.close,
+        );
+        multi.onCancel = sub.cancel;
+      });
   SgtpConnectionStatus get status => _state.status;
   String? get lastError => _state.errorMessage;
   bool get isConnected => _transport?.isConnected == true;
+
+  void _pushServerEvent(Map<String, dynamic> event) {
+    final seq = ++_serverEventSeq;
+    final receivedAtUs = DateTime.now().microsecondsSinceEpoch;
+    final env = _ServerEventEnvelope(seq: seq, receivedAtUs: receivedAtUs, event: event);
+
+    _serverEventsBuffer.add(env);
+
+    const maxBuffered = 1500;
+    final cutoffUs =
+        receivedAtUs - const Duration(minutes: 10).inMicroseconds;
+    while (_serverEventsBuffer.length > maxBuffered) {
+      _serverEventsBuffer.removeFirst();
+    }
+    while (_serverEventsBuffer.isNotEmpty &&
+        _serverEventsBuffer.first.receivedAtUs < cutoffUs) {
+      _serverEventsBuffer.removeFirst();
+    }
+
+    _serverEventsLive.add(env);
+  }
 
   Future<void> configure(SgtpConfig config) async {
     if (_config != null && _isSameConnection(_config!, config)) {
@@ -88,6 +129,8 @@ class SgtpConnectionService {
     _rpc = null;
     _removeServerEventsCallback?.call();
     _removeServerEventsCallback = null;
+    _serverEventsBuffer.clear();
+    _serverEventSeq = 0;
     if (transport != null) {
       try {
         await transport.close();
@@ -132,7 +175,7 @@ class SgtpConnectionService {
       final rpc = SgtpRpcClient(transport);
       _removeServerEventsCallback?.call();
       _removeServerEventsCallback = rpc.registerEventsCallback((event) {
-        _serverEvents.add(event);
+        _pushServerEvent(event);
       });
       final authError = await rpc.authenticate(
         config.myPublicKey,
@@ -284,4 +327,16 @@ class SgtpConnectionService {
       _events.add(event);
     }
   }
+}
+
+class _ServerEventEnvelope {
+  final int seq;
+  final int receivedAtUs;
+  final Map<String, dynamic> event;
+
+  const _ServerEventEnvelope({
+    required this.seq,
+    required this.receivedAtUs,
+    required this.event,
+  });
 }
