@@ -1662,7 +1662,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
           peerAvatars: state.peerAvatars,
           userAvatarBytes: state.userAvatarBytes,
           readReceipts: state.readReceipts,
-          peerCount: state.peerUUIDs.length,
           onReply: isInteractable
               ? () {
                   context.read<ChatBloc>().add(ChatSetReply(msg));

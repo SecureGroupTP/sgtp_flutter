@@ -57,7 +57,6 @@ class MessageBubble extends StatelessWidget {
   final Map<String, Uint8List> peerAvatars;
   final Uint8List? userAvatarBytes;
   final Map<String, Set<String>> readReceipts;
-  final int peerCount;
 
   /// Called when user wants to reply to this message.
   final VoidCallback? onReply;
@@ -76,7 +75,6 @@ class MessageBubble extends StatelessWidget {
     this.peerAvatars = const {},
     this.userAvatarBytes,
     this.readReceipts = const {},
-    this.peerCount = 0,
     this.onReply,
     this.onReact,
     this.quickEmojis = const [
@@ -565,7 +563,8 @@ class MessageBubble extends StatelessWidget {
     ThemeData theme, {
     Offset? globalPosition,
   }) async {
-    final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final overlayBox =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
     final overlaySize = overlayBox?.size ?? MediaQuery.of(context).size;
     final clickPos =
         globalPosition ?? Offset(overlaySize.width / 2, overlaySize.height / 2);
@@ -726,9 +725,6 @@ class MessageBubble extends StatelessWidget {
   /// Read receipts indicator widget (content only, no layout wrapper).
   Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
-    final isMedia = message.type == MessageType.video ||
-        message.type == MessageType.videoNote ||
-        message.type == MessageType.voice;
 
     if (message.isSending) {
       return Row(mainAxisSize: MainAxisSize.min, children: [
@@ -748,7 +744,6 @@ class MessageBubble extends StatelessWidget {
       return const Icon(Icons.done, size: 14, color: Color(0xFF636366));
     }
 
-    final readByAll = peerCount > 0 && readers.length >= peerCount;
     final avatarCount = readers.length.clamp(0, 5);
     final avatarCircles = SizedBox(
       width: avatarCount * 10.0 + 4,
@@ -784,11 +779,9 @@ class MessageBubble extends StatelessWidget {
 
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(
-        readByAll ? (isMedia ? Icons.visibility : Icons.done_all) : Icons.done,
+        Icons.double_arrow_rounded,
         size: 14,
-        color: readByAll
-            ? const Color(0xFF0A84FF)
-            : const Color(0xFF8E8E93).withAlpha(180),
+        color: const Color(0xFF0A84FF),
       ),
       const SizedBox(width: 4),
       avatarCircles,
