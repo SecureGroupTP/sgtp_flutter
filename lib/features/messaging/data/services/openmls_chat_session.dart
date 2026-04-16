@@ -936,7 +936,8 @@ class OpenMlsChatSession implements ISgtpSession {
       });
       return _asBytes(encrypted);
     } catch (e) {
-      _log.warning('MLS encrypt failed; using transport envelope payload: {error}',
+      _log.warning(
+          'MLS encrypt failed; using transport envelope payload: {error}',
           parameters: {'error': e});
       return null;
     }
@@ -1040,6 +1041,22 @@ class OpenMlsChatSession implements ISgtpSession {
     };
     _attachChatAvatar(payload);
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
+    final localId = uuidBytesToHex(msgUUID);
+    final optimistic = ChatMessage(
+      id: localId,
+      senderUUID: uuidBytesToHex(_myUUID),
+      senderPublicKeyHex: myPubHex,
+      content: text,
+      receivedAt: DateTime.now(),
+      isFromHistory: false,
+      isFromMe: true,
+      isSending: true,
+      sendProgress: 0.0,
+      replyToId: replyToId,
+      replyToContent: replyToContent,
+      replyToSender: replyToSender,
+    );
+    _eventController.add(SgtpMessageReceived(message: optimistic));
     try {
       final nonce =
           await _sendApplicationPayload(payload, messageUUID: msgUUID);
@@ -1052,20 +1069,13 @@ class OpenMlsChatSession implements ISgtpSession {
         plaintext: plaintext,
       )));
       _eventController.add(SgtpMessageReceived(
-          message: ChatMessage(
-        id: uuidBytesToHex(msgUUID),
-        senderUUID: uuidBytesToHex(_myUUID),
-        senderPublicKeyHex: myPubHex,
-        content: text,
-        receivedAt: DateTime.now(),
-        isFromHistory: false,
-        isFromMe: true,
-        replyToId: replyToId,
-        replyToContent: replyToContent,
-        replyToSender: replyToSender,
-      )));
+        message: optimistic.copyWith(isSending: false, sendError: ''),
+      ));
     } catch (e) {
       _log.error('Failed to send message: {error}', parameters: {'error': e});
+      _eventController.add(SgtpMessageReceived(
+        message: optimistic.copyWith(isSending: false, sendError: '$e'),
+      ));
       _eventController.add(SgtpError(error: 'Failed to send message: $e'));
     }
   }
@@ -1162,6 +1172,7 @@ class OpenMlsChatSession implements ISgtpSession {
               id: fileId, isSending: true, sendProgress: 0.0)));
     }
 
+    var lastProgress = 0.0;
     try {
       final progressTimer = Stopwatch()..start();
       var lastProgressEmit = 0.0;
@@ -1207,6 +1218,7 @@ class OpenMlsChatSession implements ISgtpSession {
 
         // Report progress
         final progress = (i + 1) / totalChunks;
+        lastProgress = progress;
         onProgress?.call(progress);
         if (echoMessage != null) {
           final nowMs = progressTimer.elapsedMilliseconds;
@@ -1234,11 +1246,23 @@ class OpenMlsChatSession implements ISgtpSession {
       if (echoMessage != null) {
         _eventController.add(SgtpMessageReceived(
             message: echoMessage.copyWith(
-                id: fileId, isSending: false, sendProgress: 1.0)));
+                id: fileId,
+                isSending: false,
+                sendProgress: 1.0,
+                sendError: '')));
       }
     } catch (e) {
       _log.error('Failed to send {mediaType}: {error}',
           parameters: {'mediaType': mediaType, 'error': e});
+      if (echoMessage != null) {
+        _eventController.add(SgtpMessageReceived(
+            message: echoMessage.copyWith(
+          id: fileId,
+          isSending: false,
+          sendProgress: lastProgress,
+          sendError: '$e',
+        )));
+      }
       _eventController.add(SgtpError(error: 'Failed to send $mediaType: $e'));
     }
   }
@@ -1603,7 +1627,8 @@ class OpenMlsChatSession implements ISgtpSession {
       return;
     }
     final receiverHex = uuidBytesToHex(frame.receiverUUID);
-    final isBroadcast = _bytesEqual(frame.receiverUUID, SgtpConstants.broadcastUUID);
+    final isBroadcast =
+        _bytesEqual(frame.receiverUUID, SgtpConstants.broadcastUUID);
     if (!isBroadcast && receiverHex != myUUIDHex) {
       _log.warning(
         'Dropping frame addressed to another peer: receiver={receiver} local={local}',

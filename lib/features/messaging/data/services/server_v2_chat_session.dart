@@ -316,14 +316,16 @@ class ServerV2ChatSession implements ISgtpSession {
           plaintext: plaintext,
         ),
       );
-    } catch (_) {
+    } catch (e) {
       // Don't error the whole chat; just stop showing "sending" for this
       // message. A later reconnect may still deliver it.
       _dropPendingSelfAckForLocalId(localId);
       final failed = _pendingOutgoingMessagesByLocalId.remove(localId);
       if (failed != null) {
         _eventController.add(
-          SgtpMessageReceived(message: failed.copyWith(isSending: false)),
+          SgtpMessageReceived(
+            message: failed.copyWith(isSending: false, sendError: '$e'),
+          ),
         );
       }
       rethrow;
@@ -1064,56 +1066,75 @@ class ServerV2ChatSession implements ISgtpSession {
       );
     }
 
-    for (var index = 0; index < chunks; index++) {
-      final start = index * chunkSize;
-      final end = min(start + chunkSize, bytes.length);
-      final payload = <String, dynamic>{
-        'v': 1,
-        'type': mediaType,
-        'pub': myUUIDHex,
-        'file_id': fileId,
-        'name': name,
-        'mime': mime,
-        'size': bytes.length,
-        'data': base64.encode(bytes.sublist(start, end)),
-        if (chunks > 1) 'chunk': index,
-        if (chunks > 1) 'chunks': chunks,
-      };
-      _attachSenderAvatar(payload);
-      if (index == 0 && extraPayload != null && extraPayload.isNotEmpty) {
-        payload.addAll(extraPayload);
+    var lastProgress = 0.0;
+    try {
+      for (var index = 0; index < chunks; index++) {
+        final start = index * chunkSize;
+        final end = min(start + chunkSize, bytes.length);
+        final payload = <String, dynamic>{
+          'v': 1,
+          'type': mediaType,
+          'pub': myUUIDHex,
+          'file_id': fileId,
+          'name': name,
+          'mime': mime,
+          'size': bytes.length,
+          'data': base64.encode(bytes.sublist(start, end)),
+          if (chunks > 1) 'chunk': index,
+          if (chunks > 1) 'chunks': chunks,
+        };
+        _attachSenderAvatar(payload);
+        if (index == 0 && extraPayload != null && extraPayload.isNotEmpty) {
+          payload.addAll(extraPayload);
+        }
+        await _sendPayload(payload);
+        final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
+        unawaited(
+          _persistHistoryRecord(
+            senderUUID: _config.myPublicKey,
+            messageUUID: generateUUIDv7(),
+            timestampMs: DateTime.now().millisecondsSinceEpoch,
+            plaintext: plain,
+          ),
+        );
+        lastProgress = (index + 1) / chunks;
+        if (echoMessage != null) {
+          _eventController.add(
+            SgtpMediaProgress(
+              echoId: fileId,
+              messageId: fileId,
+              progress: lastProgress,
+            ),
+          );
+        }
       }
-      await _sendPayload(payload);
-      final plain = Uint8List.fromList(utf8.encode(json.encode(payload)));
-      unawaited(
-        _persistHistoryRecord(
-          senderUUID: _config.myPublicKey,
-          messageUUID: generateUUIDv7(),
-          timestampMs: DateTime.now().millisecondsSinceEpoch,
-          plaintext: plain,
-        ),
-      );
+
       if (echoMessage != null) {
         _eventController.add(
-          SgtpMediaProgress(
-            echoId: fileId,
-            messageId: fileId,
-            progress: (index + 1) / chunks,
+          SgtpMessageReceived(
+            message: echoMessage.copyWith(
+              id: fileId,
+              isSending: false,
+              sendProgress: 1,
+              sendError: '',
+            ),
           ),
         );
       }
-    }
-
-    if (echoMessage != null) {
-      _eventController.add(
-        SgtpMessageReceived(
-          message: echoMessage.copyWith(
-            id: fileId,
-            isSending: false,
-            sendProgress: 1,
+    } catch (e) {
+      if (echoMessage != null) {
+        _eventController.add(
+          SgtpMessageReceived(
+            message: echoMessage.copyWith(
+              id: fileId,
+              isSending: false,
+              sendProgress: lastProgress,
+              sendError: '$e',
+            ),
           ),
-        ),
-      );
+        );
+      }
+      rethrow;
     }
   }
 
@@ -1647,7 +1668,12 @@ class ServerV2ChatSession implements ISgtpSession {
               _pendingOutgoingMessagesByLocalId.remove(pending.localMessageId);
           if (msg != null) {
             _eventController.add(
-              SgtpMessageReceived(message: msg.copyWith(isSending: false)),
+              SgtpMessageReceived(
+                message: msg.copyWith(
+                  isSending: false,
+                  sendError: 'No ACK from server',
+                ),
+              ),
             );
           }
         }

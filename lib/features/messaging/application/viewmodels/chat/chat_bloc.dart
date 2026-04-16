@@ -373,15 +373,19 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onSendMessage(
       ChatSendMessage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendMessage(
-      event.text,
-      replyToId: event.replyToId,
-      replyToContent: event.replyToContent,
-      replyToSender: event.replyToSender,
-    );
-    await _touchChatActivity();
-    // Clear reply after send
-    if (event.replyToId != null) emit(state.copyWith(clearReply: true));
+    try {
+      await _client!.sendMessage(
+        event.text,
+        replyToId: event.replyToId,
+        replyToContent: event.replyToContent,
+        replyToSender: event.replyToSender,
+      );
+      await _touchChatActivity();
+      // Clear reply after send
+      if (event.replyToId != null) emit(state.copyWith(clearReply: true));
+    } catch (_) {
+      // UI will show per-message send error for optimistic messages.
+    }
   }
 
   void _onUpdateNicknames(ChatUpdateNicknames event, Emitter<ChatState> emit) {
@@ -502,29 +506,37 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onSendImage(
       ChatSendImage event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendImage(event.bytes, event.name, event.mime);
-    await _touchChatActivity();
+    try {
+      await _client!.sendImage(event.bytes, event.name, event.mime);
+      await _touchChatActivity();
+    } catch (_) {}
   }
 
   Future<void> _onSendVideo(
       ChatSendVideo event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendVideo(event.xFile, event.name, event.mime);
-    await _touchChatActivity();
+    try {
+      await _client!.sendVideo(event.xFile, event.name, event.mime);
+      await _touchChatActivity();
+    } catch (_) {}
   }
 
   Future<void> _onSendVoice(
       ChatSendVoice event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendVoice(event.bytes, event.mime);
-    await _touchChatActivity();
+    try {
+      await _client!.sendVoice(event.bytes, event.mime);
+      await _touchChatActivity();
+    } catch (_) {}
   }
 
   Future<void> _onSendVideoNote(
       ChatSendVideoNote event, Emitter<ChatState> emit) async {
     if (_client == null || state.status != ChatStatus.ready) return;
-    await _client!.sendVideoNote(event.bytes, event.mime);
-    await _touchChatActivity();
+    try {
+      await _client!.sendVideoNote(event.bytes, event.mime);
+      await _touchChatActivity();
+    } catch (_) {}
   }
 
   Future<void> _onSendVideoNoteFile(
@@ -551,7 +563,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       await _touchChatActivity();
     } catch (e) {
       _logVideo.error('[ChatBloc] Video note send failed: $e');
-      rethrow;
+      // UI will show per-message send error for optimistic messages.
     }
   }
 

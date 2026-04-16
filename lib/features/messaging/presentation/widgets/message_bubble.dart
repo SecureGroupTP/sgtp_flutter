@@ -91,6 +91,14 @@ class MessageBubble extends StatelessWidget {
     ],
   });
 
+  bool _isMediaMessage(ChatMessage message) {
+    return message.type == MessageType.image ||
+        message.type == MessageType.gif ||
+        message.type == MessageType.video ||
+        message.type == MessageType.videoNote ||
+        message.type == MessageType.voice;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -379,7 +387,7 @@ class MessageBubble extends StatelessWidget {
           children: [
             bubbleWithReply,
             // Sending progress overlay on innerBubble only
-            if (message.isSending)
+            if (message.isSending && _isMediaMessage(message))
               Positioned.fill(
                 child: ClipRRect(
                   borderRadius: BorderRadius.only(
@@ -725,8 +733,26 @@ class MessageBubble extends StatelessWidget {
   /// Read receipts indicator widget (content only, no layout wrapper).
   Widget _readReceiptsContent(ThemeData theme, ColorScheme cs) {
     final readers = readReceipts[message.id] ?? message.readBy;
+    final isMedia = message.type == MessageType.image ||
+        message.type == MessageType.gif ||
+        message.type == MessageType.video ||
+        message.type == MessageType.videoNote ||
+        message.type == MessageType.voice;
+
+    if (message.sendError.trim().isNotEmpty) {
+      return Tooltip(
+        message: message.sendError.trim(),
+        child: const Icon(
+          Icons.error_outline_rounded,
+          size: 14,
+          color: Color(0xFFFF3B30),
+        ),
+      );
+    }
 
     if (message.isSending) {
+      final percent =
+          (message.sendProgress.clamp(0.0, 1.0) * 100).round().clamp(0, 100);
       return Row(mainAxisSize: MainAxisSize.min, children: [
         SizedBox(
           width: 12,
@@ -734,9 +760,13 @@ class MessageBubble extends StatelessWidget {
           child: CircularProgressIndicator(
               strokeWidth: 1.5, color: const Color(0xFF8E8E93).withAlpha(120)),
         ),
-        const SizedBox(width: 4),
-        const Text('Sending…',
-            style: TextStyle(fontSize: 10, color: Color(0xFF8E8E93))),
+        if (isMedia) ...[
+          const SizedBox(width: 4),
+          Text(
+            '$percent%',
+            style: const TextStyle(fontSize: 10, color: Color(0xFF8E8E93)),
+          ),
+        ],
       ]);
     }
 

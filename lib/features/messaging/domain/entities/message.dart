@@ -95,6 +95,10 @@ class ChatMessage extends Equatable {
   /// Upload progress 0.0–1.0, only meaningful when isSending == true.
   final double sendProgress;
 
+  /// Non-empty when sending failed locally (optimistic message could not be sent
+  /// or confirmed). Used for UI indication only.
+  final String sendError;
+
   const ChatMessage({
     required this.id,
     required this.senderUUID,
@@ -120,6 +124,7 @@ class ChatMessage extends Equatable {
     this.reactions = const {},
     this.isSending = false,
     this.sendProgress = 0.0,
+    this.sendError = '',
   });
 
   ChatMessage copyWith({
@@ -147,6 +152,7 @@ class ChatMessage extends Equatable {
     Map<String, Set<String>>? reactions,
     bool? isSending,
     double? sendProgress,
+    String? sendError,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -173,6 +179,7 @@ class ChatMessage extends Equatable {
       reactions: reactions ?? this.reactions,
       isSending: isSending ?? this.isSending,
       sendProgress: sendProgress ?? this.sendProgress,
+      sendError: sendError ?? this.sendError,
     );
   }
 
@@ -202,5 +209,6 @@ class ChatMessage extends Equatable {
         reactions,
         isSending,
         sendProgress,
+        sendError,
       ];
 }
