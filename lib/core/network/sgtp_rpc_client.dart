@@ -346,6 +346,15 @@ class SgtpRpcClient {
       CborString() => requestIdValue.toString(),
       _ => null,
     };
+    if (requestId == null || requestId.isEmpty) {
+      _log.warning(
+        'RPC event received without requestId. EventType: {eventType}. Parameters: {parameters}',
+        parameters: {
+          'eventType': eventTypeValue.toString(),
+          'parameters': _jsonEncode(_cborToJsonLog(paramsValue)),
+        },
+      );
+    }
     final event = <String, dynamic>{
       if (requestId != null) 'requestId': requestId,
       'eventType': eventTypeValue.toString(),
@@ -360,16 +369,46 @@ class SgtpRpcClient {
       },
     );
     for (final callback in List<void Function(Map<String, dynamic> event)>.from(
-        _eventCallbacks.values)) {
+      _eventCallbacks.values,
+    )) {
       try {
         callback(event);
       } catch (e, st) {
         Zone.current.handleUncaughtError(e, st);
       }
     }
+    if (requestId != null && requestId.isNotEmpty) {
+      unawaited(_acknowledgeEvent(requestId, eventTypeValue.toString()));
+    }
   }
 
   // ── Logging ────────────────────────────────────────────────────────────────
+
+  Future<void> _acknowledgeEvent(String eventId, String eventType) async {
+    try {
+      await callRpc(AcknowledgeEventRequest(eventId: eventId));
+      _log.debug(
+        'RPC event acknowledged. EventType: {eventType}. EventId: {eventIdShort}',
+        parameters: {
+          'eventType': eventType,
+          'eventIdShort':
+              eventId.length < 8 ? eventId : eventId.substring(0, 8),
+        },
+      );
+    } catch (e, st) {
+      _log.warning(
+        'RPC event acknowledgment failed. EventType: {eventType}. EventId: {eventIdShort}. Error: {error}',
+        parameters: {
+          'eventType': eventType,
+          'eventIdShort':
+              eventId.length < 8 ? eventId : eventId.substring(0, 8),
+          'error': e,
+        },
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
 
   /// Recursively converts a [CborValue] to a JSON-encodable value.
   /// Byte arrays are rendered as hex strings with truncation for long arrays.

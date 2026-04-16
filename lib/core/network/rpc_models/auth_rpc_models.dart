@@ -156,3 +156,24 @@ class UnsubscribeFromEventsResponse {
         unsubscribedAtUs: parseTimestampUs(m['unsubscribedAt']),
       );
 }
+
+// ── acknowledgeEvent ────────────────────────────────────────────────────────
+
+class AcknowledgeEventRequest extends RpcRequest {
+  final String eventId;
+
+  const AcknowledgeEventRequest({required this.eventId});
+
+  @override
+  String get method => 'acknowledgeEvent';
+
+  @override
+  Map<String, dynamic> toMap() => {'eventId': eventId};
+}
+
+class AcknowledgeEventResponse {
+  const AcknowledgeEventResponse();
+
+  static AcknowledgeEventResponse fromMap(Map<String, dynamic> _) =>
+      const AcknowledgeEventResponse();
+}
