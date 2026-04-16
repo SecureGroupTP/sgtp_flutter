@@ -886,7 +886,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return List<String>.from(s.accountIdsList);
   }
 
-  NodeConfig? _representativeNodeForAccount(String accountId, SettingsViewState s) {
+  NodeConfig? _representativeNodeForAccount(
+      String accountId, SettingsViewState s) {
     final id = accountId.trim();
     if (id.isEmpty) return null;
     for (final n in s.nodes) {
@@ -1187,14 +1188,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onBack: () => setState(() => _activeSection = null),
                 ),
           body: ListView(
-            padding:
-                EdgeInsets.only(top: activeSection == null ? 0 : 20, bottom: 100),
+            padding: EdgeInsets.only(
+                top: activeSection == null ? 0 : 20, bottom: 100),
             children: activeSection == null
                 ? [
                     _buildAccountSwitcher(state),
                     _buildProfileSection(state),
                     _SettingsGroup(
-                        title: 'Server Connection', child: _buildNetworkCard(state)),
+                        title: 'Server Connection',
+                        child: _buildNetworkCard(state)),
                     _buildSettingsHub(),
                     const SizedBox(height: 16),
                   ]
@@ -1280,7 +1282,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  List<Widget> _sectionChildren(_SettingsSection section, SettingsViewState state) => switch (section) {
+  List<Widget> _sectionChildren(
+          _SettingsSection section, SettingsViewState state) =>
+      switch (section) {
         _SettingsSection.key => [
             _SettingsGroup(
               title: 'Private Key (Ed25519)',
@@ -1480,12 +1484,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              style:
+                  const TextStyle(fontSize: 14, color: AppColors.textPrimary),
             ),
           ),
           Text(
             _formatBytes(bytes),
-            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            style:
+                const TextStyle(fontSize: 14, color: AppColors.textSecondary),
           ),
         ],
       ),
@@ -1537,8 +1543,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 Text(
                                   'Failed to load usage stats: ${snap.error}',
                                   style: const TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.statusRed),
+                                      fontSize: 14, color: AppColors.statusRed),
                                 ),
                                 const SizedBox(height: 16),
                                 AppSheetButton(
@@ -1975,8 +1980,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildAccountSwitcher(SettingsViewState state) {
     final accountIds = _accountIds(state);
     final activeAccountId = state.activeAccountId;
-    final activeName =
-        activeAccountId != null ? _accountName(activeAccountId, state) : 'No accounts';
+    final activeName = activeAccountId != null
+        ? _accountName(activeAccountId, state)
+        : 'No accounts';
     final activeAvatar =
         activeAccountId != null ? _accountAvatar(activeAccountId, state) : null;
     final nickname = state.nickname;
@@ -2143,8 +2149,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Private key card ──────────────────────────────────────────────────────
 
   Widget _buildPrivateKeyCard(SettingsViewState state) {
-    final pubHex =
-        state.myPublicKey?.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final pubHex = state.myPublicKey
+        ?.map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2170,8 +2177,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.key_outlined,
               label: 'Generate',
               loading: state.isGenerating,
-              onPressed:
-                  (state.isLoading || state.isGenerating) ? null : _generatePrivateKey,
+              onPressed: (state.isLoading || state.isGenerating)
+                  ? null
+                  : _generatePrivateKey,
             ),
             _ActionButton(
               icon: Icons.content_paste_outlined,
@@ -2932,8 +2940,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.archive_outlined,
           label: 'Create backup',
           loading: state.isCreatingBackup,
-          onPressed:
-              (state.isCreatingBackup || state.isRestoringBackup) ? null : _makeBackup,
+          onPressed: (state.isCreatingBackup || state.isRestoringBackup)
+              ? null
+              : _makeBackup,
         ),
         const SizedBox(height: 16),
         const Text(
@@ -3531,6 +3540,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     if (!mounted || opts == null) return;
     setState(() {
       _serverOptions = opts;
+      _coerceTransportAndTls();
     });
   }
 
@@ -3559,7 +3569,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
       setState(() {
         _serverOptions = opts;
         _optionsLoading = false;
-        if (_useTls && !_tlsAvailable()) _useTls = false;
+        _coerceTransportAndTls();
       });
     } catch (e) {
       if (!mounted) return;
@@ -3570,8 +3580,54 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
     }
   }
 
-  bool _tlsAvailable() =>
-      _serverOptions?.supports(_transport, tls: true) == true;
+  bool _transportAvailableForServer(SgtpTransportFamily family) {
+    final opts = _serverOptions;
+    if (opts == null) return true;
+    return opts.supports(family, tls: false) ||
+        opts.supports(family, tls: true);
+  }
+
+  List<SgtpTransportFamily> _availableTransportFamiliesForServer() {
+    return availableTransportFamilies
+        .where(_transportAvailableForServer)
+        .toList();
+  }
+
+  bool _tlsToggleEnabled() {
+    final opts = _serverOptions;
+    if (opts == null) return true;
+    final hasPlain = opts.supports(_transport, tls: false);
+    final hasTls = opts.supports(_transport, tls: true);
+    return hasPlain && hasTls;
+  }
+
+  void _coerceTransportAndTls() {
+    final opts = _serverOptions;
+    if (opts == null) return;
+
+    final families = _availableTransportFamiliesForServer();
+    final effectiveFamilies =
+        families.isEmpty ? availableTransportFamilies : families;
+    if (effectiveFamilies.isNotEmpty &&
+        !effectiveFamilies.contains(_transport)) {
+      _transport = effectiveFamilies.first;
+    }
+
+    final hasPlain = opts.supports(_transport, tls: false);
+    final hasTls = opts.supports(_transport, tls: true);
+    if (!hasPlain && !hasTls) return;
+
+    if (!hasPlain && hasTls) {
+      _useTls = true;
+      return;
+    }
+    if (hasPlain && !hasTls) {
+      _useTls = false;
+      return;
+    }
+    if (_useTls && !hasTls) _useTls = false;
+    if (!_useTls && !hasPlain) _useTls = true;
+  }
 
   void _save() {
     final name = _nameCtrl.text.trim();
@@ -3629,6 +3685,10 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final transportsForServer = _availableTransportFamiliesForServer();
+    final transportOptions = transportsForServer.isEmpty
+        ? availableTransportFamilies
+        : transportsForServer;
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -3665,7 +3725,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
               StyledDropdown<SgtpTransportFamily>(
                 icon: Icons.cable_outlined,
                 options: [
-                  for (final f in availableTransportFamilies)
+                  for (final f in transportOptions)
                     DropdownOption(
                       value: f,
                       label: switch (f) {
@@ -3678,7 +3738,7 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
                 value: _transport,
                 onChanged: (v) => setState(() {
                   _transport = v;
-                  if (_useTls && !_tlsAvailable()) _useTls = false;
+                  _coerceTransportAndTls();
                 }),
               ),
               const SizedBox(height: 12),
@@ -3705,8 +3765,11 @@ class _NodeEditorSheetState extends State<_NodeEditorSheet> {
                     ),
                     Switch(
                       value: _useTls,
-                      onChanged: _tlsAvailable()
-                          ? (v) => setState(() => _useTls = v)
+                      onChanged: _tlsToggleEnabled()
+                          ? (v) => setState(() {
+                                _useTls = v;
+                                _coerceTransportAndTls();
+                              })
                           : null,
                       activeColor: Colors.white,
                       activeTrackColor: const Color(0xFF34C759),
