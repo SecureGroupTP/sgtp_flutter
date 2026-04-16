@@ -121,6 +121,7 @@ class ServerV2ChatSession implements ISgtpSession {
   String? _directPeerPublicKeyHexOverride;
   Uint8List? _userAvatarBytes;
   Future<void>? _directWelcomeRecoveryInFlight;
+  Future<void>? _badEpochRecoveryInFlight;
   Timer? _persistMlsStateTimer;
   late final Uint8List _roomUUID;
   late final String _deviceId;
@@ -185,7 +186,12 @@ class ServerV2ChatSession implements ISgtpSession {
       _seedKnownPeerPublicKeys();
       await _bootstrapRoomAndMls();
       _scheduleInviteRetry();
-      _emitReadyIfNeeded(force: _mlsGroupReady || _whitelist.isEmpty);
+      // Always leave the "handshaking" UI state once RPC is connected.
+      //
+      // MLS group readiness is a separate concern (invitation/welcome delivery
+      // can lag behind). Without this, non-master peers can get stuck in an
+      // infinite handshake until another participant opens the chat.
+      _emitReadyIfNeeded(force: true);
     } catch (e) {
       _log.error('connect failed: {error}', parameters: {'error': e});
       _eventController.add(SgtpError(error: 'Connection failed: $e'));
@@ -531,8 +537,9 @@ class ServerV2ChatSession implements ISgtpSession {
   Future<void> _emitRecordFromHistory(PersistedHistoryRecord record) async {
     final senderHex = _hex(record.senderUUID);
     final isFromMe = senderHex == myUUIDHex;
-    final messageId =
-        isFromMe ? uuidBytesToHex(record.messageUUID) : _uuidString(record.messageUUID);
+    final messageId = isFromMe
+        ? uuidBytesToHex(record.messageUUID)
+        : _uuidString(record.messageUUID);
     final ts = record.timestamp > 0
         ? DateTime.fromMillisecondsSinceEpoch(record.timestamp)
         : DateTime.now();
@@ -1215,7 +1222,10 @@ class ServerV2ChatSession implements ISgtpSession {
     _pendingInboundMessages.clear();
     _log.debug(
       'Draining queued MLS messages room={roomId} count={count}',
-      parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'count': queued.length},
+      parameters: {
+        'roomId': _remoteRoomId ?? roomUUIDHex,
+        'count': queued.length
+      },
     );
     for (final pending in queued) {
       final msg = pending.event;
@@ -1462,6 +1472,9 @@ class ServerV2ChatSession implements ISgtpSession {
         final event = _map(value);
         final kind = event['kind'] as String?;
         if (kind == 'MessageReceived') {
+          // Persist after every successful decrypt to keep ratchets/epochs in
+          // sync across restarts and background kills.
+          _schedulePersistMlsState();
           return _asBytes(event['message_plaintext']);
         }
         if (kind == 'GroupJoined' ||
@@ -1474,6 +1487,7 @@ class ServerV2ChatSession implements ISgtpSession {
         }
       }
       await _maybeMergePendingCommit();
+      _schedulePersistMlsState();
     } catch (e) {
       if (_isCannotDecryptOwnMessagesError(e)) {
         _log.debug(
@@ -1494,17 +1508,122 @@ class ServerV2ChatSession implements ISgtpSession {
           'MLS incoming failed due to bad epoch for room {roomId}: {error}',
           parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
         );
-        // Avoid destructive local state resets: for direct rooms the welcome may
-        // be ephemeral server-side. Dropping local group state can trap the
-        // client in a permanent "fetchWelcome not_found" loop.
-        if (_isDirectRoom && _shouldRecoverDirectWelcomeAsOwner) {
-          _ensureDirectWelcomeRecovery();
+        if (_isDirectRoom) {
+          // Avoid destructive local state resets: for direct rooms the welcome may
+          // be ephemeral server-side. Dropping local group state can trap the
+          // client in a permanent "fetchWelcome not_found" loop.
+          if (_shouldRecoverDirectWelcomeAsOwner) {
+            _ensureDirectWelcomeRecovery();
+          }
+        } else {
+          // Group rooms can recover by re-joining from stored welcome or by
+          // being re-invited (fresh key packages).
+          _ensureBadEpochRecovery();
         }
         return null;
       }
       _eventController.add(SgtpError(error: 'MLS incoming failed: $e'));
     }
     return null;
+  }
+
+  void _ensureBadEpochRecovery() {
+    final inFlight = _badEpochRecoveryInFlight;
+    if (inFlight != null) return;
+    final future = _recoverFromBadEpoch();
+    _badEpochRecoveryInFlight = future;
+    unawaited(future.whenComplete(() {
+      if (identical(_badEpochRecoveryInFlight, future)) {
+        _badEpochRecoveryInFlight = null;
+      }
+    }));
+  }
+
+  Future<void> _recoverFromBadEpoch() async {
+    final mls = _mls;
+    final client = _rpcChat;
+    final remoteRoomId = _remoteRoomId;
+    if (mls == null || client == null) return;
+    if (remoteRoomId == null || remoteRoomId.isEmpty) return;
+
+    try {
+      _log.warning(
+        'Attempting MLS bad-epoch recovery for room {roomId}',
+        parameters: {'roomId': remoteRoomId},
+      );
+
+      // Drop the local group and attempt to re-join from server-stored welcome.
+      // This is non-destructive for group rooms: the server retains welcomes
+      // for invited devices and the master can re-invite using fresh key
+      // packages if needed.
+      _mlsGroupReady = false;
+      try {
+        mls.dropGroupSync(_mlsGroupIdJson);
+      } catch (_) {}
+      _mlsGroupCreated = false;
+      _schedulePersistMlsState();
+
+      // Upload fresh key packages so the master can re-invite this device even
+      // if it has already invited a previous key package fingerprint.
+      await _uploadFreshKeyPackages();
+
+      await _joinFromStoredWelcome(reportMissing: false);
+      if (_mlsGroupReady) {
+        await _drainPendingInboundMessages();
+        return;
+      }
+
+      // If welcome is not available yet, keep the chat usable (UI-ready) while
+      // we wait for a re-invite.
+      if (!_eventController.isClosed) {
+        _eventController.add(
+          SgtpError(
+            error:
+                'MLS state is out of sync (bad epoch). Waiting for a fresh invite from the chat owner.',
+          ),
+        );
+      }
+    } catch (e, st) {
+      _log.warning(
+        'Bad-epoch recovery failed for room {roomId}: {error}',
+        parameters: {'roomId': remoteRoomId, 'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
+  Future<void> _uploadFreshKeyPackages() async {
+    final client = _rpcChat;
+    final mls = _mls;
+    if (client == null || mls == null) return;
+    try {
+      final raw = _map(mls.createKeyPackagesSync(8));
+      final generated = _asObjectList(raw['keypackages']);
+      if (generated.isEmpty) return;
+      final expiresAt = DateTime.now().toUtc().add(const Duration(days: 30));
+      await client.uploadKeyPackages(
+        generated
+            .map((item) => KeyPackageDto(
+                  keyPackageBytes: _asBytes(item),
+                  isLastResort: false,
+                  expiresAtUs: expiresAt.microsecondsSinceEpoch,
+                ))
+            .toList(),
+      );
+      try {
+        mls.markKeyPackagesUploadedSync(raw);
+      } catch (_) {}
+      _keyPackagesUploaded = true;
+      _schedulePersistMlsState();
+    } catch (e, st) {
+      _log.warning(
+        'Fresh key package upload failed during recovery: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
   }
 
   bool _isGenerationTooOldError(Object error) {
@@ -1922,11 +2041,6 @@ class ServerV2ChatSession implements ISgtpSession {
 
   void _emitReadyIfNeeded({required bool force}) {
     if (_readyEmitted || !force) return;
-    if (_isDirectRoom &&
-        _directRoomNeedsBootstrap &&
-        !_directRoomInviteComplete) {
-      return;
-    }
     _readyEmitted = true;
     _eventController.add(
       SgtpReady(isMaster: _isMaster, roomUUIDHex: roomUUIDHex),
