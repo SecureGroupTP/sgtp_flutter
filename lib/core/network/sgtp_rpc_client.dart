@@ -339,14 +339,14 @@ class SgtpRpcClient {
     if (eventTypeValue is! CborString || paramsValue is! CborMap) {
       return;
     }
-    final requestId = switch (requestIdValue) {
-      CborBytes() => requestIdValue.bytes
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join(),
-      CborString() => requestIdValue.toString(),
+    final requestIdBytes = switch (requestIdValue) {
+      CborBytes() => Uint8List.fromList(requestIdValue.bytes),
+      CborString() =>
+        Uint8List.fromList(hexToBytes(requestIdValue.toString().replaceAll('-', ''))),
       _ => null,
     };
-    if (requestId == null || requestId.isEmpty) {
+    final requestId = requestIdBytes == null ? null : uuidBytesToHex(requestIdBytes);
+    if (requestIdBytes == null || requestId == null || requestId.isEmpty) {
       _log.warning(
         'RPC event received without requestId. EventType: {eventType}. Parameters: {parameters}',
         parameters: {
@@ -377,14 +377,15 @@ class SgtpRpcClient {
         Zone.current.handleUncaughtError(e, st);
       }
     }
-    if (requestId != null && requestId.isNotEmpty) {
-      unawaited(_acknowledgeEvent(requestId, eventTypeValue.toString()));
+    if (requestIdBytes != null && requestId != null && requestId.isNotEmpty) {
+      unawaited(_acknowledgeEvent(requestIdBytes, eventTypeValue.toString()));
     }
   }
 
   // ── Logging ────────────────────────────────────────────────────────────────
 
-  Future<void> _acknowledgeEvent(String eventId, String eventType) async {
+  Future<void> _acknowledgeEvent(Uint8List eventId, String eventType) async {
+    final eventIdHex = uuidBytesToHex(eventId);
     try {
       await callRpc(AcknowledgeEventRequest(eventId: eventId));
       _log.debug(
@@ -392,7 +393,7 @@ class SgtpRpcClient {
         parameters: {
           'eventType': eventType,
           'eventIdShort':
-              eventId.length < 8 ? eventId : eventId.substring(0, 8),
+              eventIdHex.length < 8 ? eventIdHex : eventIdHex.substring(0, 8),
         },
       );
     } catch (e, st) {
@@ -401,7 +402,7 @@ class SgtpRpcClient {
         parameters: {
           'eventType': eventType,
           'eventIdShort':
-              eventId.length < 8 ? eventId : eventId.substring(0, 8),
+              eventIdHex.length < 8 ? eventIdHex : eventIdHex.substring(0, 8),
           'error': e,
         },
         error: e,

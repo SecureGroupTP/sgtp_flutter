@@ -160,7 +160,7 @@ class UnsubscribeFromEventsResponse {
 // ── acknowledgeEvent ────────────────────────────────────────────────────────
 
 class AcknowledgeEventRequest extends RpcRequest {
-  final String eventId;
+  final Uint8List eventId;
 
   const AcknowledgeEventRequest({required this.eventId});
 
