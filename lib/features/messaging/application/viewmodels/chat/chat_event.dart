@@ -19,18 +19,6 @@ class ChatConnect extends ChatEvent {
   List<Object?> get props => [config, nicknames];
 }
 
-/// Deprecated legacy mode: opens chat from persisted history without network
-/// connection. Main UI flows should use [ChatConnect] instead.
-@Deprecated(
-    'Use ChatConnect for main UI flows; offline preview is legacy-only.')
-class ChatOpenOffline extends ChatEvent {
-  final SgtpConfig config;
-  final Map<String, String> nicknames;
-  const ChatOpenOffline(this.config, {this.nicknames = const {}});
-  @override
-  List<Object?> get props => [config, nicknames];
-}
-
 /// Reconnect using the last known config (e.g. after disconnect).
 class ChatReconnect extends ChatEvent {
   const ChatReconnect();
@@ -39,6 +27,19 @@ class ChatReconnect extends ChatEvent {
 /// Probe the existing connection after app resume without forcing reconnect.
 class ChatProbeConnection extends ChatEvent {
   const ChatProbeConnection();
+}
+
+/// Marks all currently loaded incoming messages as read (resets unread badge).
+class ChatMarkAllRead extends ChatEvent {
+  const ChatMarkAllRead();
+}
+
+/// Tells the bloc whether the chat page is currently visible to the user.
+class ChatSetVisibility extends ChatEvent {
+  final bool isVisible;
+  const ChatSetVisibility(this.isVisible);
+  @override
+  List<Object?> get props => [isVisible];
 }
 
 class ChatSendMessage extends ChatEvent {

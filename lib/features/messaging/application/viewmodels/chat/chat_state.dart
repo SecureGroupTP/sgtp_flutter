@@ -51,7 +51,7 @@ class ChatState extends Equatable {
   /// Upload progress 0.0–1.0 (null = idle).
   final double? uploadProgress;
 
-  /// Emoji reactions: messageId → emoji → Set<senderUUID> (local + received).
+  /// Emoji reactions: messageId → emoji → Set(senderUUID) (local + received).
   final Map<String, Map<String, Set<String>>> reactions;
 
   /// True while an older history page is being loaded from local storage.
@@ -59,6 +59,9 @@ class ChatState extends Equatable {
 
   /// Whether there are older local history messages available.
   final bool hasMoreHistory;
+
+  /// Count of unread incoming messages while the chat page is not visible.
+  final int unreadCount;
 
   const ChatState({
     this.status = ChatStatus.connecting,
@@ -84,6 +87,7 @@ class ChatState extends Equatable {
     this.reactions = const {},
     this.isLoadingHistory = false,
     this.hasMoreHistory = true,
+    this.unreadCount = 0,
   });
 
   ChatState copyWith({
@@ -110,6 +114,7 @@ class ChatState extends Equatable {
     Map<String, Map<String, Set<String>>>? reactions,
     bool? isLoadingHistory,
     bool? hasMoreHistory,
+    int? unreadCount,
     bool clearError = false,
     bool clearAvatar = false,
     bool clearUserAvatar = false,
@@ -144,6 +149,7 @@ class ChatState extends Equatable {
       reactions: reactions ?? this.reactions,
       isLoadingHistory: isLoadingHistory ?? this.isLoadingHistory,
       hasMoreHistory: hasMoreHistory ?? this.hasMoreHistory,
+      unreadCount: unreadCount ?? this.unreadCount,
     );
   }
 
@@ -172,5 +178,6 @@ class ChatState extends Equatable {
         reactions,
         isLoadingHistory,
         hasMoreHistory,
+        unreadCount,
       ];
 }

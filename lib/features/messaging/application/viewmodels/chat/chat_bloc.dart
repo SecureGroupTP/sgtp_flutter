@@ -22,6 +22,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   DateTime? _lastActivityPersistAt;
   static const int _historyBatchSize = 100;
   String _activeServerAddress = '';
+  String _directPeerPublicKeyHex = '';
   int _persistedHistoryLoaded = 0;
 
   // Keep last config for reconnect
@@ -33,6 +34,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   /// reconnect.
   int _sessionId = 0;
   Map<String, Uint8List> _contactAvatarsByPub = const {};
+  bool _isVisible = false;
 
   ChatBloc({
     required String accountId,
@@ -42,9 +44,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         super(const ChatState()) {
     _sessionFactory = sessionFactory;
     on<ChatConnect>(_onConnect);
-    on<ChatOpenOffline>(_onOpenOffline);
     on<ChatReconnect>(_onReconnect);
     on<ChatProbeConnection>(_onProbeConnection);
+    on<ChatMarkAllRead>(_onMarkAllRead);
+    on<ChatSetVisibility>(_onSetVisibility);
     on<ChatSendMessage>(_onSendMessage);
     on<ChatSendImage>(_onSendImage);
     on<ChatSendVideo>(_onSendVideo);
@@ -77,102 +80,6 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _onConnect(ChatConnect event, Emitter<ChatState> emit) async {
     _lastConnectEvent = event;
     await _doConnect(event, emit);
-  }
-
-  Future<void> _onOpenOffline(
-      ChatOpenOffline event, Emitter<ChatState> emit) async {
-    final oldSub = _eventSub;
-    final oldClient = _client;
-    _eventSub = null;
-    _client = null;
-    await oldSub?.cancel();
-    await oldClient?.close();
-
-    // Keep the connect payload so "Connect" can bring this room online later.
-    final connectEvent = ChatConnect(event.config, nicknames: event.nicknames);
-    _lastConnectEvent = connectEvent;
-
-    _activeServerAddress = event.config.serverAddr.trim();
-    _persistedHistoryLoaded = 0;
-
-    final roomUUIDHex = event.config.roomUUID
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
-    final pubHex = event.config.myPublicKey
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
-
-    // Prefer persisted metadata for title/avatar in offline preview.
-    String chatName = event.config.chatName;
-    Uint8List? chatAvatar = event.config.chatAvatarBytes;
-    var isDirectChat = false;
-    try {
-      final saved = await _metaRepo.loadChat(
-        roomUUIDHex,
-        serverAddress: _activeServerAddress,
-      );
-      if (saved != null) {
-        chatName = saved.name;
-        chatAvatar = saved.avatarBytes;
-        isDirectChat = saved.isDirectMessage;
-        _log.info(
-            '[ChatBloc] OpenOffline room={room} direct={direct} name="{name}" avatar={avatarSize}B',
-            parameters: {
-              'room': roomUUIDHex,
-              'direct': isDirectChat,
-              'name': chatName,
-              'avatarSize': chatAvatar?.length ?? 0
-            });
-      }
-    } catch (_) {}
-
-    final sessionId = ++_sessionId;
-    final client = _sessionFactory(event.config.copyWithMeta(
-      name: chatName,
-      avatar: chatAvatar,
-    ));
-    if (state.userAvatarBytes != null) {
-      client.setUserAvatar(state.userAvatarBytes);
-    }
-    _client = client;
-
-    _eventSub = client.events.listen(
-      (sgtpEvent) =>
-          add(ChatInternalSgtpEvent(sgtpEvent, sessionId: sessionId)),
-      onError: (e) => add(ChatInternalSgtpEvent(SgtpError(error: e.toString()),
-          sessionId: sessionId)),
-    );
-
-    emit(state.copyWith(
-      status: ChatStatus.disconnected,
-      messages: [],
-      peerUUIDs: [],
-      peerNicknames: {},
-      peerPublicKeys: {},
-      peerAvatars: {},
-      readReceipts: {},
-      hasMoreHistory: true,
-      isLoadingHistory: false,
-      isMaster: false,
-      roomUUID: roomUUIDHex,
-      myPublicKeyHex: pubHex,
-      nicknames: event.nicknames,
-      chatName: chatName,
-      chatAvatarBytes: chatAvatar,
-      isDirectChat: isDirectChat,
-      clearError: true,
-    ));
-
-    final initial = await client.replayPersistedHistoryBatch(
-      offsetFromEnd: _persistedHistoryLoaded,
-      limit: _historyBatchSize,
-    );
-    _persistedHistoryLoaded += initial.loaded;
-    if (!isClosed) {
-      emit(state.copyWith(
-        hasMoreHistory: _persistedHistoryLoaded < initial.total,
-      ));
-    }
   }
 
   Future<void> _onReconnect(
@@ -220,10 +127,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     // correct name/avatar into the active OpenMLS-backed runtime from the start.
     _activeServerAddress = event.config.serverAddr.trim();
     _persistedHistoryLoaded = 0;
+    _directPeerPublicKeyHex =
+        (event.config.directPeerPublicKeyHex ?? '').trim().toLowerCase();
 
     String chatName = event.config.chatName;
     Uint8List? chatAvatar = event.config.chatAvatarBytes;
-    var isDirectChat = false;
+    var isDirectChat = event.config.isDirectMessage;
 
     final roomUUIDHex = event.config.roomUUID
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -239,7 +148,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         if (saved != null) {
           chatName = saved.name;
           chatAvatar = saved.avatarBytes;
-          isDirectChat = saved.isDirectMessage;
+          isDirectChat = isDirectChat || saved.isDirectMessage;
           if (saved.serverAddress.trim().isNotEmpty) {
             _activeServerAddress = saved.serverAddress.trim();
           }
@@ -253,6 +162,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
               });
         }
       } catch (_) {}
+    }
+
+    if (isDirectChat) {
+      final preferredName =
+          _lookupNicknameForPubHex(event.nicknames, _directPeerPublicKeyHex);
+      if (preferredName != null && _isGenericDirectChatTitle(chatName)) {
+        chatName = preferredName;
+      }
     }
 
     _eventSub = null;
@@ -388,6 +305,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
+  void _onMarkAllRead(ChatMarkAllRead event, Emitter<ChatState> emit) {
+    if (state.unreadCount == 0) return;
+    emit(state.copyWith(unreadCount: 0));
+  }
+
+  void _onSetVisibility(ChatSetVisibility event, Emitter<ChatState> emit) {
+    _isVisible = event.isVisible;
+    if (_isVisible && state.unreadCount > 0) {
+      emit(state.copyWith(unreadCount: 0));
+    }
+  }
+
   void _onUpdateNicknames(ChatUpdateNicknames event, Emitter<ChatState> emit) {
     // Rebuild peerNicknames from current peerPublicKeys + new nickname map.
     // This ensures peers who joined before the contact was added get their
@@ -446,7 +375,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Map<String, Uint8List> _peerAvatarsFor(Map<String, String> peerPublicKeys) {
     final out = <String, Uint8List>{};
     for (final entry in peerPublicKeys.entries) {
-      final avatar = _contactAvatarsByPub[entry.value];
+      final pubHex = entry.value;
+      final avatar = _contactAvatarsByPub[pubHex] ??
+          _contactAvatarsByPub[pubHex.toLowerCase()] ??
+          _contactAvatarsByPub[pubHex.toUpperCase()];
       if (avatar != null && avatar.isNotEmpty) {
         out[entry.key] = avatar;
       }
@@ -461,12 +393,42 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     if (peerPublicKeys.length != 1) return null;
     final pubHex = peerPublicKeys.values.first;
     final sourceNicknames = nicknames ?? state.nicknames;
-    final rawName = sourceNicknames[pubHex]?.trim() ?? '';
-    final fallbackName =
-        pubHex.length >= 8 ? 'peer_${pubHex.substring(0, 8)}' : 'Direct chat';
-    final name = rawName.isNotEmpty ? rawName : fallbackName;
-    final avatar = _contactAvatarsByPub[pubHex];
-    return (name: name, avatar: avatar);
+    final rawName = (sourceNicknames[pubHex] ??
+                sourceNicknames[pubHex.toLowerCase()] ??
+                sourceNicknames[pubHex.toUpperCase()])
+            ?.trim() ??
+        '';
+    final avatar = _contactAvatarsByPub[pubHex] ??
+        _contactAvatarsByPub[pubHex.toLowerCase()] ??
+        _contactAvatarsByPub[pubHex.toUpperCase()];
+    // Don't override a persisted DM display name with a synthetic fallback like
+    // "peer_xxx". Only provide a direct display when we actually know a name
+    // (from contacts/whitelist) or have an avatar.
+    if (rawName.isEmpty && (avatar == null || avatar.isEmpty)) return null;
+    return (name: rawName.isNotEmpty ? rawName : 'Direct chat', avatar: avatar);
+  }
+
+  String? _lookupNicknameForPubHex(Map<String, String> nicknames, String pubHex) {
+    final normalized = pubHex.trim();
+    if (normalized.isEmpty) return null;
+    final raw = (nicknames[normalized] ??
+            nicknames[normalized.toLowerCase()] ??
+            nicknames[normalized.toUpperCase()])
+        ?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw;
+  }
+
+  bool _isAutoPeerTitle(String name) {
+    final lower = name.trim().toLowerCase();
+    return RegExp(r'^peer[_\s][0-9a-f]{8}$').hasMatch(lower);
+  }
+
+  bool _isGenericDirectChatTitle(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return true;
+    if (trimmed == 'Chat' || trimmed == 'Direct chat') return true;
+    return _isAutoPeerTitle(trimmed);
   }
 
   void _onSetReply(ChatSetReply event, Emitter<ChatState> emit) {
@@ -627,15 +589,33 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   Future<void> _saveMetadata(
       String roomUUID, String name, Uint8List? avatar) async {
     if (roomUUID.isEmpty) return;
+    if (_activeServerAddress.isEmpty) return;
     try {
       final now = DateTime.now();
       final existing = await _metaRepo.loadChat(
         roomUUID,
         serverAddress: _activeServerAddress,
       );
+      var effectiveName = name.trim().isEmpty ? name : name.trim();
+      final direct = state.isDirectChat || (existing?.isDirectMessage ?? false);
+      if (direct) {
+        final existingName = (existing?.name ?? '').trim();
+        final preferredName =
+            _lookupNicknameForPubHex(state.nicknames, _directPeerPublicKeyHex);
+        final shouldReplace = _isGenericDirectChatTitle(effectiveName) ||
+            _isAutoPeerTitle(effectiveName);
+        if (preferredName != null && shouldReplace) {
+          effectiveName = preferredName;
+        } else if (_isAutoPeerTitle(effectiveName) &&
+            existingName.isNotEmpty &&
+            !_isGenericDirectChatTitle(existingName) &&
+            !_isAutoPeerTitle(existingName)) {
+          effectiveName = existingName;
+        }
+      }
       final meta = ChatMetadata(
         uuid: roomUUID,
-        name: name,
+        name: effectiveName,
         serverAddress: _activeServerAddress,
         avatarBytes: avatar,
         isDirectMessage: existing?.isDirectMessage ?? state.isDirectChat,
@@ -644,7 +624,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       );
       await _metaRepo.saveChat(meta);
       _log.info('[ChatBloc] Saved metadata for {room}: "{name}"',
-          parameters: {'room': roomUUID, 'name': name});
+          parameters: {'room': roomUUID, 'name': effectiveName});
     } catch (e) {
       _log.info('[ChatBloc] Failed to save metadata: {error}',
           parameters: {'error': e});
@@ -730,6 +710,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         _saveMetadata(roomUUIDHex, state.chatName, state.chatAvatarBytes);
 
       case SgtpMessageReceived(:final message):
+        final isUnreadCandidate = !message.isFromMe &&
+            !message.isFromHistory &&
+            message.type != MessageType.system &&
+            message.type != MessageType.messageRead &&
+            message.type != MessageType.reaction &&
+            message.type != MessageType.viewed;
+
         // Track peer public key from message
         Map<String, String> updatedPubKeys = Map.from(state.peerPublicKeys);
         if (!message.isFromMe && message.senderPublicKeyHex != null) {
@@ -754,10 +741,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
             updated.sort((a, b) => a.receivedAt.compareTo(b.receivedAt));
           }
         }
+        final nextUnread = isUnreadCandidate && !_isVisible
+            ? state.unreadCount + 1
+            : (isUnreadCandidate && _isVisible ? 0 : state.unreadCount);
         emit(state.copyWith(
           messages: updated,
           peerPublicKeys: updatedPubKeys,
           peerAvatars: _peerAvatarsFor(updatedPubKeys),
+          unreadCount: nextUnread,
         ));
         _touchChatActivity();
 

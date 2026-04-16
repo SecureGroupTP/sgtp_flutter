@@ -69,10 +69,6 @@ class RoomsPageState extends State<RoomsPage> {
         .toLowerCase();
   }
 
-  String _chatKey(String uuid, String serverAddress) {
-    return '$uuid@${_serverKey(serverAddress)}';
-  }
-
   @override
   Widget build(BuildContext context) {
     return BlocConsumer<RoomsBloc, RoomsState>(
@@ -102,14 +98,19 @@ class RoomsPageState extends State<RoomsPage> {
   }
 
   Widget _buildBody(BuildContext context, RoomsState state) {
-    final activeKeys =
-        state.rooms.map((r) => _chatKey(r.roomUUID, r.serverAddress)).toSet();
-    final storedNotActive = state.storedChats
-        .where((c) => !activeKeys.contains(_chatKey(c.uuid, c.serverAddress)))
-        .toList();
-    final hasAnything = state.rooms.isNotEmpty || storedNotActive.isNotEmpty;
-
-    if (!hasAnything) return const _EmptyState();
+    if (state.rooms.isEmpty) {
+      // Stored chats are auto-connected by RoomsBloc; avoid showing an
+      // "offline cache" section in UI.
+      if (state.storedChats.isNotEmpty) {
+        return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        );
+      }
+      return const _EmptyState();
+    }
 
     return ListView(
       // Extra bottom padding so last item isn't hidden under FAB + nav bar.
@@ -119,68 +120,17 @@ class RoomsPageState extends State<RoomsPage> {
         ...state.rooms.map((entry) => ActiveRoomTile(
               entry: entry,
               onTap: () => _openRoom(entry),
-              onReconnect: () => entry.chatBloc.add(const ChatReconnect()),
               onRemove: () => context.read<RoomsBloc>().add(RoomsRemoveRoom(
                   entry.roomUUID,
                   serverAddress: entry.serverAddress)),
             )),
-
-        // ── Cached chats (not currently online) ──────────────────────────
-        if (storedNotActive.isNotEmpty) ...[
-          const _SectionHeader(title: 'Offline Cache'),
-          ...storedNotActive.map((chat) => SavedChatTile(
-                uuid: chat.uuid,
-                metadata: chat,
-                onOpen: () => _openStoredChatPreview(context, chat),
-                onRemove: () => context.read<RoomsBloc>().add(
-                    RoomsDeleteStoredChat(chat.uuid,
-                        serverAddress: chat.serverAddress)),
-              )),
-        ],
       ],
     );
-  }
-
-  void _openStoredChatPreview(BuildContext context, ChatMetadata metadata) {
-    final roomsBloc = context.read<RoomsBloc>();
-    final existing = _findRoomEntryByIdentity(
-      roomsBloc.state,
-      roomUUID: metadata.uuid,
-      serverAddress: metadata.serverAddress,
-    );
-    if (existing != null) {
-      _openRoom(existing);
-      return;
-    }
-
-    StreamSubscription<RoomsState>? sub;
-    sub = roomsBloc.stream.listen((state) {
-      final created = _findRoomEntryByIdentity(
-        state,
-        roomUUID: metadata.uuid,
-        serverAddress: metadata.serverAddress,
-      );
-      if (created != null) {
-        sub?.cancel();
-        if (!mounted) return;
-        _openRoom(created);
-      }
-    });
-    Future<void>.delayed(const Duration(seconds: 5), () {
-      sub?.cancel();
-    });
-
-    roomsBloc.add(RoomsJoinRoom(
-      metadata.uuid,
-      serverAddress: metadata.serverAddress,
-      openOffline: true,
-    ));
   }
 
   void openRoomByUuid(
     String roomUUIDHex, {
     String? serverAddress,
-    bool openOffline = false,
     bool isDirectMessage = false,
     bool bootstrapDirectRoom = false,
     String? directPeerPublicKeyHex,
@@ -218,7 +168,6 @@ class RoomsPageState extends State<RoomsPage> {
       RoomsJoinRoom(
         roomUUIDHex,
         serverAddress: effectiveServer,
-        openOffline: openOffline,
         isDirectMessage: isDirectMessage,
         bootstrapDirectRoom: bootstrapDirectRoom,
         directPeerPublicKeyHex: directPeerPublicKeyHex,
@@ -246,6 +195,7 @@ class RoomsPageState extends State<RoomsPage> {
     if (!mounted) return;
     final status = entry.chatBloc.state.status;
     final errorMessage = entry.chatBloc.state.errorMessage;
+    entry.chatBloc.add(const ChatMarkAllRead());
     if (status == ChatStatus.disconnected ||
         (status == ChatStatus.error &&
             !_isNonRecoverableConnectionError(errorMessage))) {
@@ -357,167 +307,170 @@ class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
 class ActiveRoomTile extends StatelessWidget {
   final RoomEntry entry;
   final VoidCallback onTap;
-  final VoidCallback onReconnect;
   final VoidCallback onRemove;
 
   const ActiveRoomTile({
     super.key,
     required this.entry,
     required this.onTap,
-    required this.onReconnect,
     required this.onRemove,
   });
+
+  String _previewText(ChatState state) {
+    ChatMessage? last;
+    for (var i = state.messages.length - 1; i >= 0; i--) {
+      final m = state.messages[i];
+      if (m.type == MessageType.system ||
+          m.type == MessageType.messageRead ||
+          m.type == MessageType.reaction ||
+          m.type == MessageType.viewed) {
+        continue;
+      }
+      last = m;
+      break;
+    }
+    if (last == null) {
+      return 'No messages yet';
+    }
+
+    final sender = last.isFromMe
+        ? 'You'
+        : (state.peerNicknames[last.senderUUID] ??
+            state.peerNicknamesHistory[last.senderUUID] ??
+            (last.senderUUID.length >= 8
+                ? last.senderUUID.substring(0, 8)
+                : last.senderUUID));
+    final body = switch (last.type) {
+      MessageType.text =>
+        last.content.trim().isEmpty ? 'Message' : last.content,
+      MessageType.image => 'Photo',
+      MessageType.gif => 'GIF',
+      MessageType.video => 'Video',
+      MessageType.voice => 'Voice message',
+      MessageType.videoNote => 'Video note',
+      _ => 'Message',
+    };
+
+    return '$sender: $body';
+  }
+
+  void _showActions(BuildContext context, ChatState chatState) {
+    showAppBottomSheet<void>(
+      context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.open_in_new),
+              title: const Text('Open'),
+              onTap: () {
+                Navigator.pop(context);
+                onTap();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.qr_code_2_outlined),
+              title: const Text('Share QR'),
+              onTap: () {
+                Navigator.pop(context);
+                final qrData = QrShareData(
+                  type: 'room',
+                  roomUUID: entry.roomUUID,
+                  timestamp: DateTime.now().millisecondsSinceEpoch,
+                );
+                showAppBottomSheet<void>(
+                  context,
+                  builder: (_) => SafeArea(
+                    child: PrettyQrSharePanel(
+                      data: qrData,
+                      title: 'Share Room',
+                      description: chatState.chatName != 'Chat'
+                          ? chatState.chatName
+                          : entry.label,
+                      copyMessage: 'Room hex copied',
+                      exportName:
+                          'room_${entry.roomUUID.substring(0, 8).toLowerCase()}.png',
+                    ),
+                  ),
+                );
+              },
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading:
+                  const Icon(Icons.delete_outline, color: AppColors.statusRed),
+              title: const Text('Remove',
+                  style: TextStyle(color: AppColors.statusRed)),
+              onTap: () {
+                Navigator.pop(context);
+                onRemove();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<ChatBloc, ChatState>(
       bloc: entry.chatBloc,
       builder: (context, chatState) {
-        final isOffline = chatState.status == ChatStatus.disconnected ||
-            chatState.status == ChatStatus.error;
         final name =
             chatState.chatName != 'Chat' ? chatState.chatName : entry.label;
+        final preview = _previewText(chatState);
 
         return _ChatTile(
           onTap: onTap,
+          onLongPress: () => _showActions(context, chatState),
+          onSecondaryTap: () => _showActions(context, chatState),
           leading: RoomAvatar(
             avatarBytes: chatState.chatAvatarBytes,
             fallbackIcon: Icons.tag,
             fallbackName: name,
           ),
           title: name,
-          subtitle: Row(
-            children: [
-              RoomStatusDot(status: chatState.status),
-              const SizedBox(width: 6),
-              Text(
-                _statusText(chatState.status),
-                style: const TextStyle(
-                    fontSize: 13, color: AppColors.textSecondary),
-              ),
-              if (chatState.peerUUIDs.isNotEmpty) ...[
-                const SizedBox(width: 6),
-                Text(
-                  '· ${chatState.peerUUIDs.length} peer${chatState.peerUUIDs.length == 1 ? '' : 's'}',
-                  style: const TextStyle(
-                      fontSize: 13, color: AppColors.textSecondary),
-                ),
-              ],
-            ],
+          subtitle: Text(
+            preview,
+            overflow: TextOverflow.ellipsis,
+            style:
+                const TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isOffline) _ReconnectButton(onPressed: onReconnect),
-              _ActiveRoomMoreButton(
-                entry: entry,
-                chatState: chatState,
-                onTap: onTap,
-                onRemove: onRemove,
-              ),
-            ],
-          ),
+          trailing: chatState.unreadCount > 0
+              ? _UnreadBadge(count: chatState.unreadCount)
+              : null,
         );
       },
     );
   }
-
-  String _statusText(ChatStatus status) => switch (status) {
-        ChatStatus.ready => 'Ready',
-        ChatStatus.connecting => 'Connecting…',
-        ChatStatus.handshaking => 'Handshaking…',
-        ChatStatus.error => 'Error',
-        ChatStatus.disconnected => 'Disconnected',
-      };
 }
 
-// Wires up _MoreButton's selection for ActiveRoomTile — done via a separate
-// stateless wrapper that has access to the needed callbacks.
-class _ActiveRoomMoreButton extends StatelessWidget {
-  final RoomEntry entry;
-  final ChatState chatState;
-  final VoidCallback onTap;
-  final VoidCallback onRemove;
-
-  const _ActiveRoomMoreButton({
-    required this.entry,
-    required this.chatState,
-    required this.onTap,
-    required this.onRemove,
-  });
+class _UnreadBadge extends StatelessWidget {
+  final int count;
+  const _UnreadBadge({required this.count});
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<_RoomAction>(
-      icon:
-          const Icon(Icons.more_vert, size: 22, color: AppColors.textSecondary),
-      color: AppColors.bgSurface,
-      onSelected: (action) => _handle(context, action),
-      itemBuilder: (_) => [
-        const PopupMenuItem(
-          value: _RoomAction.open,
-          child: _MenuItem(icon: Icons.open_in_new, label: 'Open'),
-        ),
-        const PopupMenuItem(
-          value: _RoomAction.copyUUID,
-          child: _MenuItem(icon: Icons.copy_outlined, label: 'Copy UUID'),
-        ),
-        const PopupMenuItem(
-          value: _RoomAction.shareQR,
-          child: _MenuItem(icon: Icons.qr_code_2_outlined, label: 'Share QR'),
-        ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: _RoomAction.remove,
-          child: _MenuItem(
-              icon: Icons.delete_outline,
-              label: 'Remove',
-              color: AppColors.statusRed),
-        ),
-      ],
+    final text = count > 99 ? '99' : '$count';
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F5F5),
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: Text(text,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF141417),
+          )),
     );
   }
-
-  void _handle(BuildContext context, _RoomAction action) {
-    switch (action) {
-      case _RoomAction.open:
-        onTap();
-      case _RoomAction.copyUUID:
-        Clipboard.setData(ClipboardData(text: entry.roomUUID));
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Room UUID copied')));
-      case _RoomAction.shareQR:
-        final qrData = QrShareData(
-          type: 'room',
-          roomUUID: entry.roomUUID,
-          timestamp: DateTime.now().millisecondsSinceEpoch,
-        );
-        showAppBottomSheet<void>(
-          context,
-          builder: (_) => SafeArea(
-            child: PrettyQrSharePanel(
-              data: qrData,
-              title: 'Share Room',
-              description: chatState.chatName != 'Chat'
-                  ? chatState.chatName
-                  : entry.label,
-              copyMessage: 'Room hex copied',
-              exportName:
-                  'room_${entry.roomUUID.substring(0, 8).toLowerCase()}.png',
-            ),
-          ),
-        );
-      case _RoomAction.remove:
-        onRemove();
-    }
-  }
 }
-
-enum _RoomAction { open, copyUUID, shareQR, remove }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Saved chat tile
-// ─────────────────────────────────────────────────────────────────────────────
 
 class SavedChatTile extends StatelessWidget {
   final String uuid;
@@ -538,8 +491,8 @@ class SavedChatTile extends StatelessWidget {
     final hasMetadataName = metadata != null && metadata!.name.isNotEmpty;
     final title = hasMetadataName ? metadata!.name : '${uuid.substring(0, 8)}…';
     final subtitle = metadata?.updatedAt != null
-        ? 'Cached locally · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
-        : 'Cached locally · tap to open offline';
+        ? 'Saved locally · ${_formatSavedChatLastActive(metadata!.updatedAt)}'
+        : 'Saved locally · tap to open';
     return _ChatTile(
       onTap: onOpen,
       leading: metadata?.avatarBytes != null
@@ -630,6 +583,8 @@ String _formatSavedChatLastActive(DateTime updatedAt) {
 /// Base pressable tile with consistent 14 × 20 padding and ink splash.
 class _ChatTile extends StatelessWidget {
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onSecondaryTap;
   final Widget leading;
   final String title;
   final TextStyle? titleStyle;
@@ -638,6 +593,8 @@ class _ChatTile extends StatelessWidget {
 
   const _ChatTile({
     required this.onTap,
+    this.onLongPress,
+    this.onSecondaryTap,
     required this.leading,
     required this.title,
     this.titleStyle,
@@ -649,6 +606,8 @@ class _ChatTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
+      onSecondaryTap: onSecondaryTap,
       splashColor: AppColors.bgSurfaceActive,
       highlightColor: AppColors.bgSurfaceActive.withAlpha(120),
       child: Padding(
@@ -687,63 +646,6 @@ class _ChatTile extends StatelessWidget {
   }
 }
 
-/// "SAVED CHATS" style section header with a trailing divider line.
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
-      child: Row(
-        children: [
-          Text(
-            title.toUpperCase(),
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary,
-              letterSpacing: 1,
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(child: Divider(color: AppColors.border, height: 1)),
-        ],
-      ),
-    );
-  }
-}
-
-/// Pill-shaped "Reconnect" button.
-class _ReconnectButton extends StatelessWidget {
-  final VoidCallback onPressed;
-  const _ReconnectButton({required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        margin: const EdgeInsets.only(right: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(25), // rgba(255,255,255,0.1)
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Text(
-          'Reconnect',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Tiny icon button used in stored chat trailing area.
 class _IconAction extends StatelessWidget {
   final IconData icon;
@@ -765,30 +667,6 @@ class _IconAction extends StatelessWidget {
         padding: const EdgeInsets.all(8),
         child: Icon(icon, size: 22, color: color),
       ),
-    );
-  }
-}
-
-/// Menu item row used inside [PopupMenuButton].
-class _MenuItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  const _MenuItem({
-    required this.icon,
-    required this.label,
-    this.color = AppColors.textPrimary,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: color),
-        const SizedBox(width: 12),
-        Text(label, style: TextStyle(color: color)),
-      ],
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -10,6 +11,7 @@ import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
+import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_state.dart';
@@ -39,6 +41,12 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   DateTime? _lastServerRoomSyncAt;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
   late final ChatMetadataStore _chatMetadataRepo;
+
+  static const int _maxParallelConnects = 3;
+  int _activeConnects = 0;
+  final Queue<({String key, ChatBloc bloc, ChatConnect event})> _connectQueue =
+      Queue();
+  final Set<String> _connectInFlightKeys = {};
 
   RoomsBloc({
     required String accountId,
@@ -91,7 +99,12 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       transport: event.transport,
       useTls: event.useTls,
     );
-    _addRoom(roomUUID, emit, configOverride: configOverride);
+    _addRoom(
+      roomUUID,
+      emit,
+      configOverride: configOverride,
+      highPriorityConnect: true,
+    );
   }
 
   Future<void> _onJoin(RoomsJoinRoom event, Emitter<RoomsState> emit) async {
@@ -111,10 +124,10 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         bytes,
         emit,
         configOverride: configOverride,
-        openOffline: event.openOffline,
         isDirectMessage: event.isDirectMessage,
         bootstrapDirectRoom: event.bootstrapDirectRoom,
         directPeerPublicKeyHex: event.directPeerPublicKeyHex,
+        highPriorityConnect: true,
       );
     } catch (_) {
       emit(state.copyWith(error: 'Invalid UUID format'));
@@ -217,6 +230,24 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         .where((m) => _normalizeAddress(m.serverAddress) == targetServer)
         .toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+    // Chats should be online by default. Re-hydrate active rooms from stored
+    // chat metadata on startup / server switch.
+    if (targetServer.isNotEmpty && filtered.isNotEmpty) {
+      final configOverride =
+          await _configOverrideForTarget(serverAddress: state.serverAddress);
+      for (final chat in filtered) {
+        try {
+          _addRoom(
+            hexToBytes(chat.uuid),
+            emit,
+            configOverride: configOverride,
+            isDirectMessage: chat.isDirectMessage,
+          );
+        } catch (_) {}
+      }
+    }
+
     emit(state.copyWith(storedChats: filtered));
   }
 
@@ -347,15 +378,32 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
               : now;
           final serverName = room.room.title.trim();
           final existingName = (existing?.name ?? '').trim();
+          final isDirect = existing?.isDirectMessage ?? false;
+          final serverNameLower = serverName.toLowerCase();
+          final isAutoPeerTitle =
+              RegExp(r'^peer[_\s][0-9a-f]{8}$').hasMatch(serverNameLower);
+          final inferredDirect = isDirect || isAutoPeerTitle;
+          final sanitizedServerName = isAutoPeerTitle ? '' : serverName;
+          final existingNameLower = existingName.toLowerCase();
+          final isAutoPeerExisting =
+              RegExp(r'^peer[_\s][0-9a-f]{8}$').hasMatch(existingNameLower);
+          final sanitizedExistingName = existingName.isNotEmpty &&
+                  existingName != 'Chat' &&
+                  !(inferredDirect && isAutoPeerExisting)
+              ? existingName
+              : '';
+          final effectiveName = sanitizedExistingName.isNotEmpty
+              ? sanitizedExistingName
+              : (sanitizedServerName.isNotEmpty
+                  ? sanitizedServerName
+                  : (inferredDirect ? 'Direct chat' : 'Chat'));
           await _chatMetadataRepo.saveChat(ChatMetadata(
             uuid: localRoomUUID,
-            name: existingName.isNotEmpty
-                ? existingName
-                : (serverName.isNotEmpty ? serverName : 'Chat'),
+            name: effectiveName,
             serverAddress: targetServer,
             remoteRoomId: room.room.roomId,
             avatarBytes: existing?.avatarBytes,
-            isDirectMessage: false,
+            isDirectMessage: inferredDirect,
             createdAt: existing?.createdAt ?? updatedAt,
             updatedAt: updatedAt.isAfter(existing?.updatedAt ?? DateTime(0))
                 ? updatedAt
@@ -400,10 +448,10 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
   void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
       {SgtpConfig? configOverride,
-      bool openOffline = false,
       bool isDirectMessage = false,
       bool bootstrapDirectRoom = false,
-      String? directPeerPublicKeyHex}) {
+      String? directPeerPublicKeyHex,
+      bool highPriorityConnect = false}) {
     final hexUUID = uuidBytesToHex(roomUUID);
     final config = (configOverride ?? _baseConfig)
         .copyWith(accountId: _accountId)
@@ -427,10 +475,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     final chatBloc = ChatBloc(
         accountId: _accountId,
         storageGateway: _chatStorage,
-        sessionFactory: _sessionFactory)
-      ..add(openOffline
-          ? ChatOpenOffline(config, nicknames: _nicknames)
-          : ChatConnect(config, nicknames: _nicknames));
+        sessionFactory: _sessionFactory);
 
     // Push user avatar into the new bloc
     if (_userAvatar != null) {
@@ -440,8 +485,16 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       chatBloc.add(ChatUpdateContactAvatars(_contactAvatarsByPub));
     }
 
-    _chatSubs[_roomKey(hexUUID, config.serverAddr)] =
-        chatBloc.stream.listen((_) {
+    final key = _roomKey(hexUUID, config.serverAddr);
+    _chatSubs[key] = chatBloc.stream.listen((chatState) {
+      // Release a connect slot once the room leaves connecting/handshaking.
+      if (_connectInFlightKeys.contains(key) &&
+          chatState.status != ChatStatus.connecting &&
+          chatState.status != ChatStatus.handshaking) {
+        _connectInFlightKeys.remove(key);
+        _activeConnects = (_activeConnects - 1).clamp(0, 1 << 30);
+        _drainConnectQueue();
+      }
       add(const _RoomsRefresh());
     });
 
@@ -454,6 +507,25 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       rooms: [...state.rooms, entry],
       clearError: true,
     ));
+
+    final connectEvent = ChatConnect(config, nicknames: _nicknames);
+    if (highPriorityConnect) {
+      _connectQueue.addFirst((key: key, bloc: chatBloc, event: connectEvent));
+    } else {
+      _connectQueue.addLast((key: key, bloc: chatBloc, event: connectEvent));
+    }
+    _drainConnectQueue();
+  }
+
+  void _drainConnectQueue() {
+    while (_activeConnects < _maxParallelConnects && _connectQueue.isNotEmpty) {
+      final next = _connectQueue.removeFirst();
+      if (next.bloc.isClosed) continue;
+      if (_connectInFlightKeys.contains(next.key)) continue;
+      _connectInFlightKeys.add(next.key);
+      _activeConnects++;
+      next.bloc.add(next.event);
+    }
   }
 
   Future<void> _onRemove(

@@ -119,6 +119,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _settingsRepo = context.read<SettingsManagementService>();
+    _chatBloc = context.read<ChatBloc>()..add(const ChatSetVisibility(true));
     WidgetsBinding.instance.addObserver(this);
     _scrollCtrl.addListener(_onScroll);
     _loadCaptureCapabilities();
@@ -141,6 +142,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     _saveScrollPosition();
+    _chatBloc?.add(const ChatSetVisibility(false));
     WidgetsBinding.instance.removeObserver(this);
     NotificationService.onMarkAsRead = null;
     _messageCtrl.dispose();
@@ -156,6 +158,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     switch (appState) {
       case AppLifecycleState.resumed:
         setState(() => _isPageVisible = true);
+        _chatBloc?.add(const ChatSetVisibility(true));
         unawaited(_loadCaptureCapabilities());
         NotificationService.cancelAll();
         NotificationService.flushPendingMarkAsRead();
@@ -205,6 +208,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       case AppLifecycleState.paused:
         _wentToBackground ??= DateTime.now();
         setState(() => _isPageVisible = false);
+        _chatBloc?.add(const ChatSetVisibility(false));
         break;
 
       case AppLifecycleState.detached:
@@ -1411,43 +1415,19 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                           padding: const EdgeInsets.all(4),
                           visualDensity: VisualDensity.compact,
                         ),
-                      IconButton(
-                        icon: const Icon(Icons.info_outline, size: 22),
-                        color: const Color(0xFF8E8E93),
-                        onPressed: () => _showRoomInfo(context, state),
-                        padding: const EdgeInsets.all(4),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      PopupMenuButton<_ChatMenuAction>(
+                      PopupMenuButton<int>(
                         icon: const Icon(Icons.more_vert,
                             size: 22, color: Color(0xFF8E8E93)),
                         padding: const EdgeInsets.all(4),
                         onSelected: (action) {
-                          switch (action) {
-                            case _ChatMenuAction.disconnect:
-                              if (_isRecording) _recorder.stop();
-                              context
-                                  .read<ChatBloc>()
-                                  .add(const ChatDisconnect());
-                              if (context.mounted &&
-                                  Navigator.of(context).canPop()) {
-                                Navigator.of(context).pop();
-                              }
+                          if (action == 0) {
+                            _showEditMetadataDialog(context, state);
                           }
                         },
                         itemBuilder: (_) => [
-                          if (state.status == ChatStatus.ready)
-                            const PopupMenuItem(
-                              value: _ChatMenuAction.disconnect,
-                              child: ListTile(
-                                leading: Icon(Icons.logout),
-                                title: Text('Disconnect'),
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            ),
                           PopupMenuItem(
-                            onTap: () =>
-                                _showEditMetadataDialog(context, state),
+                            value: 0,
+                            enabled: state.status == ChatStatus.ready,
                             child: const ListTile(
                               leading: Icon(Icons.edit_outlined),
                               title: Text('Edit chat'),
@@ -1512,7 +1492,13 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       case ChatStatus.ready:
         return const SizedBox.shrink();
       case ChatStatus.disconnected:
-        return _disconnectedBanner(context);
+        return _statusBanner(
+          text: 'Reconnecting…',
+          color: const Color(0xFF8E8E93),
+          bgColor: const Color(0x26636366),
+          borderColor: const Color(0x33636366),
+          withSpinner: true,
+        );
     }
   }
 
@@ -1561,55 +1547,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _disconnectedBanner(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0x26636366),
-        border: Border(bottom: BorderSide(color: Color(0x33636366))),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.wifi_off_rounded,
-              size: 14, color: Color(0xFF8E8E93)),
-          const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'Disconnected',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF8E8E93)),
-            ),
-          ),
-          GestureDetector(
-            onTap: () => context.read<ChatBloc>().add(const ChatReconnect()),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0x1AFFFFFF),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.wifi_rounded, size: 14, color: Color(0xFFF5F5F5)),
-                  SizedBox(width: 4),
-                  Text('Reconnect',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFFF5F5F5))),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildMessageList(ChatState state) {
     if (state.messages.isEmpty) {
       return Center(
@@ -1622,7 +1559,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             Text(
               state.status == ChatStatus.ready
                   ? 'No messages yet. Say hello!'
-                  : 'No local history yet. Press Connect to join chat.',
+                  : 'No local history yet.',
               style: const TextStyle(fontSize: 16, color: Color(0xFF8E8E93)),
             ),
           ]),
@@ -1706,38 +1643,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   Widget _buildInputBar(BuildContext context, ChatState state) {
     final canSend = state.status == ChatStatus.ready;
     final reply = state.replyToMessage;
-
-    if (!canSend) {
-      final isBusy = state.status == ChatStatus.connecting ||
-          state.status == ChatStatus.handshaking;
-      final buttonText = isBusy ? 'Connecting…' : 'Connect';
-      return SafeArea(
-        child: Container(
-          decoration: const BoxDecoration(
-            color: Color(0xF2141417),
-            border: Border(top: BorderSide(color: Color(0xFF2C2C30))),
-          ),
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          child: SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: isBusy
-                  ? null
-                  : () => context.read<ChatBloc>().add(const ChatReconnect()),
-              icon: const Icon(Icons.wifi_rounded, size: 18),
-              label: Text(buttonText),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF0A84FF),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: const Color(0xFF1F1F24),
-                disabledForegroundColor: const Color(0xFF8E8E93),
-                minimumSize: const Size.fromHeight(44),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
 
     return SafeArea(
       child: Container(
@@ -2149,87 +2054,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             ],
           ),
         ),
-      ),
-    );
+              ),
+  );
   }
 
-  void _showRoomInfo(BuildContext context, ChatState state) {
-    showAppBottomSheet<void>(
-      context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Room info',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 20),
-              _infoRow(context, 'Room UUID', state.roomUUID),
-              const SizedBox(height: 12),
-              _infoRow(context, 'My UUID', state.myUUID),
-              const SizedBox(height: 12),
-              _infoRow(context, 'My public key', state.myPublicKeyHex),
-              if (state.isMaster) ...[
-                const SizedBox(height: 12),
-                Row(children: [
-                  const Icon(Icons.star, size: 16, color: AppColors.accent),
-                  const SizedBox(width: 4),
-                  const Text('You are the master',
-                      style: TextStyle(color: AppColors.accent)),
-                ]),
-              ],
-              const SizedBox(height: 20),
-              AppSheetButton(
-                label: 'Close',
-                secondary: true,
-                onTap: () => Navigator.pop(ctx),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _infoRow(BuildContext context, String label, String value) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.primary)),
-        const SizedBox(height: 4),
-        Row(children: [
-          Expanded(
-            child: SelectableText(value.isEmpty ? '—' : value,
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(fontFamily: 'monospace')),
-          ),
-          if (value.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.copy, size: 16),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: value));
-                Navigator.pop(context);
-                _showSnack(context, '$label copied');
-              },
-            ),
-        ]),
-      ],
-    );
-  }
 }
-
-enum _ChatMenuAction { disconnect }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mobile mode button (mic ↔ video-note) — single button, tap = swap, hold = record

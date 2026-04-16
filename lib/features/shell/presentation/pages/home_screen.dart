@@ -248,7 +248,6 @@ class _HomeAppSessionController implements AppSessionController {
       roomsPage.openRoomByUuid(
         binding.roomId,
         serverAddress: _homeCubit.state.serverAddress,
-        openOffline: false,
         isDirectMessage: true,
         bootstrapDirectRoom: !binding.alreadyExisted,
         directPeerPublicKeyHex: peerPubkeyHex,
