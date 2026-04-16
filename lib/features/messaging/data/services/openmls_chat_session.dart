@@ -125,6 +125,19 @@ class _HistoryRecord {
   });
 }
 
+class _MlsPeerKeyPackage {
+  final String userId;
+  final String deviceId;
+  final String keyPackageB64;
+  const _MlsPeerKeyPackage({
+    required this.userId,
+    required this.deviceId,
+    required this.keyPackageB64,
+  });
+
+  String get key => '$userId::$deviceId';
+}
+
 class _PendingFile {
   final String fileId;
   final String name;
@@ -262,6 +275,7 @@ class OpenMlsChatSession implements ISgtpSession {
   final SgtpConfig _config;
   final Uint8List _myUUID;
   late final Uint8List _roomUUID;
+  late final String _deviceId;
   final Random _secureRandom = Random.secure();
 
   final _eventController = StreamController<SgtpEvent>.broadcast();
@@ -287,8 +301,9 @@ class OpenMlsChatSession implements ISgtpSession {
   bool _mlsGroupCreated = false;
   bool _mlsInviteInFlight = false;
   String? _mlsLocalKeyPackageB64;
-  final Map<String, String> _mlsPeerKeyPackages = {};
-  final Set<String> _mlsInvitedPeers = {};
+  final Map<String, _MlsPeerKeyPackage> _mlsPeerKeyPackages = {};
+  final Set<String> _mlsInvitedPeers = {}; // `${userId}::${deviceId}`
+  Timer? _persistMlsStateTimer;
 
   // Current local chat metadata (can be updated and broadcast)
   String _currentChatName;
@@ -351,6 +366,7 @@ class OpenMlsChatSession implements ISgtpSession {
         _myUUID = generateUUIDv7(),
         _currentChatName = config.chatName,
         _currentChatAvatar = config.chatAvatarBytes {
+    _deviceId = 'flutter-${_hex(config.myPublicKey).substring(0, 16)}';
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
@@ -639,25 +655,68 @@ class OpenMlsChatSession implements ISgtpSession {
     if (_mlsClientReady) return;
     try {
       final privateKey = await _config.identityKeyPair.extractPrivateKeyBytes();
-      final userId =
-          (_config.accountId ?? _config.nodeId ?? _hex(_config.myPublicKey))
-              .trim();
-      final deviceId = myUUIDHex;
       final clientId = {
-        'user_id': userId.isEmpty ? _hex(_config.myPublicKey) : userId,
-        'device_id': deviceId,
+        'user_id': _hex(_config.myPublicKey).trim(),
+        'device_id': _deviceId,
       };
-      final mls = MessengerMls.create();
-      mls.createClientSync({
-        'client_id': clientId,
-        'device_signature_private_key': privateKey,
-        'binding': {
+      var mls = MessengerMls.create();
+      var restored = false;
+      try {
+        final snapshot = await _loadPersistedMlsState();
+        if (snapshot != null && snapshot.isNotEmpty) {
+          mls.restoreClientSync(snapshot);
+          final restoredId = _map(mls.getClientIdSync());
+          final restoredUser = (restoredId['user_id'] as String?)?.trim() ?? '';
+          final restoredDevice =
+              (restoredId['device_id'] as String?)?.trim() ?? '';
+          if (restoredUser == clientId['user_id'] &&
+              restoredDevice == clientId['device_id']) {
+            restored = true;
+            _log.info(
+              'Restored MLS client state from disk ({bytes}B) for device {deviceId}',
+              parameters: {'bytes': snapshot.length, 'deviceId': _deviceId},
+            );
+          } else {
+            _log.warning(
+              'Ignoring MLS snapshot with mismatched client_id restoredUser={restoredUser} restoredDevice={restoredDevice} expectedUser={expectedUser} expectedDevice={expectedDevice}',
+              parameters: {
+                'restoredUser': restoredUser,
+                'restoredDevice': restoredDevice,
+                'expectedUser': clientId['user_id'],
+                'expectedDevice': clientId['device_id'],
+              },
+            );
+            mls.close();
+            mls = MessengerMls.create();
+          }
+        }
+      } catch (e, st) {
+        _log.warning(
+          'MLS restoreClient failed; falling back to createClient: {error}',
+          parameters: {'error': e},
+          error: e,
+          stackTrace: st,
+        );
+        try {
+          mls.close();
+        } catch (_) {}
+        mls = MessengerMls.create();
+      }
+
+      if (!restored) {
+        mls.createClientSync({
           'client_id': clientId,
-          'serialized_binding': _config.myPublicKey,
-          'account_signature': <int>[],
-        },
-        'identity_data': _config.myPublicKey,
-      });
+          'device_signature_private_key': privateKey,
+          'binding': {
+            'client_id': clientId,
+            'serialized_binding': _config.myPublicKey,
+            'account_signature': <int>[],
+          },
+          'identity_data': _config.myPublicKey,
+        });
+      }
+
+      // Generate fresh key packages every boot (single-use) and broadcast one.
       final bundle = mls.createKeyPackagesSync(8);
       final keyPackages = _asObjectList(_map(bundle)['keypackages']);
       if (keyPackages.isEmpty) {
@@ -667,6 +726,16 @@ class OpenMlsChatSession implements ISgtpSession {
       _mls = mls;
       _mlsLocalKeyPackageB64 = base64.encode(first);
       _mlsClientReady = true;
+
+      // If the group already exists locally (restored client), mark it ready so
+      // we don't depend on peers re-sending welcome packets.
+      try {
+        mls.getGroupStateSync(_mlsGroupIdJson);
+        _mlsGroupCreated = true;
+        _mlsGroupReady = true;
+      } catch (_) {}
+
+      _schedulePersistMlsState();
       _log.info('MLS client initialized');
     } catch (e) {
       _mls?.close();
@@ -701,6 +770,63 @@ class OpenMlsChatSession implements ISgtpSession {
 
   Map<String, dynamic> get _mlsGroupIdJson => {'value': _roomUUID};
 
+  Future<Uint8List?> _loadPersistedMlsState() async {
+    if (kIsWeb) return null;
+    try {
+      final file = await _getMlsStateFile();
+      if (file == null) return null;
+      if (!await file.exists()) return null;
+      final bytes = await file.readAsBytes();
+      return bytes.isEmpty ? null : Uint8List.fromList(bytes);
+    } catch (e) {
+      _log.warning('Failed to load persisted MLS state: {error}',
+          parameters: {'error': e});
+      return null;
+    }
+  }
+
+  Future<void> _persistMlsState() async {
+    if (kIsWeb) return;
+    final mls = _mls;
+    if (mls == null) return;
+    try {
+      final file = await _getMlsStateFile();
+      if (file == null) return;
+      final bytes = mls.exportClientStateSync();
+      if (bytes.isEmpty) return;
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes, flush: true);
+    } catch (e, st) {
+      _log.warning(
+        'Failed to persist MLS state: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
+  void _schedulePersistMlsState() {
+    if (kIsWeb) return;
+    _persistMlsStateTimer?.cancel();
+    _persistMlsStateTimer = Timer(const Duration(milliseconds: 750), () {
+      unawaited(_persistMlsState());
+    });
+  }
+
+  Future<File?> _getMlsStateFile() async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final accountId = (_config.accountId ?? _config.nodeId ?? '').trim();
+    final base = accountId.isEmpty
+        ? Directory('${docsDir.path}/sgtp_mls')
+        : Directory('${docsDir.path}/sgtp_accounts/$accountId/sgtp_mls');
+    final key = _hex(_config.myPublicKey);
+    final room = roomUUIDHex;
+    final keyPrefix = key.length <= 16 ? key : key.substring(0, 16);
+    final roomPrefix = room.length <= 16 ? room : room.substring(0, 16);
+    return File('${base.path}/client_state_${keyPrefix}_$roomPrefix.bin');
+  }
+
   Future<void> _ensureMlsGroupCreated() async {
     if (!_mlsClientReady || _mlsGroupCreated) return;
     final mls = _mls;
@@ -709,6 +835,7 @@ class OpenMlsChatSession implements ISgtpSession {
       mls.createGroupSync(_mlsGroupIdJson);
       _mlsGroupCreated = true;
       _mlsGroupReady = true;
+      _schedulePersistMlsState();
       _log.info('MLS group created');
     } on MlsException catch (e) {
       // Already-created groups can happen after reconnects within the same process.
@@ -727,11 +854,10 @@ class OpenMlsChatSession implements ISgtpSession {
       'v': 1,
       'type': 'mls_key_package',
       'pub': _hex(_config.myPublicKey),
+      'session_uuid': myUUIDHex,
       'client_id': {
-        'user_id':
-            (_config.accountId ?? _config.nodeId ?? _hex(_config.myPublicKey))
-                .trim(),
-        'device_id': myUUIDHex,
+        'user_id': _hex(_config.myPublicKey).trim(),
+        'device_id': _deviceId,
       },
       'keypackage': keyPackageB64,
     });
@@ -749,41 +875,46 @@ class OpenMlsChatSession implements ISgtpSession {
     _mlsInviteInFlight = true;
     try {
       for (final entry in _mlsPeerKeyPackages.entries.toList()) {
-        final peerHex = entry.key;
-        if (_mlsInvitedPeers.contains(peerHex)) continue;
-        final peer = _peers[peerHex];
-        if (peer == null) continue;
-        final keyPackage = base64.decode(entry.value);
-        final result = _map(mls.inviteSync({
-          'group_id': _mlsGroupIdJson,
-          'invited_client': {
-            'user_id': _peerPublicKeys[peerHex] ?? peerHex,
-            'device_id': peerHex,
-          },
-          'keypackage': keyPackage,
-        }));
-        _mlsInvitedPeers.add(peerHex);
-        final welcome = _asBytes(result['welcome_message']);
-        final commit = _asBytes(result['commit_message']);
-        if (welcome.isNotEmpty) {
-          await _sendLegacyPayload({
-            'v': 1,
-            'type': 'mls_welcome',
-            'to': peerHex,
-            'payload': base64.encode(welcome),
-          });
-        }
-        if (commit.isNotEmpty) {
-          await _sendLegacyPayload({
-            'v': 1,
-            'type': 'mls_commit',
-            'payload': base64.encode(commit),
-          });
-        }
+        final peerKey = entry.key;
+        if (_mlsInvitedPeers.contains(peerKey)) continue;
+        final peer = entry.value;
         try {
-          mls.mergePendingCommitSync(_mlsGroupIdJson);
+          final keyPackage = base64.decode(peer.keyPackageB64);
+          final result = _map(mls.inviteSync({
+            'group_id': _mlsGroupIdJson,
+            'invited_client': {
+              'user_id': peer.userId,
+              'device_id': peer.deviceId,
+            },
+            'keypackage': keyPackage,
+          }));
+          _mlsInvitedPeers.add(peerKey);
+          final welcome = _asBytes(result['welcome_message']);
+          final commit = _asBytes(result['commit_message']);
+          if (welcome.isNotEmpty) {
+            await _sendLegacyPayload({
+              'v': 1,
+              'type': 'mls_welcome',
+              'to': peer.deviceId,
+              'payload': base64.encode(welcome),
+            });
+          }
+          if (commit.isNotEmpty) {
+            await _sendLegacyPayload({
+              'v': 1,
+              'type': 'mls_commit',
+              'payload': base64.encode(commit),
+            });
+          }
+          try {
+            mls.mergePendingCommitSync(_mlsGroupIdJson);
+          } catch (e) {
+            _log.warning('MLS pending commit merge failed: {error}',
+                parameters: {'error': e});
+          }
+          _schedulePersistMlsState();
         } catch (e) {
-          _log.warning('MLS pending commit merge failed: {error}',
+          _log.warning('MLS invite for peer failed: {error}',
               parameters: {'error': e});
         }
       }
@@ -824,6 +955,7 @@ class OpenMlsChatSession implements ISgtpSession {
         final event = _map(value);
         final kind = event['kind'] as String?;
         if (kind == 'MessageReceived') {
+          _schedulePersistMlsState();
           return _asBytes(event['message_plaintext']);
         }
         if (kind == 'GroupJoined' ||
@@ -832,6 +964,7 @@ class OpenMlsChatSession implements ISgtpSession {
           _mlsGroupReady = true;
         }
       }
+      _schedulePersistMlsState();
     } catch (e) {
       _log.warning('MLS incoming group message failed: {error}',
           parameters: {'error': e});
@@ -2133,20 +2266,34 @@ class OpenMlsChatSession implements ISgtpSession {
       case 'mls_key_package':
         if (!history && _isMaster && senderUUIDHex != myUUIDHex) {
           final kp = p['keypackage'] as String?;
-          if (kp != null && kp.isNotEmpty) {
-            _mlsPeerKeyPackages[senderUUIDHex] = kp;
+          final clientId = _map(p['client_id']);
+          final userId = (clientId['user_id'] as String?)?.trim() ??
+              (senderPub ?? senderUUIDHex);
+          final deviceId =
+              (clientId['device_id'] as String?)?.trim() ?? senderUUIDHex;
+          if (kp != null && kp.isNotEmpty && userId.isNotEmpty) {
+            final peer = _MlsPeerKeyPackage(
+              userId: userId,
+              deviceId: deviceId.isEmpty ? senderUUIDHex : deviceId,
+              keyPackageB64: kp,
+            );
+            _mlsPeerKeyPackages[peer.key] = peer;
             await _inviteKnownMlsPeers();
           }
         }
       case 'mls_welcome':
         if (!history && !_isMaster && !_mlsGroupReady) {
           final to = (p['to'] as String?)?.toLowerCase();
-          if (to == null || to == myUUIDHex.toLowerCase()) {
+          final acceptTo = to == null ||
+              to == _deviceId.toLowerCase() ||
+              to == myUUIDHex.toLowerCase();
+          if (acceptTo) {
             final payload = p['payload'] as String?;
             if (payload != null) {
               try {
                 _mls?.joinFromWelcomeSync(base64.decode(payload));
                 _mlsGroupReady = true;
+                _schedulePersistMlsState();
                 _log.info('MLS group joined');
               } catch (e) {
                 _log.warning('MLS welcome failed: {error}',
@@ -2960,6 +3107,9 @@ class OpenMlsChatSession implements ISgtpSession {
     _chatKey = null;
     _chatEpoch = 0;
     _myNonce = 0;
+    _persistMlsStateTimer?.cancel();
+    _persistMlsStateTimer = null;
+    await _persistMlsState();
     _mls?.close();
     _mls = null;
     _mlsClientReady = false;

@@ -1482,6 +1482,13 @@ class ServerV2ChatSession implements ISgtpSession {
         );
         return null;
       }
+      if (_isGenerationTooOldError(e)) {
+        _log.debug(
+          'MLS incoming ignored (generation too old) for room {roomId}: {error}',
+          parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
+        );
+        return null;
+      }
       if (_isBadEpochError(e)) {
         _log.warning(
           'MLS incoming failed due to bad epoch for room {roomId}: {error}',
@@ -1498,6 +1505,12 @@ class ServerV2ChatSession implements ISgtpSession {
       _eventController.add(SgtpError(error: 'MLS incoming failed: $e'));
     }
     return null;
+  }
+
+  bool _isGenerationTooOldError(Object error) {
+    final msg = error is MlsException ? error.message : error.toString();
+    final lower = msg.toLowerCase();
+    return lower.contains('generation') && lower.contains('too old');
   }
 
   bool _isBadEpochError(Object error) {
