@@ -114,7 +114,6 @@ class ServerV2ChatSession implements ISgtpSession {
   bool _isDirectRoom = false;
   bool _directRoomNeedsBootstrap = false;
   bool _directRoomInviteComplete = false;
-  bool _keyPackagesUploaded = false;
   String? _remoteRoomId;
   String? _directRoomOwnerPublicKeyHex;
   Uint8List? _directPeerPublicKeyOverride;
@@ -182,7 +181,6 @@ class ServerV2ChatSession implements ISgtpSession {
       await _initMls();
       await _loadRemoteRoomId();
       await _connectRpc();
-      await _ensureKeyPackagesUploaded();
       _seedKnownPeerPublicKeys();
       await _bootstrapRoomAndMls();
       _scheduleInviteRetry();
@@ -733,45 +731,6 @@ class ServerV2ChatSession implements ISgtpSession {
     return File('${base.path}/client_state_${key.substring(0, 16)}.bin');
   }
 
-  Future<void> _ensureKeyPackagesUploaded() async {
-    if (_keyPackagesUploaded) return;
-    final client = _rpcChat;
-    final mls = _mls;
-    if (client == null || mls == null) return;
-
-    final raw = _map(mls.createKeyPackagesSync(8));
-    final generated = _asObjectList(raw['keypackages']);
-    if (generated.isEmpty) {
-      throw StateError('chat_core returned no key packages');
-    }
-
-    final expiresAt = DateTime.now().toUtc().add(const Duration(days: 30));
-    await client.uploadKeyPackages(
-      generated
-          .map((item) => KeyPackageDto(
-                keyPackageBytes: _asBytes(item),
-                isLastResort: false,
-                expiresAtUs: expiresAt.microsecondsSinceEpoch,
-              ))
-          .toList(),
-    );
-    try {
-      mls.markKeyPackagesUploadedSync(raw);
-    } catch (e, st) {
-      _log.warning(
-        'markKeyPackagesUploaded failed after server upload: {error}',
-        parameters: {'error': e},
-        error: e,
-        stackTrace: st,
-      );
-    }
-    _keyPackagesUploaded = true;
-    _log.info(
-      'Uploaded MLS key packages for active chat session room {roomId}',
-      parameters: {'roomId': roomUUIDHex},
-    );
-  }
-
   Future<void> _bootstrapRoomAndMls() async {
     if (_isDirectRoom) {
       await _bootstrapDirectRoomAndMls();
@@ -806,10 +765,6 @@ class ServerV2ChatSession implements ISgtpSession {
     if (_directRoomNeedsBootstrap) {
       await _ensureMlsGroupCreated();
       await _publishRoomState();
-      final invited = await _inviteKnownPeers();
-      if (invited) {
-        _directRoomNeedsBootstrap = false;
-      }
       return;
     }
     await _joinFromStoredWelcome(reportMissing: false);
@@ -1063,7 +1018,13 @@ class ServerV2ChatSession implements ISgtpSession {
     if (_isDirectRoom &&
         _directRoomNeedsBootstrap &&
         !_directRoomInviteComplete) {
-      throw StateError('Direct room MLS invite is not ready yet');
+      final invited = await _inviteKnownPeers();
+      if (!invited) {
+        throw StateError(
+          'Direct room recipient has no published MLS key packages yet',
+        );
+      }
+      _directRoomNeedsBootstrap = false;
     }
 
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
@@ -1614,7 +1575,6 @@ class ServerV2ChatSession implements ISgtpSession {
       try {
         mls.markKeyPackagesUploadedSync(raw);
       } catch (_) {}
-      _keyPackagesUploaded = true;
       _schedulePersistMlsState();
     } catch (e, st) {
       _log.warning(
@@ -2052,6 +2012,9 @@ class ServerV2ChatSession implements ISgtpSession {
     if (!_isMaster && !_isDirectRoom) return;
     _inviteRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_connected) return;
+      if (_isDirectRoom && _directRoomNeedsBootstrap) {
+        return;
+      }
       if (_isDirectRoom && !_directRoomNeedsBootstrap && !_mlsGroupReady) {
         try {
           final joined = await _joinFromStoredWelcome(reportMissing: false);

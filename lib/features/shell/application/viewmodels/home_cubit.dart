@@ -203,10 +203,12 @@ class HomeCubit extends Cubit<HomeViewState> {
     _username = next;
     _buildState();
     await _ensureShellConnection();
-    return _userDirCoordinator.registerSelf(
+    final error = await _userDirCoordinator.registerSelf(
       _buildUserDirSession(),
       force: true,
     );
+    await _ensureShellKeyPackagesUploaded();
+    return error;
   }
 
   // ── Intent: Whitelist changed ───────────────────────────────────────────
@@ -335,6 +337,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     );
     await _ensureShellConnection();
     await _userDirCoordinator.start(_buildUserDirSession());
+    await _ensureShellKeyPackagesUploaded();
   }
 
   void _pushContactAvatarsToRooms() {
@@ -423,8 +426,11 @@ class HomeCubit extends Cubit<HomeViewState> {
 
   Future<void> _syncProfileToUserDir({required bool force}) async {
     await _ensureShellConnection();
-    await _userDirCoordinator.registerSelf(_buildUserDirSession(),
-        force: force);
+    await _userDirCoordinator.registerSelf(
+      _buildUserDirSession(),
+      force: force,
+    );
+    await _ensureShellKeyPackagesUploaded();
   }
 
   Future<void> _syncWhitelistWithUserDir(
@@ -445,14 +451,20 @@ class HomeCubit extends Cubit<HomeViewState> {
     try {
       await _sgtpConnection.configure(_config);
       await _sgtpConnection.ensureConnected();
-      await _keyPackagePublisher.ensureUploaded(
-        _config.copyWith(accountId: _accountId),
-      );
     } catch (e) {
       _connectionError = '$e';
       _buildState();
       rethrow;
     }
+  }
+
+  Future<void> _ensureShellKeyPackagesUploaded() async {
+    if (!_userDirCoordinator.profileRegisteredOnServer) {
+      return;
+    }
+    await _keyPackagePublisher.ensureUploaded(
+      _config.copyWith(accountId: _accountId),
+    );
   }
 
   void _onConnectionEvent(SgtpConnectionStateChanged event) {

@@ -45,6 +45,7 @@ class HomeUserDirCoordinator {
   /// not connected. Safe to call from other services for read-only operations
   /// (search, getMeta, etc.) — do NOT close it.
   IUserDirClient? get activeClient => _client;
+  bool get profileRegisteredOnServer => _profileRegisteredOnServer;
   StreamSubscription<UserDirMeta>? _userDirSub;
   StreamSubscription<UserDirFriendNotify>? _friendDirSub;
   Timer? _profileRegisterTimer;
@@ -53,6 +54,7 @@ class HomeUserDirCoordinator {
   String _lastRegisteredFingerprint = '';
   String _desiredProfileFingerprint = '';
   String _activeAccountId = '';
+  bool _profileRegisteredOnServer = false;
 
   Map<String, ContactProfile> _contactProfiles = {};
   Map<String, FriendStateRecord> _friendStates = {};
@@ -72,6 +74,7 @@ class HomeUserDirCoordinator {
     _activeAccountId = session.accountId.trim();
     _notifyQueue = Future.value();
     _lastRegisteredFingerprint = '';
+    _profileRegisteredOnServer = false;
     _desiredProfileFingerprint = _support.buildProfileFingerprint(
       publicKey: session.config.myPublicKey,
       nickname: session.nickname,
@@ -163,6 +166,7 @@ class HomeUserDirCoordinator {
 
     if (result.ok) {
       _lastRegisteredFingerprint = fp;
+      _profileRegisteredOnServer = true;
       return null;
     }
 
@@ -259,6 +263,7 @@ class HomeUserDirCoordinator {
     _initFuture = null;
     _client = null;
     _activeAccountId = '';
+    _profileRegisteredOnServer = false;
     _notifyQueue = Future.value();
   }
 
