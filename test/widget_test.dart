@@ -13,8 +13,12 @@ import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/features/contacts/application/services/contacts_directory_service.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_binding.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metadata.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
+import 'package:sgtp_flutter/features/messaging/domain/repositories/key_package_publisher.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/setup/data/repositories/app_backup_repository.dart';
 import 'package:sgtp_flutter/features/setup/data/repositories/settings_repository.dart';
@@ -178,6 +182,27 @@ class _FakeSgtpSession implements ISgtpSession {
   void updateWhitelist(Set<String> whitelist) {}
 }
 
+class _FakeDirectRoomGateway implements DirectRoomGateway {
+  @override
+  Future<DirectRoomBinding> ensureDirectRoom({
+    required SgtpConfig config,
+    required Uint8List targetUserPublicKey,
+  }) async {
+    return const DirectRoomBinding(
+      roomId: '00000000000000000000000000000000',
+      alreadyExisted: true,
+    );
+  }
+}
+
+class _FakeKeyPackagePublisher implements KeyPackagePublisher {
+  @override
+  Future<void> ensureUploaded(SgtpConfig config) async {}
+
+  @override
+  void invalidateForConfig(SgtpConfig config) {}
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -214,6 +239,8 @@ void main() {
           homePersistenceService: homePersistenceService,
           homeUserDirSupportService: homeUserDirSupportService,
           sgtpConnectionService: SgtpConnectionService(),
+          directRoomGateway: _FakeDirectRoomGateway(),
+          keyPackagePublisher: _FakeKeyPackagePublisher(),
           sgtpSessionFactory: (_) => _FakeSgtpSession(),
           homeUserDirCoordinatorFactory: ({
             required onDirectMessageReady,

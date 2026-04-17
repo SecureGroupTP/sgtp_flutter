@@ -137,6 +137,7 @@ class ServerV2ChatSession implements ISgtpSession {
             : ChatMetadataRepository(accountId: config.accountId) {
     _isDirectRoom = config.isDirectMessage;
     _directRoomNeedsBootstrap = config.bootstrapDirectRoom;
+    _whitelist = _effectiveWhitelist(_whitelist);
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
@@ -259,7 +260,7 @@ class ServerV2ChatSession implements ISgtpSession {
 
   @override
   void updateWhitelist(Set<String> whitelist) {
-    _whitelist = _normalizeWhitelist(whitelist);
+    _whitelist = _effectiveWhitelist(whitelist);
     _seedKnownPeerPublicKeys();
     if (_connected && _isMaster) {
       unawaited(_inviteKnownPeers());
@@ -2261,6 +2262,16 @@ class ServerV2ChatSession implements ISgtpSession {
         .map((item) => item.trim().toLowerCase())
         .where((item) => item.isNotEmpty)
         .toSet();
+  }
+
+  Set<String> _effectiveWhitelist(Set<String> whitelist) {
+    final normalized = _normalizeWhitelist(whitelist);
+    if (!_isDirectRoom) return normalized;
+
+    final peerHex = _directPeerPublicKeyHexEffective;
+    if (peerHex.length != 64) return <String>{};
+    if (peerHex == myUUIDHex) return <String>{};
+    return <String>{peerHex};
   }
 
   bool _ownsRemoteRoom(String roomId) {

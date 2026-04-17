@@ -89,13 +89,20 @@ class SgtpConfig {
     bool? bootstrapDirectRoom,
     String? directPeerPublicKeyHex,
   }) {
+    final effectivePeerHex =
+        (directPeerPublicKeyHex ?? this.directPeerPublicKeyHex ?? '')
+            .trim()
+            .toLowerCase();
+    final effectiveWhitelist = isDirectMessage
+        ? (effectivePeerHex.length == 64 ? {effectivePeerHex} : <String>{})
+        : whitelist;
     return SgtpConfig(
       accountId: accountId,
       serverAddr: serverAddr,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,
-      whitelist: whitelist,
+      whitelist: effectiveWhitelist,
       transport: transport,
       useTls: useTls,
       fakeSni: fakeSni,
