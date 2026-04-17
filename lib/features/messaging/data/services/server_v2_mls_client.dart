@@ -5,7 +5,6 @@ import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
-import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/messaging_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/room_rpc_models.dart';
@@ -70,9 +69,9 @@ class ServerV2MlsClient {
     }
     _log.info('Subscribing shared RPC to server events');
     final subscription = rpc
-        .callRpc(SubscribeToEventsRequest(
-      requestedAtUs: DateTime.now().microsecondsSinceEpoch,
-    ))
+        .ensureEventsSubscribed(
+          requestedAtUs: DateTime.now().microsecondsSinceEpoch,
+        )
         .then<void>((_) {
       _rpcEventsSubscribed[rpc] = true;
     });

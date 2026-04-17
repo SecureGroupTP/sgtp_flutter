@@ -19,6 +19,7 @@ class ChatMetadataRepository {
   static const String _chatsDirName = 'sgtp_chats';
 
   final String? accountId;
+  final Map<String, Future<void>> _fileWriteQueue = {};
 
   ChatMetadataRepository({this.accountId});
 
@@ -233,22 +234,87 @@ class ChatMetadataRepository {
       await _webSave(metadata);
       return;
     }
-    try {
-      final file = await _getMetadataFile(
-        metadata.uuid,
-        serverAddress: metadata.serverAddress,
-      );
-      await file.parent.create(recursive: true);
-      await file.writeAsString(jsonEncode(_toJson(metadata)), flush: true);
-      _log.info('[ChatMetadata] Saved chat: {uuid}@{server}', parameters: {
-        'uuid': metadata.uuid,
-        'server': metadata.serverAddress
-      });
-    } catch (e) {
-      _log.error('[ChatMetadata] Error saving chat: {error}',
-          parameters: {'error': e});
-      rethrow;
+    final file = await _getMetadataFile(
+      metadata.uuid,
+      serverAddress: metadata.serverAddress,
+    );
+    await _runWriteLocked(file.path, () async {
+      try {
+        await file.parent.create(recursive: true);
+        final payload = jsonEncode(_toJson(metadata));
+        final tmp = File('${file.path}.tmp');
+        await tmp.writeAsString(payload, flush: true);
+        await _atomicReplace(tmp, file);
+        _log.info('[ChatMetadata] Saved chat: {uuid}@{server}', parameters: {
+          'uuid': metadata.uuid,
+          'server': metadata.serverAddress
+        });
+      } catch (e) {
+        _log.error('[ChatMetadata] Error saving chat: {error}',
+            parameters: {'error': e});
+        rethrow;
+      }
+    });
+  }
+
+  Future<void> _runWriteLocked(String key, Future<void> Function() action) {
+    final previous = _fileWriteQueue[key] ?? Future.value();
+    final next = previous.then((_) => action());
+    // Keep the chain alive even if a previous write failed, otherwise future
+    // writes will be blocked behind a failed future.
+    final tail = next.catchError((_) {});
+    _fileWriteQueue[key] = tail;
+    return next.whenComplete(() {
+      // Cleanup: remove only if we are still the tail.
+      if (identical(_fileWriteQueue[key], tail)) {
+        _fileWriteQueue.remove(key);
+      }
+    });
+  }
+
+  Future<void> _atomicReplace(File tmp, File target) async {
+    // On POSIX, rename() replaces atomically. On Windows, rename fails if the
+    // destination exists or is locked. We also can have concurrent writers
+    // inside a single app, so we retry a little to avoid transient locks.
+    const delays = <Duration>[
+      Duration(milliseconds: 0),
+      Duration(milliseconds: 10),
+      Duration(milliseconds: 25),
+      Duration(milliseconds: 60),
+    ];
+    Object? lastError;
+    for (final delay in delays) {
+      if (delay.inMilliseconds > 0) {
+        await Future<void>.delayed(delay);
+      }
+      try {
+        if (!Platform.isWindows) {
+          await tmp.rename(target.path);
+          return;
+        }
+        // Windows: try direct rename first.
+        try {
+          await tmp.rename(target.path);
+          return;
+        } on PathAccessException {
+          // Fallthrough to delete+rename retry.
+        } on FileSystemException {
+          // Fallthrough to delete+rename retry.
+        }
+        if (await target.exists()) {
+          try {
+            await target.delete();
+          } catch (_) {
+            // Ignore and retry: file may be temporarily locked by AV/indexer.
+          }
+        }
+        await tmp.rename(target.path);
+        return;
+      } catch (e) {
+        lastError = e;
+      }
     }
+    throw lastError ?? const FileSystemException('atomic replace failed');
   }
 
   Future<void> updateChat(ChatMetadata metadata) async {

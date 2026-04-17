@@ -161,14 +161,18 @@ class UnsubscribeFromEventsResponse {
 
 class AcknowledgeEventRequest extends RpcRequest {
   final Uint8List eventId;
+  final String? segmentId;
 
-  const AcknowledgeEventRequest({required this.eventId});
+  const AcknowledgeEventRequest({required this.eventId, this.segmentId});
 
   @override
   String get method => 'acknowledgeEvent';
 
   @override
-  Map<String, dynamic> toMap() => {'eventId': eventId};
+  Map<String, dynamic> toMap() => {
+        'eventId': eventId,
+        if (segmentId != null) 'segmentId': segmentId,
+      };
 }
 
 class AcknowledgeEventResponse {

@@ -390,8 +390,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Map<String, String> peerPublicKeys, {
     Map<String, String>? nicknames,
   }) {
-    if (peerPublicKeys.length != 1) return null;
-    final pubHex = peerPublicKeys.values.first;
+    final pubHex = _resolveDirectPeerPubHex(peerPublicKeys);
+    if (pubHex == null) return null;
     final sourceNicknames = nicknames ?? state.nicknames;
     final rawName = (sourceNicknames[pubHex] ??
                 sourceNicknames[pubHex.toLowerCase()] ??
@@ -406,6 +406,24 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     // (from contacts/whitelist) or have an avatar.
     if (rawName.isEmpty && (avatar == null || avatar.isEmpty)) return null;
     return (name: rawName.isNotEmpty ? rawName : 'Direct chat', avatar: avatar);
+  }
+
+  String? _resolveDirectPeerPubHex(Map<String, String> peerPublicKeys) {
+    if (peerPublicKeys.isEmpty) return null;
+    if (peerPublicKeys.length == 1) {
+      final only = peerPublicKeys.values.first.trim();
+      return only.isEmpty ? null : only;
+    }
+    final myHex = state.myPublicKeyHex.trim().toLowerCase();
+    final candidates = <String>{};
+    for (final v in peerPublicKeys.values) {
+      final hex = v.trim().toLowerCase();
+      if (hex.isEmpty) continue;
+      if (myHex.isNotEmpty && hex == myHex) continue;
+      candidates.add(hex);
+    }
+    if (candidates.length != 1) return null;
+    return candidates.first;
   }
 
   String? _lookupNicknameForPubHex(Map<String, String> nicknames, String pubHex) {
@@ -600,8 +618,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       final direct = state.isDirectChat || (existing?.isDirectMessage ?? false);
       if (direct) {
         final existingName = (existing?.name ?? '').trim();
+        final inferred = _directPeerPublicKeyHex.isNotEmpty
+            ? _directPeerPublicKeyHex
+            : (_resolveDirectPeerPubHex(state.peerPublicKeys) ?? '');
+        if (_directPeerPublicKeyHex.isEmpty && inferred.isNotEmpty) {
+          _directPeerPublicKeyHex = inferred;
+        }
         final preferredName =
-            _lookupNicknameForPubHex(state.nicknames, _directPeerPublicKeyHex);
+            inferred.isNotEmpty ? _lookupNicknameForPubHex(state.nicknames, inferred) : null;
         final shouldReplace = _isGenericDirectChatTitle(effectiveName) ||
             _isAutoPeerTitle(effectiveName);
         if (preferredName != null && shouldReplace) {

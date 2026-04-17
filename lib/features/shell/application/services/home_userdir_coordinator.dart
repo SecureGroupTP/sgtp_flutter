@@ -336,7 +336,9 @@ class HomeUserDirCoordinator {
     final lower = peerHex.toLowerCase();
     if (_isSelfHex(session, lower)) return;
     if (_suppressedContacts.contains(lower)) return;
-    if (_whitelist.any((e) => e.hexKey.toLowerCase() == lower)) return;
+    final existingIdx = _whitelist.indexWhere((e) => e.hexKey.toLowerCase() == lower);
+    final existingName = existingIdx >= 0 ? _whitelist[existingIdx].name.trim() : '';
+    final canUpgradeExisting = existingIdx >= 0 && _isAutoPeerFallbackName(existingName);
 
     ContactProfile? profile = _contactProfiles[lower];
     final client = _client;
@@ -364,17 +366,28 @@ class HomeUserDirCoordinator {
     final autoName = _bestContactName(
       fullName: fullName,
       username: username,
-      fallback: 'peer_${lower.substring(0, 8)}',
+      fallback: existingName.isNotEmpty ? existingName : 'peer_${lower.substring(0, 8)}',
     );
+
+    if (existingIdx >= 0) {
+      if (!canUpgradeExisting) return;
+      final nextName = autoName.trim();
+      if (nextName.isEmpty || nextName == existingName) return;
+      final updated = List<WhitelistEntry>.from(_whitelist);
+      final existing = updated[existingIdx];
+      updated[existingIdx] = WhitelistEntry(bytes: existing.bytes, name: nextName);
+      _whitelist = updated;
+      _nicknames = {..._nicknames, lower: nextName};
+      await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
+      _emit();
+      return;
+    }
 
     _whitelist = [
       ..._whitelist,
       WhitelistEntry(bytes: _support.hexToBytes32(lower), name: autoName),
     ];
-    _nicknames = {
-      ..._nicknames,
-      lower: autoName,
-    };
+    _nicknames = {..._nicknames, lower: autoName};
 
     await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
     _emit();
@@ -465,13 +478,17 @@ class HomeUserDirCoordinator {
           candidate.roomUUIDHex != null) {
         final profile = _contactProfiles[peerHex];
         final nickname = (_nicknames[peerHex] ?? '').trim();
+        final nicknameIsAuto = _isAutoPeerFallbackName(nickname);
         final fullName = profile?.fullname?.trim() ?? '';
         final username =
             (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+        final fallback = (!nicknameIsAuto && nickname.isNotEmpty)
+            ? nickname
+            : 'peer_${peerHex.substring(0, 8)}';
         final displayName = _bestContactName(
           fullName: fullName,
           username: username,
-          fallback: nickname.isNotEmpty ? nickname : 'Friend',
+          fallback: fallback,
         );
         await _onDirectMessageReady(
           candidate.roomUUIDHex!,
@@ -646,6 +663,9 @@ class HomeUserDirCoordinator {
       await _persistence.saveContactProfile(session.accountId, cp);
       _contactProfiles[meta.pubkeyHex] = cp;
     }
+    // If we previously created a synthetic "peer_xxxxxxxx" nickname for this
+    // contact, upgrade it once profile metadata becomes available.
+    await _ensureContactForPeer(session, meta.pubkeyHex);
     _emit();
   }
 
@@ -696,6 +716,11 @@ class HomeUserDirCoordinator {
     if (!fullIsGeneric) return full;
     if (user.isNotEmpty) return user;
     return fallback;
+  }
+
+  bool _isAutoPeerFallbackName(String name) {
+    final trimmed = name.trim().toLowerCase();
+    return RegExp(r'^peer_[0-9a-f]{8}$').hasMatch(trimmed);
   }
 
   String _pubkeyHex(Uint8List key) =>

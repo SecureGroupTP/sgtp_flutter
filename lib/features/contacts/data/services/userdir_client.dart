@@ -5,7 +5,6 @@ import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
-import 'package:sgtp_flutter/core/network/rpc_models/auth_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/profile_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_request_rpc_models.dart';
@@ -163,10 +162,9 @@ class UserDirClient implements IUserDirClient {
   Future<bool> subscribe(List<Uint8List> pubkeys) async {
     try {
       final rpc = await _resolveRpcConnected();
-      final req = SubscribeToEventsRequest(
+      await rpc.ensureEventsSubscribed(
         requestedAtUs: DateTime.now().microsecondsSinceEpoch,
       );
-      await rpc.callRpc(req);
       return true;
     } catch (e) {
       _log.warning('subscribe failed: {error}', parameters: {'error': e});

@@ -35,6 +35,9 @@ class SgtpRpcClient {
   final _eventCallbacks = <int, void Function(Map<String, dynamic> event)>{};
   int _nextEventCallbackId = 0;
 
+  bool _eventsSubscribed = false;
+  Future<void>? _eventsSubscriptionInFlight;
+
   // CBOR decoder must be stream-oriented because TCP/WebSocket chunking does not
   // preserve packet boundaries.
   final List<CborValue> _decodedValues = <CborValue>[];
@@ -55,6 +58,37 @@ class SgtpRpcClient {
 
   IProtocolTransport get transport => _transport;
   bool get hasCredentials => _keyPair != null;
+
+  /// Subscribe this RPC session to server events (single-flight).
+  ///
+  /// Multiple parts of the app may want events (contacts, messaging/MLS, etc.).
+  /// Calling this method guarantees only one underlying `subscribeToEvents`
+  /// RPC call happens per [SgtpRpcClient] instance.
+  Future<void> ensureEventsSubscribed({int? requestedAtUs}) async {
+    if (_eventsSubscribed) return;
+    final existing = _eventsSubscriptionInFlight;
+    if (existing != null) {
+      await existing;
+      return;
+    }
+
+    final subscription = callRpc(
+      SubscribeToEventsRequest(
+        requestedAtUs: requestedAtUs ?? DateTime.now().microsecondsSinceEpoch,
+      ),
+    ).then<void>((_) {
+      _eventsSubscribed = true;
+    });
+
+    _eventsSubscriptionInFlight = subscription;
+    try {
+      await subscription;
+    } finally {
+      if (identical(_eventsSubscriptionInFlight, subscription)) {
+        _eventsSubscriptionInFlight = null;
+      }
+    }
+  }
 
   /// Performs the full Ed25519 challenge-response handshake.
   ///
@@ -186,7 +220,12 @@ class SgtpRpcClient {
     });
     final packetBytes = Uint8List.fromList(cbor.encode(packet));
 
-    _log.info(
+    final noisyRpcMethods = <String>{
+      'acknowledgeEvent',
+      'subscribeToEvents',
+    };
+    final logCall = noisyRpcMethods.contains(request.method) ? _log.debug : _log.info;
+    logCall(
       'Calling RPC method: {methodName}. RequestId: {requestIdShort}. Parameters: {parameters}',
       parameters: {
         'methodName': request.method,
@@ -315,7 +354,13 @@ class SgtpRpcClient {
         );
         pending.completer.completeError(StateError('$code: $message'));
       } else {
-        _log.info(
+        final noisyRpcMethods = <String>{
+          'acknowledgeEvent',
+          'subscribeToEvents',
+        };
+        final logResponse =
+            noisyRpcMethods.contains(pending.method) ? _log.debug : _log.info;
+        logResponse(
           'RPC response received. Method: {methodName}. RequestId: {requestIdShort}. Parameters: {parameters}',
           parameters: {
             'methodName': pending.method,
@@ -360,7 +405,7 @@ class SgtpRpcClient {
       'eventType': eventTypeValue.toString(),
       'parameters': _fromCborMap(paramsValue),
     };
-    _log.info(
+    _log.debug(
       'RPC event received. EventType: {eventType}. RequestId: {requestIdShort}. Parameters: {parameters}',
       parameters: {
         'eventType': eventTypeValue.toString(),
@@ -378,16 +423,27 @@ class SgtpRpcClient {
       }
     }
     if (requestIdBytes != null && requestId != null && requestId.isNotEmpty) {
-      unawaited(_acknowledgeEvent(requestIdBytes, eventTypeValue.toString()));
+      final segmentId = _extractSegmentId(paramsValue);
+      unawaited(
+        _acknowledgeEvent(
+          requestIdBytes,
+          eventTypeValue.toString(),
+          segmentId: segmentId,
+        ),
+      );
     }
   }
 
   // ── Logging ────────────────────────────────────────────────────────────────
 
-  Future<void> _acknowledgeEvent(Uint8List eventId, String eventType) async {
+  Future<void> _acknowledgeEvent(
+    Uint8List eventId,
+    String eventType, {
+    String? segmentId,
+  }) async {
     final eventIdHex = uuidBytesToHex(eventId);
     try {
-      await callRpc(AcknowledgeEventRequest(eventId: eventId));
+      await callRpc(AcknowledgeEventRequest(eventId: eventId, segmentId: segmentId));
       _log.debug(
         'RPC event acknowledged. EventType: {eventType}. EventId: {eventIdShort}',
         parameters: {
@@ -409,6 +465,17 @@ class SgtpRpcClient {
         stackTrace: st,
       );
     }
+  }
+
+  static String? _extractSegmentId(CborMap parameters) {
+    for (final key in const ['roomId', 'chatId', 'segmentId']) {
+      final value = parameters[CborString(key)];
+      if (value is CborString) {
+        final id = value.toString().trim();
+        if (id.isNotEmpty) return id;
+      }
+    }
+    return null;
   }
 
   /// Recursively converts a [CborValue] to a JSON-encodable value.

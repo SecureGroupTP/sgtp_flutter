@@ -960,14 +960,34 @@ class ServerV2ChatSession implements ISgtpSession {
       final peerDeviceKey = '$peerHex:${item.deviceId}:$keyPackageFingerprint';
       if (_invitedPeerDevices.contains(peerDeviceKey)) continue;
 
-      final inviteResult = _map(mls.inviteSync({
-        'group_id': _mlsGroupIdJson,
-        'invited_client': {
-          'user_id': peerHex,
-          'device_id': item.deviceId,
-        },
-        'keypackage': item.keyPackageBytes,
-      }));
+      Map<String, dynamic> inviteResult;
+      try {
+        inviteResult = _map(mls.inviteSync({
+          'group_id': _mlsGroupIdJson,
+          'invited_client': {
+            'user_id': peerHex,
+            'device_id': item.deviceId,
+          },
+          'keypackage': item.keyPackageBytes,
+        }));
+      } on MlsException catch (e) {
+        // Idempotency: on reconnect we may attempt to invite a peer device that
+        // is already a group member. Treat it as success and don't crash.
+        if (e.code == 3 || e.message.toLowerCase().contains('already in group')) {
+          _log.debug(
+            'MLS invite skipped (already in group) room={roomId} peer={peer} device={device}',
+            parameters: {
+              'roomId': remoteRoomId,
+              'peer': peerHex.substring(0, 8),
+              'device': item.deviceId,
+            },
+          );
+          _invitedPeerDevices.add(peerDeviceKey);
+          _directRoomInviteComplete = _directRoomInviteComplete || _isDirectRoom;
+          continue;
+        }
+        rethrow;
+      }
       final commit = _asBytes(inviteResult['commit_message']);
       final welcome = _asBytes(inviteResult['welcome_message']);
 
@@ -1485,6 +1505,13 @@ class ServerV2ChatSession implements ISgtpSession {
         );
         return null;
       }
+      if (_isForwardSecrecySecretDeletedError(e)) {
+        _log.debug(
+          'MLS incoming ignored (forward secrecy secret deleted) for room {roomId}: {error}',
+          parameters: {'roomId': _remoteRoomId ?? roomUUIDHex, 'error': e},
+        );
+        return null;
+      }
       if (_isBadEpochError(e)) {
         _log.warning(
           'MLS incoming failed due to bad epoch for room {roomId}: {error}',
@@ -1611,6 +1638,14 @@ class ServerV2ChatSession implements ISgtpSession {
     final msg = error is MlsException ? error.message : error.toString();
     final lower = msg.toLowerCase();
     return lower.contains('generation') && lower.contains('too old');
+  }
+
+  bool _isForwardSecrecySecretDeletedError(Object error) {
+    final msg = error is MlsException ? error.message : error.toString();
+    final lower = msg.toLowerCase();
+    return (lower.contains('requested secret') && lower.contains('deleted')) ||
+        lower.contains('preserve forward secrecy') ||
+        (lower.contains('forward secrecy') && lower.contains('deleted'));
   }
 
   bool _isBadEpochError(Object error) {
