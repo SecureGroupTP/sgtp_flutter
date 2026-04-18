@@ -141,7 +141,7 @@ class RoomsPageState extends State<RoomsPage> {
                     ),
                   );
             },
-            onRemove: () => context.read<RoomsBloc>().add(RoomsRemoveRoom(
+            onRemove: () => context.read<RoomsBloc>().add(RoomsDeleteRoomLocal(
                 entry.roomUUID,
                 serverAddress: entry.serverAddress)),
           );
@@ -438,7 +438,7 @@ class ActiveRoomTile extends StatelessWidget {
             ListTile(
               leading:
                   const Icon(Icons.delete_outline, color: AppColors.statusRed),
-              title: const Text('Remove',
+              title: const Text('Delete',
                   style: TextStyle(color: AppColors.statusRed)),
               onTap: () {
                 Navigator.pop(context);

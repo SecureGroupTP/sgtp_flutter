@@ -77,6 +77,7 @@ class AppStartupService {
       final parsed = parseOpenSshPrivateKey(savedKey.bytes);
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final mediaSettings = await _settings.loadMediaTransferSettings();
+      final deviceId = await _settings.ensureDeviceId();
 
       final entries = accountId.trim().isEmpty
           ? await _settings.loadWhitelistEntries()
@@ -104,6 +105,7 @@ class AppStartupService {
           config: SgtpConfig(
             accountId: accountId,
             serverAddr: chatServer,
+            deviceId: deviceId,
             roomUUID: Uint8List(16),
             identityKeyPair: keyPair,
             myPublicKey: parsed.publicKey,

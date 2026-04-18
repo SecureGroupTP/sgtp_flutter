@@ -360,7 +360,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _wlEntries = snapshot.whitelistEntries;
     _buildState();
 
-    if (applyConfig) tryApplyConfig();
+    if (applyConfig) unawaited(tryApplyConfig());
   }
 
   Future<void> _refreshProfilesCache(List<String> accountIds) async {
@@ -388,12 +388,12 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Intent: Apply config ────────────────────────────────────────────────
 
-  void tryApplyConfig() {
+  Future<void> tryApplyConfig() async {
     if (_privateKeyBytes == null || _myPublicKey == null) return;
     try {
       final accountId = _activeAccountId();
       if (accountId == null || accountId.trim().isEmpty) return;
-      final applied = _settings.buildAppliedConfig(
+      final applied = await _settings.buildAppliedConfig(
         accountId: accountId,
         privateKeyBytes: _privateKeyBytes!,
         nodes: _nodes,
@@ -424,7 +424,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _preferredNodeId = nodeId;
     await _settings.setLastNodeId(nodeId);
     _buildState();
-    tryApplyConfig();
+    unawaited(tryApplyConfig());
   }
 
   // ── Intent: Select account ──────────────────────────────────────────────
@@ -510,7 +510,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     }
 
     if (applyConfig) {
-      tryApplyConfig();
+      unawaited(tryApplyConfig());
     }
   }
 
@@ -641,7 +641,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       compressVideos: _compressVideos,
       mediaChunkSizeBytes: _mediaChunkSizeBytes,
     ));
-    tryApplyConfig();
+    unawaited(tryApplyConfig());
   }
 
   // ── Intent: Interaction preferences ─────────────────────────────────────
@@ -650,7 +650,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _pingIntervalSeconds = seconds;
     _buildState();
     await _settings.savePingIntervalSeconds(seconds);
-    tryApplyConfig();
+    unawaited(tryApplyConfig());
   }
 
   void setDoubleTapDesktop(String value) {

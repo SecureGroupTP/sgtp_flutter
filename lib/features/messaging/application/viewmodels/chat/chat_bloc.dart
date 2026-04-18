@@ -985,4 +985,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _client?.close();
     return super.close();
   }
+
+  Future<bool> requestDirectWelcomeReissue() async {
+    final client = _client;
+    if (client == null) return false;
+    try {
+      return await client.requestDirectWelcomeReissue();
+    } catch (e) {
+      _log.warning('requestDirectWelcomeReissue failed: {error}',
+          parameters: {'error': e});
+      return false;
+    }
+  }
 }

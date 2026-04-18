@@ -143,6 +143,9 @@ class _FakeSgtpSession implements ISgtpSession {
   Future<void> sendChatMeta(String name, Uint8List? avatarBytes) async {}
 
   @override
+  Future<bool> requestDirectWelcomeReissue() async => false;
+
+  @override
   Future<void> sendImage(Uint8List bytes, String name, String mime) async {}
 
   @override

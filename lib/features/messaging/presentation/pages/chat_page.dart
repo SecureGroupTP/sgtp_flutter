@@ -1385,9 +1385,22 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         icon: const Icon(Icons.more_vert,
                             size: 22, color: Color(0xFF8E8E93)),
                         padding: const EdgeInsets.all(4),
-                        onSelected: (action) {
+                        onSelected: (action) async {
                           if (action == 0) {
                             _showEditMetadataDialog(context, state);
+                            return;
+                          }
+                          if (action == 1) {
+                            final ok = await context
+                                .read<ChatBloc>()
+                                .requestDirectWelcomeReissue();
+                            if (!context.mounted) return;
+                            _showSnack(
+                              context,
+                              ok
+                                  ? 'Welcome reissue requested'
+                                  : 'Cannot reissue welcome from this side. Ask the other participant to open this chat.',
+                            );
                           }
                         },
                         itemBuilder: (_) => [
@@ -1400,6 +1413,15 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                               contentPadding: EdgeInsets.zero,
                             ),
                           ),
+                          if (state.isDirectChat)
+                            const PopupMenuItem(
+                              value: 1,
+                              child: ListTile(
+                                leading: Icon(Icons.refresh_outlined),
+                                title: Text('Send welcome'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
                         ],
                       ),
                     ],

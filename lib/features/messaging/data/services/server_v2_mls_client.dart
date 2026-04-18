@@ -333,6 +333,11 @@ class ServerV2MlsClient {
   }
 
   void _handleEventPacket(Map<String, dynamic> event) {
+    // Events can race with `close()` when using shared server event streams.
+    // Dropping late events avoids "Cannot add new events after calling close".
+    if (_events.isClosed) {
+      return;
+    }
     final eventType = event['eventType'] as String?;
     final parameters = event['parameters'];
     if (eventType == null || parameters is! Map<String, dynamic>) {
@@ -341,18 +346,27 @@ class ServerV2MlsClient {
 
     switch (eventType) {
       case 'mlsCommitReceived':
-        _events.add(MlsCommitReceivedNetworkEvent.fromParameters(parameters));
+        if (!_events.isClosed) {
+          _events.add(MlsCommitReceivedNetworkEvent.fromParameters(parameters));
+        }
         break;
       case 'mlsWelcomeReceived':
-        _events.add(MlsWelcomeReceivedNetworkEvent.fromParameters(parameters));
+        if (!_events.isClosed) {
+          _events.add(MlsWelcomeReceivedNetworkEvent.fromParameters(parameters));
+        }
         break;
       case 'mlsExternalCommitReceived':
-        _events.add(
-          MlsExternalCommitReceivedNetworkEvent.fromParameters(parameters),
-        );
+        if (!_events.isClosed) {
+          _events.add(
+            MlsExternalCommitReceivedNetworkEvent.fromParameters(parameters),
+          );
+        }
         break;
       case 'mlsMessageReceived':
-        _events.add(MlsMessageReceivedNetworkEvent.fromParameters(parameters));
+        if (!_events.isClosed) {
+          _events
+              .add(MlsMessageReceivedNetworkEvent.fromParameters(parameters));
+        }
         break;
       default:
         _log.debug('Ignoring server event: {eventType}',

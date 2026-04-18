@@ -75,6 +75,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     on<RoomsCreateRoom>(_onCreate);
     on<RoomsJoinRoom>(_onJoin);
     on<RoomsRemoveRoom>(_onRemove);
+    on<RoomsDeleteRoomLocal>(_onDeleteRoomLocal);
     on<RoomsUpdateWhitelist>(_onUpdateWhitelist);
     on<RoomsUpdateNicknames>(_onUpdateNicknames);
     on<RoomsUpdateContactAvatars>(_onUpdateContactAvatars);
@@ -593,6 +594,59 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           .toList(),
       clearError: true,
     ));
+  }
+
+  Future<void> _onDeleteRoomLocal(
+    RoomsDeleteRoomLocal event,
+    Emitter<RoomsState> emit,
+  ) async {
+    final roomKey = _roomKey(event.roomUUID, event.serverAddress);
+
+    // Stop notifications/subscriptions first.
+    _clearPendingNotification(roomKey);
+    _lastUnreadByRoomKey.remove(roomKey);
+    await _chatSubs[roomKey]?.cancel();
+    _chatSubs.remove(roomKey);
+
+    // Close active bloc (if present).
+    final room = state.rooms
+        .where((r) =>
+            r.roomUUID == event.roomUUID &&
+            _normalizeAddress(r.serverAddress) ==
+                _normalizeAddress(event.serverAddress))
+        .firstOrNull;
+    if (room != null) {
+      room.chatBloc.add(const ChatDisconnect());
+      await room.chatBloc.close();
+    }
+
+    // Wipe local history + metadata.
+    try {
+      await _chatStorage
+          .historyForChat(
+            accountId: _accountId,
+            serverAddress: event.serverAddress,
+            chatUUID: event.roomUUID,
+          )
+          .clear();
+    } catch (_) {}
+    try {
+      await _chatMetadataRepo.deleteChat(
+        event.roomUUID,
+        serverAddress: event.serverAddress,
+      );
+    } catch (_) {}
+
+    emit(state.copyWith(
+      rooms: state.rooms
+          .where((r) => !(r.roomUUID == event.roomUUID &&
+              _normalizeAddress(r.serverAddress) ==
+                  _normalizeAddress(event.serverAddress)))
+          .toList(),
+      clearError: true,
+    ));
+
+    add(const RoomsLoadStoredChats());
   }
 
   void _onRefresh(_RoomsRefresh event, Emitter<RoomsState> emit) {
