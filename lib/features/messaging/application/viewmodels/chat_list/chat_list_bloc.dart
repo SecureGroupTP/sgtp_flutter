@@ -22,7 +22,6 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
     on<ChatListCreateChat>(_onCreateChat);
     on<ChatListUpdateChat>(_onUpdateChat);
     on<ChatListDeleteChat>(_onDeleteChat);
-    on<ChatListSetMuted>(_onSetMuted);
     on<ChatListRefresh>(_onRefresh);
     on<ChatListSelectChat>(_onSelectChat);
     on<ChatListUpdateWindowSize>(_onUpdateWindowSize);
@@ -158,46 +157,6 @@ class ChatListBloc extends Bloc<ChatListEvent, ChatListState> {
         status: ChatListStatus.error,
         errorMessage: 'Failed to delete chat: $e',
       ));
-    }
-  }
-
-  /// Mute/unmute a chat (local-only preference).
-  Future<void> _onSetMuted(
-    ChatListSetMuted event,
-    Emitter<ChatListState> emit,
-  ) async {
-    try {
-      final chatToUpdate = state.chats.firstWhere(
-        (c) =>
-            c.uuid == event.uuid &&
-            c.serverAddress.trim() == event.serverAddress.trim(),
-        orElse: () => throw Exception('Chat not found'),
-      );
-
-      final updated = chatToUpdate.copyWith(
-        isMuted: event.muted,
-        updatedAt: DateTime.now(),
-      );
-      await _repository.updateChat(updated);
-
-      final updatedChats = state.chats
-          .map((c) => (c.uuid == event.uuid &&
-                  c.serverAddress.trim() == event.serverAddress.trim())
-              ? updated
-              : c)
-          .toList()
-        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-
-      emit(state.copyWith(
-        status: ChatListStatus.loaded,
-        chats: updatedChats,
-        selectedChat: state.selectedChat?.uuid == event.uuid
-            ? updated
-            : state.selectedChat,
-      ));
-    } catch (e) {
-      _log.error('[ChatListBloc] Error muting chat: {error}',
-          parameters: {'error': e});
     }
   }
 

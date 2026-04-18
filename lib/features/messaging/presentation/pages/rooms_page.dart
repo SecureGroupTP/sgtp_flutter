@@ -117,35 +117,13 @@ class RoomsPageState extends State<RoomsPage> {
       padding: const EdgeInsets.only(top: 4, bottom: 100),
       children: [
         // ── Active rooms ─────────────────────────────────────────────────
-        ...state.rooms.map((entry) {
-          ChatMetadata? chat;
-          final targetServer = _serverKey(entry.serverAddress);
-          for (final c in state.storedChats) {
-            if (c.uuid == entry.roomUUID &&
-                _serverKey(c.serverAddress) == targetServer) {
-              chat = c;
-              break;
-            }
-          }
-          final muted = chat?.isMuted ?? false;
-          return ActiveRoomTile(
-            entry: entry,
-            isMuted: muted,
-            onTap: () => _openRoom(entry),
-            onToggleMute: () {
-              context.read<RoomsBloc>().add(
-                    RoomsSetChatMuted(
-                      entry.roomUUID,
-                      serverAddress: entry.serverAddress,
-                      muted: !muted,
-                    ),
-                  );
-            },
-            onRemove: () => context.read<RoomsBloc>().add(RoomsDeleteRoomLocal(
-                entry.roomUUID,
-                serverAddress: entry.serverAddress)),
-          );
-        }),
+        ...state.rooms.map((entry) => ActiveRoomTile(
+              entry: entry,
+              onTap: () => _openRoom(entry),
+              onRemove: () => context.read<RoomsBloc>().add(RoomsRemoveRoom(
+                  entry.roomUUID,
+                  serverAddress: entry.serverAddress)),
+            )),
       ],
     );
   }
@@ -328,17 +306,13 @@ class RoomsAppBar extends StatelessWidget implements PreferredSizeWidget {
 
 class ActiveRoomTile extends StatelessWidget {
   final RoomEntry entry;
-  final bool isMuted;
   final VoidCallback onTap;
-  final VoidCallback onToggleMute;
   final VoidCallback onRemove;
 
   const ActiveRoomTile({
     super.key,
     required this.entry,
-    required this.isMuted,
     required this.onTap,
-    required this.onToggleMute,
     required this.onRemove,
   });
 
@@ -422,23 +396,11 @@ class ActiveRoomTile extends StatelessWidget {
                 );
               },
             ),
-            ListTile(
-              leading: Icon(
-                isMuted
-                    ? Icons.notifications_active_outlined
-                    : Icons.notifications_off_outlined,
-              ),
-              title: Text(isMuted ? 'Unmute' : 'Mute'),
-              onTap: () {
-                Navigator.pop(context);
-                onToggleMute();
-              },
-            ),
             const Divider(height: 1),
             ListTile(
               leading:
                   const Icon(Icons.delete_outline, color: AppColors.statusRed),
-              title: const Text('Delete',
+              title: const Text('Remove',
                   style: TextStyle(color: AppColors.statusRed)),
               onTap: () {
                 Navigator.pop(context);

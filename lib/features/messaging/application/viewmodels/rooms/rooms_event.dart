@@ -59,15 +59,6 @@ class RoomsRemoveRoom extends RoomsEvent {
   List<Object?> get props => [roomUUID, serverAddress];
 }
 
-/// Deletes a chat locally (metadata + history) and removes it from active rooms.
-class RoomsDeleteRoomLocal extends RoomsEvent {
-  final String roomUUID;
-  final String serverAddress;
-  const RoomsDeleteRoomLocal(this.roomUUID, {required this.serverAddress});
-  @override
-  List<Object?> get props => [roomUUID, serverAddress];
-}
-
 /// Hot-updates the peer whitelist across all active rooms and the base config.
 /// Call this whenever the contacts list changes so new contacts can join
 /// existing rooms without a reconnect.
@@ -125,18 +116,4 @@ class RoomsUpsertChat extends RoomsEvent {
       {this.serverAddress, this.name, this.avatarBytes});
   @override
   List<Object?> get props => [uuid, serverAddress, name, avatarBytes];
-}
-
-/// Mute/unmute notifications for a chat (local-only).
-class RoomsSetChatMuted extends RoomsEvent {
-  final String uuid;
-  final String serverAddress;
-  final bool muted;
-  const RoomsSetChatMuted(
-    this.uuid, {
-    required this.serverAddress,
-    required this.muted,
-  });
-  @override
-  List<Object?> get props => [uuid, serverAddress, muted];
 }

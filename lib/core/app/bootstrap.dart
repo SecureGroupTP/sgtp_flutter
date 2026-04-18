@@ -10,7 +10,6 @@ import 'package:window_manager/window_manager.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/logging/log_setup.dart';
-import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/window_size_service.dart';
 
 Future<AppDependencies> bootstrapApp() async {
@@ -28,8 +27,6 @@ Future<AppDependencies> bootstrapApp() async {
     await windowManager.ensureInitialized();
     await WindowSizeService.restoreSize();
   }
-
-  await NotificationService.init();
 
   await MessengerMls.ensureInitialized();
 

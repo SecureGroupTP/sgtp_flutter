@@ -36,7 +36,6 @@ class SettingsManagementService {
 
   Future<List<NodeConfig>> loadNodes() => _settings.loadNodes();
   Future<List<String>> loadAccountIds() => _settings.loadAccountIds();
-  Future<String> ensureDeviceId() => _settings.ensureDeviceId();
   Future<NodeConfig?> loadPreferredNode() => _settings.loadPreferredNode();
   Future<String?> loadLastAccountId() => _settings.loadLastAccountId();
   Future<String?> getLastAddress() => _settings.getLastAddress();
@@ -516,7 +515,7 @@ class SettingsManagementService {
     return normalized.isEmpty ? 'localhost:443' : normalized;
   }
 
-  Future<SettingsAppliedConfig> buildAppliedConfig({
+  SettingsAppliedConfig buildAppliedConfig({
     required String accountId,
     required Uint8List privateKeyBytes,
     required List<NodeConfig> nodes,
@@ -525,7 +524,7 @@ class SettingsManagementService {
     required List<WhitelistEntry> whitelistEntries,
     required int pingIntervalSeconds,
     required int mediaChunkSizeBytes,
-  }) async {
+  }) {
     final node = selectPreferredServer(
       nodes: nodes,
       preferredNodeId: preferredNodeId,
@@ -533,7 +532,6 @@ class SettingsManagementService {
     if (node == null) {
       throw const FormatException('No server selected');
     }
-    final deviceId = await _settings.ensureDeviceId();
     final parsed = parseOpenSshPrivateKey(privateKeyBytes);
     final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
     final serverAddress = effectiveServerAddress(
@@ -550,7 +548,6 @@ class SettingsManagementService {
       config: SgtpConfig(
         accountId: accountId,
         serverAddr: serverAddress,
-        deviceId: deviceId,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,

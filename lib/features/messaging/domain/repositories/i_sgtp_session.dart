@@ -46,11 +46,6 @@ abstract class ISgtpSession {
   void sendReaction(String messageId, String emoji, bool adding);
   Future<void> sendChatMeta(String name, Uint8List? avatarBytes);
 
-  /// Direct chats only: asks the "recovery owner" to re-issue a fresh MLS
-  /// welcome (commit + welcome) for the peer if the stored welcome is missing
-  /// or stale. Returns false when this session cannot perform the operation.
-  Future<bool> requestDirectWelcomeReissue();
-
   Future<PersistedHistoryBatchResult> replayPersistedHistoryBatch({
     required int offsetFromEnd,
     required int limit,

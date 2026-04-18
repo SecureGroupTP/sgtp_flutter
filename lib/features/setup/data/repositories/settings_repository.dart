@@ -19,7 +19,6 @@ class SettingsRepository {
       'sgtp_nodes_json_v1'; // [{id,name,host,chatPort,voicePort}]
   static const _lastNodeIdKey = 'sgtp_last_node_id';
   static const _lastAccountIdKey = 'sgtp_last_account_id';
-  static const _deviceIdKey = 'sgtp_device_id_v1';
   static const _accountIdsKey = 'sgtp_account_ids_v1';
   static const _accountMarkerKey = 'sgtp_account_marker_v1';
   // Legacy (global) identity + profile keys. New code should prefer per-account scoped variants.
@@ -133,19 +132,6 @@ class SettingsRepository {
     ];
     await _deleteTempFilesByPrefix(tmpDir, tempPrefixes);
     await _deleteTempFilesByPrefix(Directory.systemTemp, tempPrefixes);
-  }
-
-  // ── Device identity ───────────────────────────────────────────────────────
-
-  /// Returns a stable device id for this installation. Used for MLS device_id.
-  /// Must be unique across devices for the same account.
-  Future<String> ensureDeviceId() async {
-    final p = await SharedPreferences.getInstance();
-    final existing = (p.getString(_deviceIdKey) ?? '').trim();
-    if (existing.isNotEmpty) return existing;
-    final id = 'flutter-${uuidBytesToHex(generateUUIDv7())}';
-    await p.setString(_deviceIdKey, id);
-    return id;
   }
 
   Future<void> _deleteTempFilesByPrefix(

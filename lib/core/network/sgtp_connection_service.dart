@@ -180,9 +180,7 @@ class SgtpConnectionService {
       final authError = await rpc.authenticate(
         config.myPublicKey,
         config.identityKeyPair,
-        deviceId: (config.deviceId.trim().isNotEmpty
-            ? config.deviceId.trim()
-            : 'flutter-${_pubHex(config).substring(0, 16)}'),
+        deviceId: 'flutter-${_pubHex(config).substring(0, 16)}',
       );
       if (authError != null) {
         throw StateError(authError);

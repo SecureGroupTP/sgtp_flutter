@@ -8,9 +8,6 @@ import 'package:sgtp_flutter/core/sgtp_transport.dart';
 class SgtpConfig {
   final String? accountId;
   final String serverAddr;
-  /// Stable device identifier for this installation (e.g. `flutter-...`).
-  /// Used as MLS `device_id` and must be unique across devices for the same user.
-  final String deviceId;
   final Uint8List roomUUID;
   final SimpleKeyPairData identityKeyPair;
   final Uint8List myPublicKey;
@@ -30,7 +27,6 @@ class SgtpConfig {
   const SgtpConfig({
     this.accountId,
     required this.serverAddr,
-    this.deviceId = '',
     required this.roomUUID,
     required this.identityKeyPair,
     required this.myPublicKey,
@@ -51,7 +47,6 @@ class SgtpConfig {
   SgtpConfig copyWithRoomUUID(Uint8List roomUUID) => SgtpConfig(
         accountId: accountId,
         serverAddr: serverAddr,
-        deviceId: deviceId,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
@@ -72,7 +67,6 @@ class SgtpConfig {
   SgtpConfig copyWithMeta({String? name, Uint8List? avatar}) => SgtpConfig(
         accountId: accountId,
         serverAddr: serverAddr,
-        deviceId: deviceId,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
@@ -105,7 +99,6 @@ class SgtpConfig {
     return SgtpConfig(
       accountId: accountId,
       serverAddr: serverAddr,
-      deviceId: deviceId,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,
@@ -138,7 +131,6 @@ class SgtpConfig {
     return SgtpConfig(
       accountId: accountId ?? this.accountId,
       serverAddr: serverAddr ?? this.serverAddr,
-      deviceId: deviceId,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,

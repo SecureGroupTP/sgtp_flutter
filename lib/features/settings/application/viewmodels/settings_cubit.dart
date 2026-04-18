@@ -72,7 +72,6 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String _doubleTapDesktop = 'react';
   bool _swipeToReply = true;
   bool _longPressMenu = true;
-  bool _notificationsEnabled = true;
 
   List<NodeConfig> _nodes = const [];
   List<String> _accountIdsList = const [];
@@ -335,7 +334,6 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     InteractionPrefs.doubleTapDesktop = _doubleTapDesktop;
     InteractionPrefs.swipeToReply = _swipeToReply;
     InteractionPrefs.longPressShowsMenu = _longPressMenu;
-    _notificationsEnabled = await NotificationService.loadEnabled();
     _buildState();
 
     unawaited(_refreshProfilesCache(accountIds));
@@ -360,7 +358,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _wlEntries = snapshot.whitelistEntries;
     _buildState();
 
-    if (applyConfig) unawaited(tryApplyConfig());
+    if (applyConfig) tryApplyConfig();
   }
 
   Future<void> _refreshProfilesCache(List<String> accountIds) async {
@@ -388,12 +386,12 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Intent: Apply config ────────────────────────────────────────────────
 
-  Future<void> tryApplyConfig() async {
+  void tryApplyConfig() {
     if (_privateKeyBytes == null || _myPublicKey == null) return;
     try {
       final accountId = _activeAccountId();
       if (accountId == null || accountId.trim().isEmpty) return;
-      final applied = await _settings.buildAppliedConfig(
+      final applied = _settings.buildAppliedConfig(
         accountId: accountId,
         privateKeyBytes: _privateKeyBytes!,
         nodes: _nodes,
@@ -424,7 +422,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _preferredNodeId = nodeId;
     await _settings.setLastNodeId(nodeId);
     _buildState();
-    unawaited(tryApplyConfig());
+    tryApplyConfig();
   }
 
   // ── Intent: Select account ──────────────────────────────────────────────
@@ -510,7 +508,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     }
 
     if (applyConfig) {
-      unawaited(tryApplyConfig());
+      tryApplyConfig();
     }
   }
 
@@ -641,7 +639,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       compressVideos: _compressVideos,
       mediaChunkSizeBytes: _mediaChunkSizeBytes,
     ));
-    unawaited(tryApplyConfig());
+    tryApplyConfig();
   }
 
   // ── Intent: Interaction preferences ─────────────────────────────────────
@@ -650,7 +648,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _pingIntervalSeconds = seconds;
     _buildState();
     await _settings.savePingIntervalSeconds(seconds);
-    unawaited(tryApplyConfig());
+    tryApplyConfig();
   }
 
   void setDoubleTapDesktop(String value) {
@@ -669,12 +667,6 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _longPressMenu = value;
     InteractionPrefs.longPressShowsMenu = value;
     _buildState();
-  }
-
-  Future<void> setNotificationsEnabled(bool value) async {
-    _notificationsEnabled = value;
-    _buildState();
-    await NotificationService.setEnabled(value);
   }
 
   // ── Intent: Backup/restore ──────────────────────────────────────────────
@@ -751,7 +743,6 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       doubleTapDesktop: _doubleTapDesktop,
       swipeToReply: _swipeToReply,
       longPressMenu: _longPressMenu,
-      notificationsEnabled: _notificationsEnabled,
       nodes: List.unmodifiable(_nodes),
       accountIdsList: List.unmodifiable(_accountIdsList),
       nodesLoading: _nodesLoading,

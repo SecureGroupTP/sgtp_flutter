@@ -18,9 +18,6 @@ class ChatMetadata extends Equatable {
   /// Avatar image bytes (optional, PNG/JPEG, max 4KB)
   final Uint8List? avatarBytes;
 
-  /// Whether notifications for this chat are muted (local-only preference).
-  final bool isMuted;
-
   /// True only for chats created from Contacts -> Message (direct message).
   final bool isDirectMessage;
 
@@ -42,7 +39,6 @@ class ChatMetadata extends Equatable {
     required this.serverAddress,
     this.remoteRoomId,
     this.avatarBytes,
-    this.isMuted = false,
     this.isDirectMessage = false,
     required this.createdAt,
     required this.updatedAt,
@@ -57,7 +53,6 @@ class ChatMetadata extends Equatable {
     String? serverAddress,
     String? remoteRoomId,
     Uint8List? avatarBytes,
-    bool? isMuted,
     bool? isDirectMessage,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -70,7 +65,6 @@ class ChatMetadata extends Equatable {
       serverAddress: serverAddress ?? this.serverAddress,
       remoteRoomId: remoteRoomId ?? this.remoteRoomId,
       avatarBytes: avatarBytes ?? this.avatarBytes,
-      isMuted: isMuted ?? this.isMuted,
       isDirectMessage: isDirectMessage ?? this.isDirectMessage,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -86,7 +80,6 @@ class ChatMetadata extends Equatable {
         serverAddress,
         remoteRoomId,
         avatarBytes,
-        isMuted,
         isDirectMessage,
         createdAt,
         updatedAt,

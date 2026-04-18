@@ -366,9 +366,7 @@ class OpenMlsChatSession implements ISgtpSession {
         _myUUID = generateUUIDv7(),
         _currentChatName = config.chatName,
         _currentChatAvatar = config.chatAvatarBytes {
-    _deviceId = config.deviceId.trim().isNotEmpty
-        ? config.deviceId.trim()
-        : 'flutter-${_hex(config.myPublicKey).substring(0, 16)}';
+    _deviceId = 'flutter-${_hex(config.myPublicKey).substring(0, 16)}';
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
@@ -775,12 +773,9 @@ class OpenMlsChatSession implements ISgtpSession {
   Future<Uint8List?> _loadPersistedMlsState() async {
     if (kIsWeb) return null;
     try {
-      final primary = await _getMlsStateFile();
-      File? file = primary;
-      if (primary == null || !await primary.exists()) {
-        file = await _getLegacyMlsStateFile();
-      }
-      if (file == null || !await file.exists()) return null;
+      final file = await _getMlsStateFile();
+      if (file == null) return null;
+      if (!await file.exists()) return null;
       final bytes = await file.readAsBytes();
       return bytes.isEmpty ? null : Uint8List.fromList(bytes);
     } catch (e) {
@@ -820,25 +815,6 @@ class OpenMlsChatSession implements ISgtpSession {
   }
 
   Future<File?> _getMlsStateFile() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final accountId = (_config.accountId ?? _config.nodeId ?? '').trim();
-    final base = accountId.isEmpty
-        ? Directory('${docsDir.path}/sgtp_mls')
-        : Directory('${docsDir.path}/sgtp_accounts/$accountId/sgtp_mls');
-    final key = _hex(_config.myPublicKey);
-    final room = roomUUIDHex;
-    final keyPrefix = key.length <= 16 ? key : key.substring(0, 16);
-    final roomPrefix = room.length <= 16 ? room : room.substring(0, 16);
-    final deviceId = _deviceId.trim().isNotEmpty
-        ? _deviceId.trim()
-        : 'flutter-$keyPrefix';
-    final safeDeviceId =
-        deviceId.toLowerCase().replaceAll(RegExp(r'[^a-z0-9._-]'), '_');
-    return File(
-        '${base.path}/client_state_${keyPrefix}_${roomPrefix}_$safeDeviceId.bin');
-  }
-
-  Future<File?> _getLegacyMlsStateFile() async {
     final docsDir = await getApplicationDocumentsDirectory();
     final accountId = (_config.accountId ?? _config.nodeId ?? '').trim();
     final base = accountId.isEmpty
@@ -1164,12 +1140,6 @@ class OpenMlsChatSession implements ISgtpSession {
     } catch (e) {
       _log.error('sendChatMeta error: {error}', parameters: {'error': e});
     }
-  }
-
-  @override
-  Future<bool> requestDirectWelcomeReissue() async {
-    // OpenMLS legacy transport does not support ServerV2 welcome recovery.
-    return false;
   }
 
   /// Core send loop shared by all media senders.

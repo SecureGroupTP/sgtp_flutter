@@ -39,19 +39,6 @@ class ChatListDeleteChat extends ChatListEvent {
   ChatListDeleteChat({required this.uuid});
 }
 
-/// Mute/unmute notifications for a chat (local-only).
-class ChatListSetMuted extends ChatListEvent {
-  final String uuid;
-  final String serverAddress;
-  final bool muted;
-
-  ChatListSetMuted({
-    required this.uuid,
-    required this.serverAddress,
-    required this.muted,
-  });
-}
-
 /// Refresh chat list from disk
 class ChatListRefresh extends ChatListEvent {
   ChatListRefresh();

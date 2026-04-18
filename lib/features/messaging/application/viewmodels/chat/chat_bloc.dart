@@ -677,7 +677,6 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         name: existing?.name ?? state.chatName,
         serverAddress: _activeServerAddress,
         avatarBytes: existing?.avatarBytes ?? state.chatAvatarBytes,
-        isMuted: existing?.isMuted ?? false,
         isDirectMessage: existing?.isDirectMessage ?? state.isDirectChat,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -984,17 +983,5 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _eventSub?.cancel();
     await _client?.close();
     return super.close();
-  }
-
-  Future<bool> requestDirectWelcomeReissue() async {
-    final client = _client;
-    if (client == null) return false;
-    try {
-      return await client.requestDirectWelcomeReissue();
-    } catch (e) {
-      _log.warning('requestDirectWelcomeReissue failed: {error}',
-          parameters: {'error': e});
-      return false;
-    }
   }
 }

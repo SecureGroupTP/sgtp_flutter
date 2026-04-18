@@ -147,9 +147,7 @@ class SharedKeyPackagePublisher implements KeyPackagePublisher {
     final userId = _hex(config.myPublicKey).trim();
     return {
       'user_id': userId.isEmpty ? _hex(config.myPublicKey) : userId,
-      'device_id': config.deviceId.trim().isNotEmpty
-          ? config.deviceId.trim()
-          : 'flutter-${_hex(config.myPublicKey).substring(0, 16)}',
+      'device_id': 'flutter-${_hex(config.myPublicKey).substring(0, 16)}',
     };
   }
 
@@ -162,12 +160,10 @@ class SharedKeyPackagePublisher implements KeyPackagePublisher {
       return null;
     }
     try {
-      final primary = await _getMlsStateFile(config);
-      File? file = primary;
-      if (primary == null || !await primary.exists()) {
-        file = await _getLegacyMlsStateFile(config);
+      final file = await _getMlsStateFile(config);
+      if (file == null || !await file.exists()) {
+        return null;
       }
-      if (file == null || !await file.exists()) return null;
       final bytes = await file.readAsBytes();
       return bytes.isEmpty ? null : Uint8List.fromList(bytes);
     } catch (_) {
@@ -201,22 +197,6 @@ class SharedKeyPackagePublisher implements KeyPackagePublisher {
   }
 
   Future<File?> _getMlsStateFile(SgtpConfig config) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final accountId = (config.accountId ?? '').trim();
-    final base = accountId.isEmpty
-        ? Directory('${docsDir.path}/sgtp_mls')
-        : Directory('${docsDir.path}/sgtp_accounts/$accountId/sgtp_mls');
-    final key = _hex(config.myPublicKey);
-    final deviceId = config.deviceId.trim().isNotEmpty
-        ? config.deviceId.trim()
-        : 'flutter-${key.substring(0, 16)}';
-    final safeDeviceId =
-        deviceId.toLowerCase().replaceAll(RegExp(r'[^a-z0-9._-]'), '_');
-    return File(
-        '${base.path}/client_state_${key.substring(0, 16)}_$safeDeviceId.bin');
-  }
-
-  Future<File?> _getLegacyMlsStateFile(SgtpConfig config) async {
     final docsDir = await getApplicationDocumentsDirectory();
     final accountId = (config.accountId ?? '').trim();
     final base = accountId.isEmpty
