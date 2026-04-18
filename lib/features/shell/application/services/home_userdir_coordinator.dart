@@ -59,14 +59,14 @@ class HomeUserDirCoordinator {
   Map<String, ContactProfile> _contactProfiles = {};
   Map<String, FriendStateRecord> _friendStates = {};
   Set<String> _suppressedContacts = {};
-  List<WhitelistEntry> _whitelist = const [];
+  List<ContactEntry> _contacts = const [];
   Map<String, String> _nicknames = const {};
 
   HomeUserDirState get currentState => HomeUserDirState(
         contactProfiles: Map<String, ContactProfile>.from(_contactProfiles),
         friendStates: Map<String, FriendStateRecord>.from(_friendStates),
         suppressedContacts: Set<String>.from(_suppressedContacts),
-        whitelist: List<WhitelistEntry>.from(_whitelist),
+        contacts: List<ContactEntry>.from(_contacts),
         nicknames: Map<String, String>.from(_nicknames),
       );
 
@@ -90,10 +90,10 @@ class HomeUserDirCoordinator {
     _friendStates =
         Map<String, FriendStateRecord>.from(accountState.friendStates);
     _suppressedContacts = Set<String>.from(accountState.suppressedContacts);
-    _whitelist = _sanitizeWhitelist(session, session.whitelist);
-    _nicknames = {for (final e in _whitelist) e.hexKey.toLowerCase(): e.name};
-    if (_whitelist.length != session.whitelist.length) {
-      await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
+    _contacts = _sanitizeContacts(session, session.contacts);
+    _nicknames = {for (final e in _contacts) e.hexKey.toLowerCase(): e.name};
+    if (_contacts.length != session.contacts.length) {
+      await _persistence.saveContactEntries(session.accountId, _contacts);
     }
     _emit();
     await _initUserDir(session);
@@ -107,7 +107,7 @@ class HomeUserDirCoordinator {
       await _initUserDir(session);
       return currentState;
     }
-    if (_whitelist.isNotEmpty) {
+    if (_contacts.isNotEmpty) {
       await _syncContactsFromUserDir(session, client);
     }
     await _syncFriendStates(session, client);
@@ -181,22 +181,22 @@ class HomeUserDirCoordinator {
     return 'Username update failed';
   }
 
-  Future<HomeUserDirState> applyWhitelistChanges({
+  Future<HomeUserDirState> applyContactChanges({
     required HomeUserDirSession session,
-    required List<WhitelistEntry> previousWhitelist,
-    required List<WhitelistEntry> nextWhitelist,
+    required List<ContactEntry> previousContacts,
+    required List<ContactEntry> nextContacts,
     required Map<String, String> nextNicknames,
   }) async {
     if (!_isCurrentSession(session)) return currentState;
-    _whitelist = _sanitizeWhitelist(session, nextWhitelist);
-    _nicknames = {for (final e in _whitelist) e.hexKey.toLowerCase(): e.name};
+    _contacts = _sanitizeContacts(session, nextContacts);
+    _nicknames = {for (final e in _contacts) e.hexKey.toLowerCase(): e.name};
 
-    final oldSet = previousWhitelist.map((e) => e.hexKey.toLowerCase()).toSet();
-    final nextSet = _whitelist.map((e) => e.hexKey.toLowerCase()).toSet();
-    final removed = previousWhitelist
+    final oldSet = previousContacts.map((e) => e.hexKey.toLowerCase()).toSet();
+    final nextSet = _contacts.map((e) => e.hexKey.toLowerCase()).toSet();
+    final removed = previousContacts
         .where((e) => !nextSet.contains(e.hexKey.toLowerCase()));
     final added =
-        nextWhitelist.where((e) => !oldSet.contains(e.hexKey.toLowerCase()));
+        nextContacts.where((e) => !oldSet.contains(e.hexKey.toLowerCase()));
 
     if (removed.isNotEmpty) {
       for (final entry in removed) {
@@ -297,7 +297,7 @@ class HomeUserDirCoordinator {
 
   Future<void> _sendFriendRequestFor(
     HomeUserDirSession session,
-    WhitelistEntry entry,
+    ContactEntry entry,
   ) async {
     if (!_isCurrentSession(session)) return;
     if (_isSelfHex(session, entry.hexKey)) return;
@@ -336,8 +336,8 @@ class HomeUserDirCoordinator {
     final lower = peerHex.toLowerCase();
     if (_isSelfHex(session, lower)) return;
     if (_suppressedContacts.contains(lower)) return;
-    final existingIdx = _whitelist.indexWhere((e) => e.hexKey.toLowerCase() == lower);
-    final existingName = existingIdx >= 0 ? _whitelist[existingIdx].name.trim() : '';
+    final existingIdx = _contacts.indexWhere((e) => e.hexKey.toLowerCase() == lower);
+    final existingName = existingIdx >= 0 ? _contacts[existingIdx].name.trim() : '';
     final canUpgradeExisting = existingIdx >= 0 && _isAutoPeerFallbackName(existingName);
 
     ContactProfile? profile = _contactProfiles[lower];
@@ -373,23 +373,23 @@ class HomeUserDirCoordinator {
       if (!canUpgradeExisting) return;
       final nextName = autoName.trim();
       if (nextName.isEmpty || nextName == existingName) return;
-      final updated = List<WhitelistEntry>.from(_whitelist);
+      final updated = List<ContactEntry>.from(_contacts);
       final existing = updated[existingIdx];
-      updated[existingIdx] = WhitelistEntry(bytes: existing.bytes, name: nextName);
-      _whitelist = updated;
+      updated[existingIdx] = ContactEntry(bytes: existing.bytes, name: nextName);
+      _contacts = updated;
       _nicknames = {..._nicknames, lower: nextName};
-      await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
+      await _persistence.saveContactEntries(session.accountId, _contacts);
       _emit();
       return;
     }
 
-    _whitelist = [
-      ..._whitelist,
-      WhitelistEntry(bytes: _support.hexToBytes32(lower), name: autoName),
+    _contacts = [
+      ..._contacts,
+      ContactEntry(bytes: _support.hexToBytes32(lower), name: autoName),
     ];
     _nicknames = {..._nicknames, lower: autoName};
 
-    await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
+    await _persistence.saveContactEntries(session.accountId, _contacts);
     _emit();
   }
 
@@ -469,7 +469,7 @@ class HomeUserDirCoordinator {
       }
 
       if (item.status == UserDirFriendStatus.friend) {
-        if (!_whitelist.any((e) => e.hexKey.toLowerCase() == peerHex)) {
+        if (!_contacts.any((e) => e.hexKey.toLowerCase() == peerHex)) {
           await _ensureContactForPeer(session, peerHex);
         }
       }
@@ -506,7 +506,7 @@ class HomeUserDirCoordinator {
     );
     if (!_isCurrentSession(session)) return;
     await _persistence.saveFriendStates(session.accountId, _friendStates);
-    await _persistence.saveWhitelistEntries(session.accountId, _whitelist);
+    await _persistence.saveContactEntries(session.accountId, _contacts);
     _emit();
   }
 
@@ -549,12 +549,12 @@ class HomeUserDirCoordinator {
       await client.connect();
       await registerSelf(session, force: false);
 
-      if (_whitelist.isNotEmpty) {
+      if (_contacts.isNotEmpty) {
         await _syncContactsFromUserDir(session, client);
       }
 
       final keys = <Uint8List>[
-        ..._whitelist.map((e) => e.bytes),
+        ..._contacts.map((e) => e.bytes),
         session.config.myPublicKey,
       ];
       await client.subscribe(keys);
@@ -573,7 +573,7 @@ class HomeUserDirCoordinator {
       await _syncFriendStates(session, client);
       // Do not auto-send friend requests on reconnect/refresh.
       // Requests are sent explicitly when the user adds a contact
-      // (see applyWhitelistChanges -> _sendFriendRequestFor).
+      // (see applyContactChanges -> _sendFriendRequestFor).
     } catch (e, st) {
       _log.error('RPC init failed: {error}',
           parameters: {'error': e}, error: e, stackTrace: st);
@@ -586,7 +586,7 @@ class HomeUserDirCoordinator {
   ) async {
     if (!_isCurrentSession(session)) return;
     final cached = await _persistence.loadAllContactProfiles(session.accountId);
-    for (final contact in _whitelist) {
+    for (final contact in _contacts) {
       final meta = await client.getMeta(contact.bytes);
       if (meta == null) continue;
 
@@ -681,13 +681,13 @@ class HomeUserDirCoordinator {
         FriendStatus.friend => 4,
       };
 
-  List<WhitelistEntry> _sanitizeWhitelist(
+  List<ContactEntry> _sanitizeContacts(
     HomeUserDirSession session,
-    List<WhitelistEntry> entries,
+    List<ContactEntry> entries,
   ) {
     final selfHex = _pubkeyHex(session.config.myPublicKey);
     final seen = <String>{};
-    final out = <WhitelistEntry>[];
+    final out = <ContactEntry>[];
     for (final e in entries) {
       final hex = e.hexKey.toLowerCase();
       if (hex == selfHex) continue;
@@ -748,3 +748,4 @@ class HomeUserDirCoordinator {
     return merged;
   }
 }
+

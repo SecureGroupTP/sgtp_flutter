@@ -10,7 +10,7 @@ abstract interface class AppSessionController {
     required SgtpConfig config,
     required Map<String, String> nicknames,
     required String serverAddress,
-    required List<WhitelistEntry> whitelistEntries,
+    required List<ContactEntry> contactEntries,
   });
 
   void setCurrentUserAvatar(Uint8List? avatar);
@@ -19,9 +19,10 @@ abstract interface class AppSessionController {
 
   Future<String?> setCurrentUsername(String username);
 
-  void setWhitelistEntries(List<WhitelistEntry> entries);
+  void setContactEntries(List<ContactEntry> entries);
 
   Future<bool> respondToFriend(String peerPubkeyHex, bool accept);
 
   Future<DirectRoomBinding?> openDirectMessage(String peerPubkeyHex);
 }
+

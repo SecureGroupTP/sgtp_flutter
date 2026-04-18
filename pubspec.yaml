@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.5.0
+  sdk: ^3.11.0
 
 dependencies:
   flutter:
@@ -39,11 +39,10 @@ dependencies:
   flutter_zxing: ^2.2.1
   sgtp_camera:
     path: packages/sgtp_camera
-  sgtp_chat_core:
+  openmls:
     git:
-      url: https://github.com/SecureGroupTP/chat_core.git
-      ref: v0.0.15
-      path: flutter/sgtp_chat_core
+      url: https://github.com/djx-y-z/openmls_dart
+      ref: main
 
 dev_dependencies:
   flutter_test:
@@ -57,11 +56,3 @@ flutter:
   assets:
     - web/icons/Icon-192.png
     - assets/app_icon.png
-
-hooks:
-  user_defines:
-    sgtp_chat_core:
-      release_tag: v0.0.15
-      github_owner: SecureGroupTP
-      github_repo: chat_core
-      allow_static_linking: false

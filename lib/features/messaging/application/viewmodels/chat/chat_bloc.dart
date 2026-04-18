@@ -64,16 +64,6 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatToggleReaction>(_onToggleReaction);
     on<ChatUpdateNicknames>(_onUpdateNicknames);
     on<ChatUpdateContactAvatars>(_onUpdateContactAvatars);
-    on<ChatUpdateWhitelist>((event, emit) {
-      final last = _lastConnectEvent;
-      if (last != null) {
-        _lastConnectEvent = ChatConnect(
-          last.config.copyWith(whitelist: event.whitelist),
-          nicknames: last.nicknames,
-        );
-      }
-      _client?.updateWhitelist(event.whitelist);
-    });
     on<ChatInternalSgtpEvent>(_onSgtpEvent);
   }
 
@@ -403,7 +393,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         _contactAvatarsByPub[pubHex.toUpperCase()];
     // Don't override a persisted DM display name with a synthetic fallback like
     // "peer_xxx". Only provide a direct display when we actually know a name
-    // (from contacts/whitelist) or have an avatar.
+    // from contacts, or have an avatar.
     if (rawName.isEmpty && (avatar == null || avatar.isEmpty)) return null;
     return (name: rawName.isNotEmpty ? rawName : 'Direct chat', avatar: avatar);
   }

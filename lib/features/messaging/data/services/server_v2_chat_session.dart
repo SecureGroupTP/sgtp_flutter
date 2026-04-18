@@ -1,13 +1,10 @@
 import 'dart:async';
 import 'dart:convert' show base64, json, utf8;
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path_provider/path_provider.dart';
-import 'package:sgtp_chat_core/sgtp_chat_core.dart';
+import 'package:openmls/openmls.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
@@ -17,6 +14,7 @@ import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_metadata_repository.dart';
+import 'package:sgtp_flutter/features/messaging/data/services/openmls_runtime.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/message.dart';
@@ -92,19 +90,20 @@ class ServerV2ChatSession implements ISgtpSession {
   final Map<String, _PendingMedia> _pendingMedia = {};
   final Set<String> _invitedPeerDevices = {};
   final ChatMetadataRepository? _metadataRepository;
-  Set<String> _whitelist;
+  final OpenMlsRuntimeFactory _openMlsRuntimeFactory;
   final Map<String, ChatMessage> _pendingOutgoingMessagesByLocalId = {};
   final Map<String, _PendingSelfAck> _pendingSelfAcksByFingerprint = {};
   final Map<String, String> _pendingSelfAckFingerprintByLocalId = {};
   Timer? _pendingSelfAckCleanupTimer;
   ChatHistoryRepository? _historyRepository;
 
-  MessengerMls? _mls;
+  OpenMlsRuntime? _mls;
   ServerV2MlsClient? _rpcChat;
   StreamSubscription<SgtpServerEvent>? _rpcEventSub;
   Timer? _inviteRetryTimer;
   Timer? _remoteRoomBindRetryTimer;
   Future<void>? _pendingRemoteRoomBind;
+  Future<bool>? _inviteKnownPeersInFlight;
   bool _mlsClientReady = false;
   bool _mlsGroupReady = false;
   bool _mlsGroupCreated = false;
@@ -112,6 +111,7 @@ class ServerV2ChatSession implements ISgtpSession {
   bool _connected = false;
   bool _readyEmitted = false;
   bool _isDirectRoom = false;
+  bool _ownsGroupRoom = false;
   bool _directRoomNeedsBootstrap = false;
   bool _directRoomInviteComplete = false;
   String? _remoteRoomId;
@@ -121,27 +121,24 @@ class ServerV2ChatSession implements ISgtpSession {
   Uint8List? _userAvatarBytes;
   Future<void>? _directWelcomeRecoveryInFlight;
   Future<void>? _badEpochRecoveryInFlight;
-  Timer? _persistMlsStateTimer;
   late final Uint8List _roomUUID;
-  late final String _deviceId;
   final List<_PendingInboundMessage> _pendingInboundMessages = [];
 
   ServerV2ChatSession(
     SgtpConfig config, {
     required SgtpConnectionService connectionService,
+    required OpenMlsRuntimeFactory openMlsRuntimeFactory,
   })  : _config = config,
         _connectionService = connectionService,
-        _whitelist = _normalizeWhitelist(config.whitelist),
+        _openMlsRuntimeFactory = openMlsRuntimeFactory,
         _metadataRepository = (config.accountId ?? '').trim().isEmpty
             ? null
             : ChatMetadataRepository(accountId: config.accountId) {
     _isDirectRoom = config.isDirectMessage;
     _directRoomNeedsBootstrap = config.bootstrapDirectRoom;
-    _whitelist = _effectiveWhitelist(_whitelist);
     _roomUUID = config.roomUUID.every((b) => b == 0)
         ? generateUUIDv7()
         : Uint8List.fromList(config.roomUUID);
-    _deviceId = 'flutter-${_hex(config.myPublicKey).substring(0, 16)}';
     _historyRepository = _buildHistoryRepository();
   }
 
@@ -161,11 +158,18 @@ class ServerV2ChatSession implements ISgtpSession {
   Map<String, String> get peerPublicKeys => Map.unmodifiable(_peerPublicKeys);
 
   bool get _isMaster {
-    final all = <String>{myUUIDHex, ..._whitelist}.toList()..sort();
-    return all.isNotEmpty && all.first == myUUIDHex;
+    if (_isDirectRoom) {
+      final ownerHex = (_directRoomOwnerPublicKeyHex ?? '').trim().toLowerCase();
+      if (ownerHex.length == 64) {
+        return ownerHex == myUUIDHex;
+      }
+      final peerHex = _directPeerPublicKeyHexEffective;
+      if (peerHex.length == 64) {
+        return myUUIDHex.compareTo(peerHex) < 0;
+      }
+    }
+    return _ownsGroupRoom;
   }
-
-  Map<String, dynamic> get _mlsGroupIdJson => {'value': _roomUUID};
 
   @override
   Future<void> connect() async {
@@ -226,13 +230,10 @@ class ServerV2ChatSession implements ISgtpSession {
 
   @override
   Future<void> close() async {
-    _persistMlsStateTimer?.cancel();
-    _persistMlsStateTimer = null;
     _pendingSelfAckCleanupTimer?.cancel();
     _pendingSelfAckCleanupTimer = null;
-    await _persistMlsState();
     await disconnect();
-    _mls?.close();
+    await _mls?.close();
     _mls = null;
     _mlsClientReady = false;
     if (!_eventController.isClosed) {
@@ -256,15 +257,6 @@ class ServerV2ChatSession implements ISgtpSession {
   @override
   void setUserAvatar(Uint8List? bytes) {
     _userAvatarBytes = bytes;
-  }
-
-  @override
-  void updateWhitelist(Set<String> whitelist) {
-    _whitelist = _effectiveWhitelist(whitelist);
-    _seedKnownPeerPublicKeys();
-    if (_connected && _isMaster) {
-      unawaited(_inviteKnownPeers());
-    }
   }
 
   @override
@@ -607,131 +599,32 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _initMls() async {
     if (_mlsClientReady) return;
-    final privateKey = await _config.identityKeyPair.extractPrivateKeyBytes();
-    // MLS client_id.user_id MUST be stable & match what we use for invites.
-    // Server-side key packages are indexed by the authenticated public key, and
-    // inviteSync below uses peer public key hex as user_id. Using accountId
-    // here breaks welcome processing with:
-    // "No matching key package was found in the key store."
-    final userId = _hex(_config.myPublicKey).trim();
-    final clientId = {
-      'user_id': userId.isEmpty ? _hex(_config.myPublicKey) : userId,
-      'device_id': _deviceId,
-    };
-    final mls = MessengerMls.create();
-    var restored = false;
-    try {
-      final snapshot = await _loadPersistedMlsState();
-      if (snapshot != null && snapshot.isNotEmpty) {
-        mls.restoreClientSync(snapshot);
-        // Validate that restored snapshot matches our expected client_id.
-        final restoredId = _map(mls.getClientIdSync());
-        final restoredUser = (restoredId['user_id'] as String?)?.trim() ?? '';
-        final restoredDevice =
-            (restoredId['device_id'] as String?)?.trim() ?? '';
-        if (restoredUser == clientId['user_id'] &&
-            restoredDevice == clientId['device_id']) {
-          restored = true;
-          _log.info(
-            'Restored MLS client state from disk ({bytes}B) for device {deviceId}',
-            parameters: {'bytes': snapshot.length, 'deviceId': _deviceId},
-          );
-        } else {
-          _log.warning(
-            'Ignoring MLS snapshot with mismatched client_id restoredUser={restoredUser} restoredDevice={restoredDevice} expectedUser={expectedUser} expectedDevice={expectedDevice}',
-            parameters: {
-              'restoredUser': restoredUser,
-              'restoredDevice': restoredDevice,
-              'expectedUser': clientId['user_id'],
-              'expectedDevice': clientId['device_id'],
-            },
-          );
-        }
-      }
-    } catch (e, st) {
-      _log.warning(
-        'MLS restoreClient failed; falling back to createClient: {error}',
-        parameters: {'error': e},
-        error: e,
-        stackTrace: st,
-      );
-    }
-    if (!restored) {
-      mls.createClientSync({
-        'client_id': clientId,
-        'device_signature_private_key': privateKey,
-        'binding': {
-          'client_id': clientId,
-          'serialized_binding': _config.myPublicKey,
-          'account_signature': <int>[],
-        },
-        'identity_data': _config.myPublicKey,
-      });
-    }
+    final mls = await _openMlsRuntimeFactory.create(_config);
     _mls = mls;
     _mlsClientReady = true;
 
-    // If the group already exists locally (restored client), mark it ready so
-    // we don't depend on server-side welcome retention to re-join.
     try {
-      mls.getGroupStateSync(_mlsGroupIdJson);
-      _mlsGroupCreated = true;
-      _mlsGroupReady = true;
+      final exists = await mls.hasGroup(_roomUUID);
+      if (exists) {
+        _mlsGroupCreated = true;
+        _mlsGroupReady = true;
+      }
     } catch (_) {}
   }
 
-  Future<Uint8List?> _loadPersistedMlsState() async {
-    if (kIsWeb) return null;
-    try {
-      final file = await _getMlsStateFile();
-      if (file == null) return null;
-      if (!await file.exists()) return null;
-      final bytes = await file.readAsBytes();
-      return bytes.isEmpty ? null : Uint8List.fromList(bytes);
-    } catch (e) {
-      _log.warning('Failed to load persisted MLS state: {error}',
-          parameters: {'error': e});
-      return null;
-    }
-  }
-
-  Future<void> _persistMlsState() async {
-    if (kIsWeb) return;
+  Future<void> _ensureMlsGroupCreated() async {
+    if (_mlsGroupCreated) return;
     final mls = _mls;
     if (mls == null) return;
     try {
-      final file = await _getMlsStateFile();
-      if (file == null) return;
-      final bytes = mls.exportClientStateSync();
-      if (bytes.isEmpty) return;
-      await file.parent.create(recursive: true);
-      await file.writeAsBytes(bytes, flush: true);
-    } catch (e, st) {
-      _log.warning(
-        'Failed to persist MLS state: {error}',
-        parameters: {'error': e},
-        error: e,
-        stackTrace: st,
-      );
+      await mls.createGroup(_roomUUID);
+      _mlsGroupCreated = true;
+      _mlsGroupReady = true;
+    } catch (e) {
+      if (!_isGroupAlreadyExistsError(e)) rethrow;
+      _mlsGroupCreated = true;
+      _mlsGroupReady = true;
     }
-  }
-
-  void _schedulePersistMlsState() {
-    if (kIsWeb) return;
-    _persistMlsStateTimer?.cancel();
-    _persistMlsStateTimer = Timer(const Duration(milliseconds: 750), () {
-      unawaited(_persistMlsState());
-    });
-  }
-
-  Future<File?> _getMlsStateFile() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final accountId = (_config.accountId ?? '').trim();
-    final base = accountId.isEmpty
-        ? Directory('${docsDir.path}/sgtp_mls')
-        : Directory('${docsDir.path}/sgtp_accounts/$accountId/sgtp_mls');
-    final key = _hex(_config.myPublicKey);
-    return File('${base.path}/client_state_${key.substring(0, 16)}.bin');
   }
 
   Future<void> _bootstrapRoomAndMls() async {
@@ -740,7 +633,7 @@ class ServerV2ChatSession implements ISgtpSession {
       return;
     }
     await _ensureRemoteRoomBound();
-    if (_isMaster) {
+    if (_ownsGroupRoom) {
       await _ensureMlsGroupCreated();
       await _publishRoomState();
       await _inviteKnownPeers();
@@ -805,15 +698,8 @@ class ServerV2ChatSession implements ISgtpSession {
       return;
     }
 
-    if ((_remoteRoomId ?? '').isNotEmpty) return;
-
-    if (_isMaster) {
-      final created = await client.createChatRoom(
-        title: _config.chatName,
-        description: 'sgtp:$roomUUIDHex',
-        visibility: 2,
-      );
-      await _saveRemoteRoomId(created.roomId);
+    if ((_remoteRoomId ?? '').isNotEmpty) {
+      await _resolveGroupRoomOwnership(_remoteRoomId!);
       return;
     }
 
@@ -827,6 +713,7 @@ class ServerV2ChatSession implements ISgtpSession {
       final room = await client.getChatRoom(invitation.roomId);
       if ((room.room.description ?? '').trim() == 'sgtp:$roomUUIDHex') {
         if (invitationState == InvitationStateEnum.accepted) {
+          _ownsGroupRoom = false;
           await _saveRemoteRoomId(invitation.roomId);
           return;
         }
@@ -846,6 +733,7 @@ class ServerV2ChatSession implements ISgtpSession {
         try {
           final accepted =
               await client.acceptChatInvitation(invitation.invitationId);
+          _ownsGroupRoom = false;
           await _saveRemoteRoomId(accepted.roomId);
         } catch (e, st) {
           _log.warning(
@@ -861,23 +749,14 @@ class ServerV2ChatSession implements ISgtpSession {
         return;
       }
     }
-  }
 
-  Future<void> _ensureMlsGroupCreated() async {
-    if (_mlsGroupCreated) return;
-    final mls = _mls;
-    if (mls == null) return;
-    try {
-      mls.createGroupSync(_mlsGroupIdJson);
-      _mlsGroupCreated = true;
-      _mlsGroupReady = true;
-      _schedulePersistMlsState();
-    } on MlsException catch (e) {
-      if (!e.message.toLowerCase().contains('exists')) rethrow;
-      _mlsGroupCreated = true;
-      _mlsGroupReady = true;
-      _schedulePersistMlsState();
-    }
+    final created = await client.createChatRoom(
+      title: _config.chatName,
+      description: 'sgtp:$roomUUIDHex',
+      visibility: 2,
+    );
+    _ownsGroupRoom = true;
+    await _saveRemoteRoomId(created.roomId);
   }
 
   Future<void> _publishRoomState() async {
@@ -885,10 +764,10 @@ class ServerV2ChatSession implements ISgtpSession {
     final mls = _mls;
     final remoteRoomId = _remoteRoomId;
     if (client == null || mls == null || remoteRoomId == null) return;
-    final state = _map(mls.getGroupStateSync(_mlsGroupIdJson));
-    final groupId = _asBytes(_map(state['group_id'])['value']);
-    final epoch = (state['epoch'] as num?)?.toInt() ?? 0;
-    final treeBytes = _asBytes(state['serialized_state']);
+    final state = await mls.exportRoomState(_roomUUID);
+    final groupId = state.groupId;
+    final epoch = state.epoch;
+    final treeBytes = state.treeBytes;
     if (groupId.length != 16 || treeBytes.isEmpty) return;
     try {
       await client.updateChatRoomState(
@@ -896,7 +775,7 @@ class ServerV2ChatSession implements ISgtpSession {
         groupId: _uuidString(groupId),
         epoch: epoch,
         treeBytes: treeBytes,
-        treeHash: Uint8List(0),
+        treeHash: state.treeHash,
       );
     } on StateError catch (e) {
       if (!_isDuplicateRoomStateError(e)) rethrow;
@@ -926,10 +805,26 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   Future<bool> _inviteKnownPeers() async {
+    final inFlight = _inviteKnownPeersInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final future = _inviteKnownPeersImpl();
+    _inviteKnownPeersInFlight = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inviteKnownPeersInFlight, future)) {
+        _inviteKnownPeersInFlight = null;
+      }
+    }
+  }
+
+  Future<bool> _inviteKnownPeersImpl() async {
     final client = _rpcChat;
     final mls = _mls;
     final remoteRoomId = _remoteRoomId;
-    if ((!_isMaster && !_isDirectRoom) ||
+    if ((!_isDirectRoom && !_ownsGroupRoom) ||
         client == null ||
         mls == null ||
         remoteRoomId == null) {
@@ -939,11 +834,12 @@ class ServerV2ChatSession implements ISgtpSession {
         ? (_directPeerPublicKeyHexEffective.length == 64
             ? <String>[_directPeerPublicKeyHexEffective]
             : const <String>[])
-        : _whitelist.where((item) => item != myUUIDHex).toList();
+        : const <String>[];
     if (peerHexes.isEmpty) {
       _emitReadyIfNeeded(force: true);
       return false;
     }
+    await _ensureLocalGroupAvailableForInvites();
     final response = await client.fetchKeyPackages(
       peerHexes.map(hexToBytes).toList(),
     );
@@ -961,20 +857,29 @@ class ServerV2ChatSession implements ISgtpSession {
       final peerDeviceKey = '$peerHex:${item.deviceId}:$keyPackageFingerprint';
       if (_invitedPeerDevices.contains(peerDeviceKey)) continue;
 
-      Map<String, dynamic> inviteResult;
       try {
-        inviteResult = _map(mls.inviteSync({
-          'group_id': _mlsGroupIdJson,
-          'invited_client': {
-            'user_id': peerHex,
-            'device_id': item.deviceId,
-          },
-          'keypackage': item.keyPackageBytes,
-        }));
-      } on MlsException catch (e) {
+        final inviteResult = await _addMemberWithRecovery(
+          keyPackageBytes: item.keyPackageBytes,
+        );
+        if (inviteResult.commit.isNotEmpty) {
+          await client.sendCommit(
+            roomId: remoteRoomId,
+            commitBytes: inviteResult.commit,
+          );
+        }
+        if (inviteResult.welcome.isNotEmpty) {
+          await client.sendWelcome(
+            roomId: remoteRoomId,
+            targetUserPublicKey: item.userPublicKey,
+            welcomeBytes: inviteResult.welcome,
+          );
+          sentWelcome = true;
+        }
+      } catch (e) {
         // Idempotency: on reconnect we may attempt to invite a peer device that
         // is already a group member. Treat it as success and don't crash.
-        if (e.code == 3 || e.message.toLowerCase().contains('already in group')) {
+        if (_isAlreadyInGroupError(e) ||
+            _isDuplicateInviteProposalError(e)) {
           _log.debug(
             'MLS invite skipped (already in group) room={roomId} peer={peer} device={device}',
             parameters: {
@@ -989,20 +894,6 @@ class ServerV2ChatSession implements ISgtpSession {
         }
         rethrow;
       }
-      final commit = _asBytes(inviteResult['commit_message']);
-      final welcome = _asBytes(inviteResult['welcome_message']);
-
-      if (commit.isNotEmpty) {
-        await client.sendCommit(roomId: remoteRoomId, commitBytes: commit);
-      }
-      if (welcome.isNotEmpty) {
-        await client.sendWelcome(
-          roomId: remoteRoomId,
-          targetUserPublicKey: item.userPublicKey,
-          welcomeBytes: welcome,
-        );
-        sentWelcome = true;
-      }
       if (!_isDirectRoom) {
         await client.sendChatInvitation(
           roomId: remoteRoomId,
@@ -1010,7 +901,7 @@ class ServerV2ChatSession implements ISgtpSession {
         );
       }
       try {
-        mls.mergePendingCommitSync(_mlsGroupIdJson);
+        await mls.mergePendingCommit(_roomUUID);
       } catch (_) {}
       await _publishRoomState();
       _invitedPeerDevices.add(peerDeviceKey);
@@ -1020,6 +911,58 @@ class ServerV2ChatSession implements ISgtpSession {
     }
     _emitReadyIfNeeded(force: _mlsGroupReady);
     return sentWelcome;
+  }
+
+  Future<void> _ensureLocalGroupAvailableForInvites() async {
+    final mls = _mls;
+    if (mls == null) {
+      return;
+    }
+    if (!_mlsGroupCreated) {
+      await _ensureMlsGroupCreated();
+      return;
+    }
+    final exists = await mls.hasGroup(_roomUUID);
+    if (exists) {
+      return;
+    }
+    _log.warning(
+      'Local MLS group missing before invite; recreating room={roomId}',
+      parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
+    );
+    _mlsGroupCreated = false;
+    _mlsGroupReady = false;
+    await _ensureMlsGroupCreated();
+  }
+
+  Future<OpenMlsInviteResult> _addMemberWithRecovery({
+    required Uint8List keyPackageBytes,
+  }) async {
+    final mls = _mls;
+    if (mls == null) {
+      throw StateError('MLS runtime is not initialized');
+    }
+    try {
+      return await mls.addMember(
+        groupId: _roomUUID,
+        keyPackageBytes: keyPackageBytes,
+      );
+    } catch (e) {
+      if (!_isNoGroupFoundError(e)) {
+        rethrow;
+      }
+      _log.warning(
+        'Local MLS group missing during addMember; retrying room={roomId}',
+        parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
+      );
+      _mlsGroupCreated = false;
+      _mlsGroupReady = false;
+      await _ensureMlsGroupCreated();
+      return mls.addMember(
+        groupId: _roomUUID,
+        keyPackageBytes: keyPackageBytes,
+      );
+    }
   }
 
   Future<void> _sendPayload(
@@ -1051,11 +994,11 @@ class ServerV2ChatSession implements ISgtpSession {
     }
 
     final plaintext = Uint8List.fromList(utf8.encode(json.encode(payload)));
-    final encrypted = _asBytes(mls.encryptMessageSync({
-      'group_id': _mlsGroupIdJson,
-      'plaintext': plaintext,
-      'aad': _roomUUID,
-    }));
+    final encrypted = await mls.createMessage(
+      groupId: _roomUUID,
+      plaintext: plaintext,
+      aad: _roomUUID,
+    );
     if (localEchoId != null && localEchoId.isNotEmpty) {
       _trackPendingSelfAck(localEchoId, encrypted);
     }
@@ -1180,7 +1123,8 @@ class ServerV2ChatSession implements ISgtpSession {
         if (!_ownsRemoteRoom(event.roomId)) return;
         // During reconnect, server may flush pending message events before we
         // have re-joined/restored the MLS group. If we try to decrypt too early,
-        // chat_core returns null/bad-epoch and we'd permanently drop the message.
+        // The local MLS engine may reject the message with a bad epoch and we'd
+        // permanently drop it if we did not queue it first.
         if (!_mlsGroupReady) {
           _queueInboundMessage(event);
           return;
@@ -1249,21 +1193,18 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _handleCommit(Uint8List commitBytes) async {
     await _handleGroupMessage(commitBytes);
-    await _maybeMergePendingCommit();
-    _schedulePersistMlsState();
   }
 
   Future<void> _handleWelcome(Uint8List welcomeBytes) async {
     final mls = _mls;
     if (mls == null) return;
     try {
-      mls.joinFromWelcomeSync(welcomeBytes);
+      await mls.joinFromWelcome(welcomeBytes);
       _mlsGroupReady = true;
       _remoteRoomBindRetryTimer?.cancel();
       _remoteRoomBindRetryTimer = null;
       _log.info('Joined MLS group from welcome for room {roomId}',
           parameters: {'roomId': _remoteRoomId ?? roomUUIDHex});
-      _schedulePersistMlsState();
       _emitReadyIfNeeded(force: true);
       await _drainPendingInboundMessages();
     } catch (e, st) {
@@ -1275,7 +1216,6 @@ class ServerV2ChatSession implements ISgtpSession {
           'Ignoring duplicate MLS welcome for room {roomId}; group already exists locally',
           parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
         );
-        _schedulePersistMlsState();
         _emitReadyIfNeeded(force: true);
         await _drainPendingInboundMessages();
         return;
@@ -1357,7 +1297,7 @@ class ServerV2ChatSession implements ISgtpSession {
   Future<bool> _handleIncomingMessage(
       MlsMessageReceivedNetworkEvent event) async {
     final senderHex = _hex(event.senderPublicKey);
-    // Server echoes our own MLS application messages back to us. chat_core
+    // Server echoes our own MLS application messages back to us. The local MLS
     // rejects decrypting self-sent messages with "Cannot decrypt own messages."
     // We use the echo as a send-ack and never attempt to decrypt it.
     if (senderHex.isNotEmpty && senderHex == myUUIDHex) {
@@ -1466,31 +1406,21 @@ class ServerV2ChatSession implements ISgtpSession {
     final mls = _mls;
     if (mls == null) return null;
     try {
-      final result = mls.handleIncomingSync({
-        'kind': 'GroupMessage',
-        'payload': payload,
-      });
-      final events = result is List ? result : <Object?>[result];
-      for (final value in events) {
-        final event = _map(value);
-        final kind = event['kind'] as String?;
-        if (kind == 'MessageReceived') {
-          // Persist after every successful decrypt to keep ratchets/epochs in
-          // sync across restarts and background kills.
-          _schedulePersistMlsState();
-          return _asBytes(event['message_plaintext']);
-        }
-        if (kind == 'GroupJoined' ||
-            kind == 'GroupStateChanged' ||
-            kind == 'MemberAdded') {
-          _mlsGroupReady = true;
-          _emitReadyIfNeeded(force: true);
-          _schedulePersistMlsState();
-          await _drainPendingInboundMessages();
-        }
+      final result = await mls.processIncoming(
+        groupId: _roomUUID,
+        messageBytes: payload,
+      );
+      if (result.messageType == ProcessedMessageType.application) {
+        return result.applicationMessage == null
+            ? null
+            : Uint8List.fromList(result.applicationMessage!);
       }
-      await _maybeMergePendingCommit();
-      _schedulePersistMlsState();
+      if (result.messageType == ProcessedMessageType.stagedCommit ||
+          result.hasStagedCommit) {
+        _mlsGroupReady = true;
+        _emitReadyIfNeeded(force: true);
+        await _drainPendingInboundMessages();
+      }
     } catch (e) {
       if (_isCannotDecryptOwnMessagesError(e)) {
         _log.debug(
@@ -1568,10 +1498,9 @@ class ServerV2ChatSession implements ISgtpSession {
       // packages if needed.
       _mlsGroupReady = false;
       try {
-        mls.dropGroupSync(_mlsGroupIdJson);
+        await mls.dropGroup(_roomUUID);
       } catch (_) {}
       _mlsGroupCreated = false;
-      _schedulePersistMlsState();
 
       // Upload fresh key packages so the master can re-invite this device even
       // if it has already invited a previous key package fingerprint.
@@ -1608,23 +1537,18 @@ class ServerV2ChatSession implements ISgtpSession {
     final mls = _mls;
     if (client == null || mls == null) return;
     try {
-      final raw = _map(mls.createKeyPackagesSync(8));
-      final generated = _asObjectList(raw['keypackages']);
+      final generated = await mls.createKeyPackages(8);
       if (generated.isEmpty) return;
       final expiresAt = DateTime.now().toUtc().add(const Duration(days: 30));
       await client.uploadKeyPackages(
         generated
             .map((item) => KeyPackageDto(
-                  keyPackageBytes: _asBytes(item),
+                  keyPackageBytes: item,
                   isLastResort: false,
                   expiresAtUs: expiresAt.microsecondsSinceEpoch,
                 ))
             .toList(),
       );
-      try {
-        mls.markKeyPackagesUploadedSync(raw);
-      } catch (_) {}
-      _schedulePersistMlsState();
     } catch (e, st) {
       _log.warning(
         'Fresh key package upload failed during recovery: {error}',
@@ -1636,13 +1560,13 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   bool _isGenerationTooOldError(Object error) {
-    final msg = error is MlsException ? error.message : error.toString();
+    final msg = error.toString();
     final lower = msg.toLowerCase();
     return lower.contains('generation') && lower.contains('too old');
   }
 
   bool _isForwardSecrecySecretDeletedError(Object error) {
-    final msg = error is MlsException ? error.message : error.toString();
+    final msg = error.toString();
     final lower = msg.toLowerCase();
     return (lower.contains('requested secret') && lower.contains('deleted')) ||
         lower.contains('preserve forward secrecy') ||
@@ -1650,7 +1574,7 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   bool _isBadEpochError(Object error) {
-    final msg = error is MlsException ? error.message : error.toString();
+    final msg = error.toString();
     final lower = msg.toLowerCase();
     return lower.contains('bad epoch') ||
         (lower.contains('epoch') && lower.contains('wrong')) ||
@@ -1658,7 +1582,7 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   bool _isCannotDecryptOwnMessagesError(Object error) {
-    final msg = error is MlsException ? error.message : error.toString();
+    final msg = error.toString();
     return msg.toLowerCase().contains('cannot decrypt own messages');
   }
 
@@ -1719,20 +1643,6 @@ class ServerV2ChatSession implements ISgtpSession {
 
   String _ciphertextFingerprint(Uint8List ciphertext) =>
       base64.encode(ciphertext);
-
-  Future<void> _maybeMergePendingCommit() async {
-    final mls = _mls;
-    if (mls == null) return;
-    try {
-      final has = mls.hasPendingCommitSync(_mlsGroupIdJson);
-      if (has is bool && has) {
-        try {
-          mls.mergePendingCommitSync(_mlsGroupIdJson);
-          _schedulePersistMlsState();
-        } catch (_) {}
-      }
-    } catch (_) {}
-  }
 
   // NOTE: We intentionally do not attempt automatic epoch resync by dropping
   // local group state. Without durable server-side rejoin material, that would
@@ -1991,8 +1901,8 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   void _seedKnownPeerPublicKeys() {
-    for (final peerHex in _whitelist) {
-      if (peerHex == myUUIDHex) continue;
+    final peerHex = _directPeerPublicKeyHexEffective;
+    if (_isDirectRoom && peerHex.length == 64 && peerHex != myUUIDHex) {
       _peerPublicKeys.putIfAbsent(peerHex, () => peerHex);
       _ensurePeer(peerHex);
     }
@@ -2071,7 +1981,7 @@ class ServerV2ChatSession implements ISgtpSession {
 
   void _scheduleInviteRetry() {
     _inviteRetryTimer?.cancel();
-    if (!_isMaster && !_isDirectRoom) return;
+    if (!_isDirectRoom && !_ownsGroupRoom) return;
     _inviteRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_connected) return;
       if (_isDirectRoom && _directRoomNeedsBootstrap) {
@@ -2110,15 +2020,34 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   bool _isGroupAlreadyExistsError(Object error) {
-    if (error is! MlsException) return false;
-    return error.message.toLowerCase().contains('already exists');
+    final lower = error.toString().toLowerCase();
+    return lower.contains('already exists') ||
+        (lower.contains('group') && lower.contains('exists'));
   }
 
   bool _isMissingKeyPackageForWelcomeError(Object error) {
-    if (error is! MlsException) return false;
-    return error.message.toLowerCase().contains(
-          'no matching key package was found in the key store',
-        );
+    final lower = error.toString().toLowerCase();
+    return lower.contains('no matching key package') ||
+        lower.contains('key store');
+  }
+
+  bool _isAlreadyInGroupError(Object error) {
+    final lower = error.toString().toLowerCase();
+    return lower.contains('already in group') ||
+        (lower.contains('member') && lower.contains('already')) ||
+        (lower.contains('exists') && lower.contains('member'));
+  }
+
+  bool _isDuplicateInviteProposalError(Object error) {
+    final lower = error.toString().toLowerCase();
+    return lower.contains('duplicate signature key') ||
+        (lower.contains('duplicate') && lower.contains('proposal'));
+  }
+
+  bool _isNoGroupFoundError(Object error) {
+    final lower = error.toString().toLowerCase();
+    return lower.contains('no group found in storage') ||
+        (lower.contains('group') && lower.contains('not found'));
   }
 
   bool _isNotFoundRpcError(Object error) {
@@ -2179,7 +2108,7 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   void _scheduleRemoteRoomBind() {
-    if (_isMaster ||
+    if (_ownsGroupRoom ||
         _isDirectRoom ||
         !_connected ||
         (_remoteRoomId ?? '').isNotEmpty ||
@@ -2210,7 +2139,7 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   void _scheduleRemoteRoomBindRetry() {
-    if (_isMaster ||
+    if (_ownsGroupRoom ||
         _isDirectRoom ||
         !_connected ||
         _mlsGroupReady ||
@@ -2257,23 +2186,6 @@ class ServerV2ChatSession implements ISgtpSession {
     }
   }
 
-  static Set<String> _normalizeWhitelist(Set<String> whitelist) {
-    return whitelist
-        .map((item) => item.trim().toLowerCase())
-        .where((item) => item.isNotEmpty)
-        .toSet();
-  }
-
-  Set<String> _effectiveWhitelist(Set<String> whitelist) {
-    final normalized = _normalizeWhitelist(whitelist);
-    if (!_isDirectRoom) return normalized;
-
-    final peerHex = _directPeerPublicKeyHexEffective;
-    if (peerHex.length != 64) return <String>{};
-    if (peerHex == myUUIDHex) return <String>{};
-    return <String>{peerHex};
-  }
-
   bool _ownsRemoteRoom(String roomId) {
     final local = _normalizeRoomId(_remoteRoomId ?? '');
     final incoming = _normalizeRoomId(roomId);
@@ -2304,27 +2216,13 @@ class ServerV2ChatSession implements ISgtpSession {
     return (_config.directPeerPublicKeyHex ?? '').trim().toLowerCase();
   }
 
-  Map<String, dynamic> _map(Object? value) {
-    if (value is Map<String, dynamic>) return value;
-    if (value is Map) {
-      return value.map((key, item) => MapEntry('$key', item));
-    }
-    return <String, dynamic>{};
-  }
-
-  List<Object?> _asObjectList(Object? value) {
-    if (value is List) return value.cast<Object?>();
-    return const <Object?>[];
-  }
-
-  Uint8List _asBytes(Object? value) {
-    if (value is Uint8List) return value;
-    if (value is List<int>) return Uint8List.fromList(value);
-    if (value is List) {
-      return Uint8List.fromList(value.map((e) => (e as num).toInt()).toList());
-    }
-    if (value is String) return base64.decode(value);
-    return Uint8List(0);
+  Future<void> _resolveGroupRoomOwnership(String roomId) async {
+    final client = _rpcChat;
+    if (client == null || roomId.trim().isEmpty) return;
+    try {
+      final room = await client.getChatRoom(roomId);
+      _ownsGroupRoom = _hex(room.room.ownerPublicKey) == myUUIDHex;
+    } catch (_) {}
   }
 
   Future<void> _resolveDirectRoomPeerAndOwner(String roomId) async {

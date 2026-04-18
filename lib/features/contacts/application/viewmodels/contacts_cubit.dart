@@ -19,7 +19,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     required String accountId,
     required String? serverNodeId,
     required String? myPubkeyHex,
-    required List<WhitelistEntry> initialEntries,
+    required List<ContactEntry> initialContacts,
     required Map<String, ContactProfile> contactProfiles,
     required Map<String, FriendStateRecord> friendStates,
   })  : _directoryService = directoryService,
@@ -28,7 +28,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
         _accountId = accountId,
         _serverNodeId = serverNodeId,
         _myPubkeyHex = myPubkeyHex,
-        _entries = const <WhitelistEntry>[],
+        _entries = const <ContactEntry>[],
         _contactProfiles = const <String, ContactProfile>{},
         _friendStates = const <String, FriendStateRecord>{},
         super(const ContactsViewState()) {
@@ -36,7 +36,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
       accountId: accountId,
       serverNodeId: serverNodeId,
       myPubkeyHex: myPubkeyHex,
-      initialEntries: initialEntries,
+      initialContacts: initialContacts,
       contactProfiles: contactProfiles,
       friendStates: friendStates,
     );
@@ -49,7 +49,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
   String _accountId;
   String? _serverNodeId;
   String? _myPubkeyHex;
-  List<WhitelistEntry> _entries;
+  List<ContactEntry> _entries;
   Map<String, ContactProfile> _contactProfiles;
   Map<String, FriendStateRecord> _friendStates;
   String _searchQuery = '';
@@ -63,7 +63,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     required String accountId,
     required String? serverNodeId,
     required String? myPubkeyHex,
-    required List<WhitelistEntry> initialEntries,
+    required List<ContactEntry> initialContacts,
     required Map<String, ContactProfile> contactProfiles,
     required Map<String, FriendStateRecord> friendStates,
   }) {
@@ -73,7 +73,7 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     _accountId = accountId;
     _serverNodeId = serverNodeId;
     _myPubkeyHex = myPubkeyHex;
-    _entries = _sanitizeEntries(initialEntries);
+    _entries = _sanitizeEntries(initialContacts);
     _contactProfiles = _normalizeProfileKeys(contactProfiles);
     _friendStates = _normalizeFriendStateKeys(friendStates);
 
@@ -165,9 +165,9 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     final error = validateNewContactHex(hex);
     if (error != null) return error;
 
-    final nextEntries = List<WhitelistEntry>.from(_entries)
+    final nextEntries = List<ContactEntry>.from(_entries)
       ..add(
-        WhitelistEntry(
+        ContactEntry(
           bytes: _bytesFromHex(hex),
           name:
               name.trim().isEmpty ? 'peer_${_entries.length + 1}' : name.trim(),
@@ -197,12 +197,12 @@ class ContactsCubit extends Cubit<ContactsViewState> {
 
     final currentEntry = _entries[index];
     final finalName = name.trim().isEmpty ? currentEntry.name : name.trim();
-    final nextEntries = List<WhitelistEntry>.from(_entries);
+    final nextEntries = List<ContactEntry>.from(_entries);
 
     if (currentEntry.hexKey.toLowerCase() == nextHex) {
       nextEntries[index] = currentEntry.copyWithName(finalName);
     } else {
-      nextEntries[index] = WhitelistEntry(
+      nextEntries[index] = ContactEntry(
         bytes: _bytesFromHex(nextHex),
         name: finalName,
       );
@@ -235,11 +235,11 @@ class ContactsCubit extends Cubit<ContactsViewState> {
   ContactsViewState _buildState() {
     final visibleContacts = _buildVisibleContacts();
     final incomingRequests = _buildIncomingRequests();
-    final trustedSet =
+    final contactSet =
         _entries.map((entry) => entry.hexKey.toLowerCase()).toSet();
 
     final serverSearchHit = _serverSearchHit == null ||
-            trustedSet.contains(_serverSearchHit!.pubkeyHex.toLowerCase())
+            contactSet.contains(_serverSearchHit!.pubkeyHex.toLowerCase())
         ? null
         : ContactsServerSearchHitUiModel(
             username: _serverSearchHit!.username,
@@ -322,12 +322,12 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     return requests;
   }
 
-  List<WhitelistEntry> _filterEntries(
-      List<WhitelistEntry> entries, String query) {
+  List<ContactEntry> _filterEntries(
+      List<ContactEntry> entries, String query) {
     final normalizedQuery = query.trim().toLowerCase();
-    if (normalizedQuery.isEmpty) return List<WhitelistEntry>.from(entries);
+    if (normalizedQuery.isEmpty) return List<ContactEntry>.from(entries);
 
-    final scored = <({WhitelistEntry entry, int score})>[];
+    final scored = <({ContactEntry entry, int score})>[];
     for (final entry in entries) {
       final name = entry.name.toLowerCase();
       final key = entry.hexKey.toLowerCase();
@@ -383,13 +383,13 @@ class ContactsCubit extends Cubit<ContactsViewState> {
   }
 
   Future<String?> _persistEntries(
-    List<WhitelistEntry> nextEntries, {
+    List<ContactEntry> nextEntries, {
     String? recentlyAddedUsername,
     bool clearSearchOnSuccess = false,
   }) async {
     final sanitized = _sanitizeEntries(nextEntries);
     try {
-      await _directoryService.saveWhitelistEntries(
+      await _directoryService.saveContactEntries(
         accountId: _accountId,
         entries: sanitized,
       );
@@ -398,8 +398,8 @@ class ContactsCubit extends Cubit<ContactsViewState> {
         _resetSearch(clearBanner: false);
       }
       _recentlyAddedUsername = recentlyAddedUsername;
-      _appSessionController.setWhitelistEntries(
-        List<WhitelistEntry>.from(sanitized),
+      _appSessionController.setContactEntries(
+        List<ContactEntry>.from(sanitized),
       );
       emit(_buildState());
       return null;
@@ -408,10 +408,10 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     }
   }
 
-  List<WhitelistEntry> _sanitizeEntries(List<WhitelistEntry> entries) {
+  List<ContactEntry> _sanitizeEntries(List<ContactEntry> entries) {
     final selfHex = (_myPubkeyHex ?? '').trim().toLowerCase();
     final seen = <String>{};
-    final sanitized = <WhitelistEntry>[];
+    final sanitized = <ContactEntry>[];
 
     for (final entry in entries) {
       final hex = entry.hexKey.toLowerCase();
@@ -514,3 +514,4 @@ class ContactsCubit extends Cubit<ContactsViewState> {
     }
   }
 }
+

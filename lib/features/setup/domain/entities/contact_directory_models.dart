@@ -1,17 +1,17 @@
 import 'dart:typed_data';
 
-/// A whitelist entry: a trusted peer's public key + editable display name.
-class WhitelistEntry {
+/// A saved contact entry: a peer public key plus editable display name.
+class ContactEntry {
   final Uint8List bytes;
   final String name;
 
-  WhitelistEntry({required this.bytes, required this.name});
+  ContactEntry({required this.bytes, required this.name});
 
   String get hexKey =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-  WhitelistEntry copyWithName(String newName) =>
-      WhitelistEntry(bytes: bytes, name: newName);
+  ContactEntry copyWithName(String newName) =>
+      ContactEntry(bytes: bytes, name: newName);
 }
 
 /// Cached profile data fetched from the userdir service.
@@ -74,3 +74,4 @@ class FriendStateRecord {
     );
   }
 }
+

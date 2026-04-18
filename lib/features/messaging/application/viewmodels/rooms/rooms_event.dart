@@ -59,18 +59,8 @@ class RoomsRemoveRoom extends RoomsEvent {
   List<Object?> get props => [roomUUID, serverAddress];
 }
 
-/// Hot-updates the peer whitelist across all active rooms and the base config.
-/// Call this whenever the contacts list changes so new contacts can join
-/// existing rooms without a reconnect.
-class RoomsUpdateWhitelist extends RoomsEvent {
-  final Set<String> whitelist;
-  const RoomsUpdateWhitelist(this.whitelist);
-  @override
-  List<Object?> get props => [whitelist];
-}
 
 /// Hot-updates nicknames (ed25519PubHex → name) in all active rooms.
-/// Call this together with RoomsUpdateWhitelist when contacts change.
 class RoomsUpdateNicknames extends RoomsEvent {
   final Map<String, String> nicknames;
   const RoomsUpdateNicknames(this.nicknames);

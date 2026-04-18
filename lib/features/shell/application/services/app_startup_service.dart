@@ -79,20 +79,19 @@ class AppStartupService {
       final mediaSettings = await _settings.loadMediaTransferSettings();
 
       final entries = accountId.trim().isEmpty
-          ? await _settings.loadWhitelistEntries()
-          : await _settings.loadWhitelistEntriesForNode(accountId);
+          ? await _settings.loadContactEntries()
+          : await _settings.loadContactEntriesForNode(accountId);
       final selfHex = parsed.publicKey
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
           .join();
       final seen = <String>{};
-      final sanitizedEntries = <WhitelistEntry>[];
+      final sanitizedEntries = <ContactEntry>[];
       for (final entry in entries) {
         final hex = entry.hexKey.toLowerCase();
         if (hex == selfHex) continue;
         if (!seen.add(hex)) continue;
         sanitizedEntries.add(entry);
       }
-      final whitelist = sanitizedEntries.map((e) => e.hexKey).toSet();
       final nicknames = {for (final e in sanitizedEntries) e.hexKey: e.name};
       final userAvatar = accountId.trim().isEmpty
           ? await _settings.loadUserAvatar()
@@ -107,7 +106,6 @@ class AppStartupService {
             roomUUID: Uint8List(16),
             identityKeyPair: keyPair,
             myPublicKey: parsed.publicKey,
-            whitelist: whitelist,
             transport: preferredNode?.transport ?? SgtpTransportFamily.tcp,
             useTls: preferredNode?.useTls ?? false,
             fakeSni: preferredNode?.fakeSni ?? '',
@@ -117,7 +115,7 @@ class AppStartupService {
           nicknames: nicknames,
           serverAddress: chatServer,
           userAvatar: userAvatar,
-          initialWhitelist: sanitizedEntries,
+          initialContacts: sanitizedEntries,
         ),
       );
     } catch (_) {
@@ -130,3 +128,4 @@ class AppStartupService {
     }
   }
 }
+

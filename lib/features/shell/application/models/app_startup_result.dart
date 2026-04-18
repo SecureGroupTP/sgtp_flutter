@@ -16,7 +16,7 @@ class HomeLaunchData {
     required this.nicknames,
     required this.serverAddress,
     required this.userAvatar,
-    required this.initialWhitelist,
+    required this.initialContacts,
   });
 
   final String accountId;
@@ -24,7 +24,7 @@ class HomeLaunchData {
   final Map<String, String> nicknames;
   final String serverAddress;
   final Uint8List? userAvatar;
-  final List<WhitelistEntry> initialWhitelist;
+  final List<ContactEntry> initialContacts;
 }
 
 class AppStartupResult {
@@ -47,3 +47,4 @@ class AppStartupResult {
           homeLaunchData: data,
         );
 }
+

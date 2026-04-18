@@ -30,7 +30,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     required Map<String, String> nicknames,
     required String serverAddress,
     required Uint8List? userAvatar,
-    required List<WhitelistEntry> initialWhitelist,
+    required List<ContactEntry> initialContacts,
     required SettingsManagementService settingsManagementService,
     required ChatStorageGateway chatStorageGateway,
     required SgtpConnectionService sgtpConnectionService,
@@ -61,14 +61,14 @@ class HomeCubit extends Cubit<HomeViewState> {
         _nicknames = Map.from(nicknames),
         _serverAddress = serverAddress,
         _userAvatar = userAvatar,
-        _whitelist = List.from(initialWhitelist),
+        _contacts = List.from(initialContacts),
         super(HomeViewState(
           accountId: accountId,
           config: initialConfig,
           nicknames: nicknames,
           serverAddress: serverAddress,
           userAvatar: userAvatar,
-          whitelist: initialWhitelist,
+          contacts: initialContacts,
           connectionStatus: sgtpConnectionService.status,
           connectionError: sgtpConnectionService.lastError,
         )) {
@@ -115,7 +115,7 @@ class HomeCubit extends Cubit<HomeViewState> {
   Map<String, String> _nicknames;
   String _serverAddress;
   Uint8List? _userAvatar;
-  List<WhitelistEntry> _whitelist;
+  List<ContactEntry> _contacts;
   ResolvedUserDirNode? _resolvedNode;
   Map<String, ContactProfile> _contactProfiles = {};
   Map<String, FriendStateRecord> _friendStates = {};
@@ -144,12 +144,12 @@ class HomeCubit extends Cubit<HomeViewState> {
     SgtpConfig newConfig,
     Map<String, String> newNicknames,
     String newServer,
-    List<WhitelistEntry> whitelistEntries,
+    List<ContactEntry> contactEntries,
   ) {
     _accountId = accountId;
     _config = newConfig;
-    _whitelist = List.from(whitelistEntries);
-    _nicknames = {for (final e in whitelistEntries) e.hexKey: e.name};
+    _contacts = List.from(contactEntries);
+    _nicknames = {for (final e in contactEntries) e.hexKey: e.name};
     _serverAddress = newServer;
     _userAvatar = null;
     _nickname = '';
@@ -211,24 +211,18 @@ class HomeCubit extends Cubit<HomeViewState> {
     return error;
   }
 
-  // ── Intent: Whitelist changed ───────────────────────────────────────────
+  // ── Intent: Contacts changed ───────────────────────────────────────────
 
-  void onWhitelistChanged(List<WhitelistEntry> entries) {
-    final old = List<WhitelistEntry>.from(_whitelist);
-    _whitelist = entries;
+  void onContactsChanged(List<ContactEntry> entries) {
+    final old = List<ContactEntry>.from(_contacts);
+    _contacts = entries;
     _nicknames = {for (final e in entries) e.hexKey: e.name};
-    _config = _config.copyWith(
-      whitelist: entries.map((e) => e.hexKey).toSet(),
-    );
-    _roomsBloc.add(RoomsUpdateWhitelist(
-      entries.map((e) => e.hexKey).toSet(),
-    ));
     _roomsBloc.add(RoomsUpdateNicknames(
       {for (final e in entries) e.hexKey: e.name},
     ));
     _pushContactAvatarsToRooms();
     _buildState();
-    unawaited(_syncWhitelistWithUserDir(old, entries));
+    unawaited(_syncContactsWithUserDir(old, entries));
   }
 
   // ── Intent: Respond to friend request ───────────────────────────────────
@@ -300,7 +294,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       nicknames: Map.unmodifiable(_nicknames),
       serverAddress: _serverAddress,
       userAvatar: _userAvatar,
-      whitelist: List.unmodifiable(_whitelist),
+      contacts: List.unmodifiable(_contacts),
       contactProfiles: Map.unmodifiable(_contactProfiles),
       friendStates: Map.unmodifiable(_friendStates),
       nickname: _nickname,
@@ -344,7 +338,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     _roomsBloc.add(
       RoomsUpdateContactAvatars(
         _userDirSupport.buildContactAvatarsByPubkey(
-          whitelist: _whitelist,
+          contacts: _contacts,
           contactProfiles: _contactProfiles,
         ),
       ),
@@ -387,7 +381,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     return HomeUserDirSession(
       accountId: _accountId,
       config: _config,
-      whitelist: _whitelist,
+      contacts: _contacts,
       nicknames: _nicknames,
       nickname: _nickname,
       username: _username,
@@ -403,13 +397,8 @@ class HomeCubit extends Cubit<HomeViewState> {
         Map<String, ContactProfile>.from(coordState.contactProfiles);
     _friendStates =
         Map<String, FriendStateRecord>.from(coordState.friendStates);
-    _whitelist = List<WhitelistEntry>.from(coordState.whitelist);
+    _contacts = List<ContactEntry>.from(coordState.contacts);
     _nicknames = Map<String, String>.from(coordState.nicknames);
-    _config = _config.copyWith(
-      whitelist: _whitelist.map((entry) => entry.hexKey).toSet(),
-    );
-    _roomsBloc
-        .add(RoomsUpdateWhitelist(_whitelist.map((e) => e.hexKey).toSet()));
     _roomsBloc.add(RoomsUpdateNicknames(_nicknames));
     _pushContactAvatarsToRooms();
     _buildState();
@@ -433,16 +422,16 @@ class HomeCubit extends Cubit<HomeViewState> {
     await _ensureShellKeyPackagesUploaded();
   }
 
-  Future<void> _syncWhitelistWithUserDir(
-    List<WhitelistEntry> previousWhitelist,
-    List<WhitelistEntry> nextWhitelist,
+  Future<void> _syncContactsWithUserDir(
+    List<ContactEntry> previousContacts,
+    List<ContactEntry> nextContacts,
   ) async {
     await _ensureShellConnection();
-    await _userDirCoordinator.applyWhitelistChanges(
+    await _userDirCoordinator.applyContactChanges(
       session: _buildUserDirSession(),
-      previousWhitelist: previousWhitelist,
-      nextWhitelist: nextWhitelist,
-      nextNicknames: {for (final e in nextWhitelist) e.hexKey: e.name},
+      previousContacts: previousContacts,
+      nextContacts: nextContacts,
+      nextNicknames: {for (final e in nextContacts) e.hexKey: e.name},
     );
   }
 
@@ -483,3 +472,4 @@ class HomeCubit extends Cubit<HomeViewState> {
     await super.close();
   }
 }
+

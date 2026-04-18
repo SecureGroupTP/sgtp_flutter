@@ -634,7 +634,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       title: 'Generate New Key?',
       body:
           'This will create a new Ed25519 identity key and save it to the sgtp directory.\n\n'
-          'Your old key will be replaced. Peers that trusted your old key will need to add the new one to their whitelist.',
+          'Your old key will be replaced. Peers using the old key will need your new public key.',
       confirmLabel: 'Generate',
     );
     if (!confirm) return;
@@ -2861,7 +2861,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       (
         'Add Peers',
-        'Exchange public keys with your friends and add them to whitelist.'
+        'Exchange public keys with your friends and add them to contacts.'
       ),
       (
         'Relay Server',
@@ -4386,3 +4386,4 @@ class _SgtpCameraPreviewState extends State<_SgtpCameraPreview> {
     return RawImage(image: img, fit: BoxFit.cover);
   }
 }
+

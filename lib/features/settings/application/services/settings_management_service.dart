@@ -55,8 +55,8 @@ class SettingsManagementService {
     String accountId,
   ) =>
       _settings.loadPrivateKeyForNode(accountId);
-  Future<List<WhitelistEntry>> loadWhitelistEntriesForNode(String accountId) =>
-      _settings.loadWhitelistEntriesForNode(accountId);
+  Future<List<ContactEntry>> loadContactEntriesForNode(String accountId) =>
+      _settings.loadContactEntriesForNode(accountId);
   Future<String?> loadPreferredMicrophoneForNode(String accountId) =>
       _settings.loadPreferredMicrophoneForNode(accountId);
   Future<String?> loadPreferredCameraForNode(String accountId) =>
@@ -71,11 +71,11 @@ class SettingsManagementService {
     String name,
   ) =>
       _settings.savePrivateKeyForNode(accountId, bytes, name);
-  Future<void> saveWhitelistEntriesForNode(
+  Future<void> saveContactEntriesForNode(
     String accountId,
-    List<WhitelistEntry> entries,
+    List<ContactEntry> entries,
   ) =>
-      _settings.saveWhitelistEntriesForNode(accountId, entries);
+      _settings.saveContactEntriesForNode(accountId, entries);
   Future<void> saveUserAvatarForNode(String accountId, Uint8List bytes) =>
       _settings.saveUserAvatarForNode(accountId, bytes);
   Future<void> clearUserAvatarForNode(String accountId) =>
@@ -86,8 +86,8 @@ class SettingsManagementService {
   Future<void> upsertNode(NodeConfig node) => _settings.upsertNode(node);
   Future<void> clearPrivateKeyForNode(String accountId) =>
       _settings.clearPrivateKeyForNode(accountId);
-  Future<void> clearWhitelistForNode(String accountId) =>
-      _settings.clearWhitelistForNode(accountId);
+  Future<void> clearContactEntriesForNode(String accountId) =>
+      _settings.clearContactEntriesForNode(accountId);
   Future<void> saveUserNicknameForNode(String accountId, String nickname) =>
       _settings.saveUserNicknameForNode(accountId, nickname);
   Future<void> saveUserUsernameForNode(String accountId, String username) =>
@@ -143,8 +143,8 @@ class SettingsManagementService {
   Future<void> saveChatScrollPosition(String roomUUID, double offset) =>
       _settings.saveChatScrollPosition(roomUUID, offset);
   Future<void> clearPrivateKey() => _settings.clearPrivateKey();
-  Future<List<WhitelistEntry>> loadWhitelistEntries() =>
-      _settings.loadWhitelistEntries();
+  Future<List<ContactEntry>> loadContactEntries() =>
+      _settings.loadContactEntries();
   Future<Uint8List?> loadUserAvatar() => _settings.loadUserAvatar();
   Future<Map<String, FriendStateRecord>> loadFriendStates(String accountId) =>
       _settings.loadFriendStates(accountId);
@@ -230,7 +230,7 @@ class SettingsManagementService {
       privateKeyBytes: privateKeyBytes,
       privateKeyName: privateKeyName,
       publicKey: publicKey,
-      whitelistEntries: await _settings.loadWhitelistEntriesForNode(accountId),
+      contactEntries: await _settings.loadContactEntriesForNode(accountId),
     );
   }
 
@@ -273,7 +273,7 @@ class SettingsManagementService {
       await _settings.upsertNode(node.copyWith(accountId: ''));
     }
     await _settings.clearPrivateKeyForNode(accountId);
-    await _settings.clearWhitelistForNode(accountId);
+    await _settings.clearContactEntriesForNode(accountId);
     await _settings.clearUserAvatarForNode(accountId);
     await _settings.saveUserNicknameForNode(accountId, '');
     await _settings.saveUserUsernameForNode(accountId, '');
@@ -397,10 +397,10 @@ class SettingsManagementService {
     return await _settings.loadPrivateKeyForNode(accountId) != null;
   }
 
-  Future<List<WhitelistEntry>> importWhitelistEntriesFromPublicKeyFiles({
+  Future<List<ContactEntry>> importContactEntriesFromPublicKeyFiles({
     required List<({Uint8List bytes, String name})> files,
   }) async {
-    final entries = <WhitelistEntry>[];
+    final entries = <ContactEntry>[];
     for (final file in files) {
       final pubKey = tryParsePublicKeyFile(file.bytes);
       if (pubKey == null) continue;
@@ -408,15 +408,15 @@ class SettingsManagementService {
       if (name.toLowerCase().endsWith('.pub')) {
         name = name.substring(0, name.length - 4);
       }
-      entries.add(WhitelistEntry(bytes: pubKey, name: name));
+      entries.add(ContactEntry(bytes: pubKey, name: name));
     }
     return entries;
   }
 
-  Future<List<WhitelistEntry>> mergeWhitelistEntries({
+  Future<List<ContactEntry>> mergeContactEntries({
     required String accountId,
-    required List<WhitelistEntry> currentEntries,
-    required List<WhitelistEntry> newEntries,
+    required List<ContactEntry> currentEntries,
+    required List<ContactEntry> newEntries,
   }) async {
     final combined = [...currentEntries];
     for (final entry in newEntries) {
@@ -424,43 +424,43 @@ class SettingsManagementService {
         combined.add(entry);
       }
     }
-    await _settings.saveWhitelistEntriesForNode(accountId, combined);
+    await _settings.saveContactEntriesForNode(accountId, combined);
     return combined;
   }
 
-  Future<List<WhitelistEntry>> addWhitelistEntry({
+  Future<List<ContactEntry>> addContactEntry({
     required String accountId,
-    required List<WhitelistEntry> currentEntries,
-    required WhitelistEntry entry,
+    required List<ContactEntry> currentEntries,
+    required ContactEntry entry,
   }) async {
     final exists = currentEntries.any((item) => item.hexKey == entry.hexKey);
     if (exists) {
-      throw const FormatException('Key already in whitelist');
+      throw const FormatException('Key already in contacts');
     }
     final updated = [...currentEntries, entry];
-    await _settings.saveWhitelistEntriesForNode(accountId, updated);
+    await _settings.saveContactEntriesForNode(accountId, updated);
     return updated;
   }
 
-  Future<List<WhitelistEntry>> renameWhitelistEntry({
+  Future<List<ContactEntry>> renameContactEntry({
     required String accountId,
-    required List<WhitelistEntry> currentEntries,
+    required List<ContactEntry> currentEntries,
     required int index,
     required String newName,
   }) async {
-    final updated = List<WhitelistEntry>.from(currentEntries);
+    final updated = List<ContactEntry>.from(currentEntries);
     updated[index] = updated[index].copyWithName(newName);
-    await _settings.saveWhitelistEntriesForNode(accountId, updated);
+    await _settings.saveContactEntriesForNode(accountId, updated);
     return updated;
   }
 
-  Future<List<WhitelistEntry>> removeWhitelistEntry({
+  Future<List<ContactEntry>> removeContactEntry({
     required String accountId,
-    required List<WhitelistEntry> currentEntries,
+    required List<ContactEntry> currentEntries,
     required int index,
   }) async {
-    final updated = List<WhitelistEntry>.from(currentEntries)..removeAt(index);
-    await _settings.saveWhitelistEntriesForNode(accountId, updated);
+    final updated = List<ContactEntry>.from(currentEntries)..removeAt(index);
+    await _settings.saveContactEntriesForNode(accountId, updated);
     return updated;
   }
 
@@ -521,7 +521,7 @@ class SettingsManagementService {
     required List<NodeConfig> nodes,
     required String? preferredNodeId,
     required String standaloneServerAddress,
-    required List<WhitelistEntry> whitelistEntries,
+    required List<ContactEntry> contactEntries,
     required int pingIntervalSeconds,
     required int mediaChunkSizeBytes,
   }) {
@@ -540,7 +540,7 @@ class SettingsManagementService {
       standaloneServerAddress: standaloneServerAddress,
     );
     final nicknames = {
-      for (final entry in whitelistEntries) entry.hexKey: entry.name,
+      for (final entry in contactEntries) entry.hexKey: entry.name,
     };
     return SettingsAppliedConfig(
       accountId: accountId,
@@ -551,7 +551,6 @@ class SettingsManagementService {
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
-        whitelist: whitelistEntries.map((entry) => entry.hexKey).toSet(),
         transport: node.transport,
         useTls: node.useTls,
         fakeSni: node.fakeSni,
@@ -560,7 +559,7 @@ class SettingsManagementService {
         mediaChunkSizeBytes: mediaChunkSizeBytes,
       ),
       nicknames: nicknames,
-      whitelistEntries: whitelistEntries,
+      contactEntries: contactEntries,
     );
   }
 
@@ -788,3 +787,4 @@ class SettingsManagementService {
     return Uint8List.fromList(lines.toString().codeUnits);
   }
 }
+

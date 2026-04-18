@@ -9,7 +9,7 @@ class SettingsViewState {
     this.privateKeyPath,
     this.privateKeyBytes,
     this.myPublicKey,
-    this.wlEntries = const [],
+    this.contactEntries = const [],
     this.userAvatar,
     this.nickname = '',
     this.username = '',
@@ -39,7 +39,7 @@ class SettingsViewState {
   final String? privateKeyPath;
   final Uint8List? privateKeyBytes;
   final Uint8List? myPublicKey;
-  final List<WhitelistEntry> wlEntries;
+  final List<ContactEntry> contactEntries;
   final Uint8List? userAvatar;
   final String nickname;
   final String username;
@@ -74,3 +74,4 @@ class SettingsViewState {
     return id.isEmpty ? null : id;
   }
 }
+

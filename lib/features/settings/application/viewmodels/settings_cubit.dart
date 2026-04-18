@@ -18,6 +18,7 @@ import 'package:sgtp_flutter/features/settings/application/models/settings_model
 import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 final _log = AppLog('SettingsCubit');
 
@@ -50,7 +51,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String? _privateKeyPath;
   Uint8List? _privateKeyBytes;
   Uint8List? _myPublicKey;
-  List<WhitelistEntry> _wlEntries = [];
+  List<ContactEntry> _contactEntries = [];
   Uint8List? _userAvatar;
   String _nickname = '';
   String _username = '';
@@ -355,7 +356,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _privateKeyBytes = snapshot.privateKeyBytes;
     _privateKeyPath = snapshot.privateKeyName;
     _myPublicKey = snapshot.publicKey;
-    _wlEntries = snapshot.whitelistEntries;
+    _contactEntries = snapshot.contactEntries;
     _buildState();
 
     if (applyConfig) tryApplyConfig();
@@ -397,7 +398,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
         nodes: _nodes,
         preferredNodeId: _preferredNodeId,
         standaloneServerAddress: _standaloneServerAddress,
-        whitelistEntries: _wlEntries,
+        contactEntries: _contactEntries,
         pingIntervalSeconds: _pingIntervalSeconds,
         mediaChunkSizeBytes: _mediaChunkSizeBytes,
       );
@@ -406,7 +407,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
         config: applied.config,
         nicknames: applied.nicknames,
         serverAddress: applied.serverAddress,
-        whitelistEntries: applied.whitelistEntries,
+        contactEntries: applied.contactEntries,
       );
     } catch (_) {}
   }
@@ -724,7 +725,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       privateKeyPath: _privateKeyPath,
       privateKeyBytes: _privateKeyBytes,
       myPublicKey: _myPublicKey,
-      wlEntries: List.unmodifiable(_wlEntries),
+      contactEntries: List.unmodifiable(_contactEntries),
       userAvatar: _userAvatar,
       nickname: _nickname,
       username: _username,
@@ -754,3 +755,4 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Sync callbacks ──────────────────────────────────────────────────────
 }
+

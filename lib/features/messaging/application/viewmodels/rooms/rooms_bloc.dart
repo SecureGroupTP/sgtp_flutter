@@ -71,7 +71,6 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     on<RoomsCreateRoom>(_onCreate);
     on<RoomsJoinRoom>(_onJoin);
     on<RoomsRemoveRoom>(_onRemove);
-    on<RoomsUpdateWhitelist>(_onUpdateWhitelist);
     on<RoomsUpdateNicknames>(_onUpdateNicknames);
     on<RoomsUpdateContactAvatars>(_onUpdateContactAvatars);
     on<RoomsLoadStoredChats>(_onLoadStoredChats);
@@ -189,15 +188,6 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   String _roomKey(String roomUUID, String serverAddress) =>
       '${roomUUID.trim().toLowerCase()}@${_normalizeAddress(serverAddress)}';
 
-  void _onUpdateWhitelist(
-      RoomsUpdateWhitelist event, Emitter<RoomsState> emit) {
-    // Update base config so future rooms use the new whitelist.
-    _baseConfig = _baseConfig.copyWith(whitelist: event.whitelist);
-    // Hot-push to all already-running rooms — no reconnect needed.
-    for (final room in state.rooms) {
-      room.chatBloc.add(ChatUpdateWhitelist(event.whitelist));
-    }
-  }
 
   void _onUpdateNicknames(
       RoomsUpdateNicknames event, Emitter<RoomsState> emit) {

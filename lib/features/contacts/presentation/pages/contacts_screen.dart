@@ -10,7 +10,7 @@ import 'package:sgtp_flutter/features/settings/presentation/widgets/pretty_qr_sh
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/qr_scanner_dialog.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
 
-/// Contacts screen — shows the trusted-peer whitelist.
+/// Contacts screen — shows the contacts.
 /// Users can add peers by public key hex/share-hex, rename them, delete them.
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -83,7 +83,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Choose how you want to add a trusted contact.',
+                'Choose how you want to add a contact.',
                 style: TextStyle(
                   fontSize: 13,
                   color: AppColors.textSecondary,
@@ -269,7 +269,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
               const SizedBox(height: 20),
               AppSheetButton(
                 icon: Icons.person_add_outlined,
-                label: 'Add to Whitelist',
+                label: 'Add Contact',
                 onTap: () async {
                   final error = await cubit.addContact(
                     name: nameCtrl.text,
@@ -446,7 +446,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                             fontWeight: FontWeight.w600)),
                     const TextSpan(
                         text:
-                            ' from trusted contacts? They will no longer be able to connect to your rooms.'),
+                            ' from contacts?'),
                   ],
                 ),
               ),
@@ -859,7 +859,7 @@ class _ServerAddTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   const Text(
-                    'Click to create and add to trusted peers',
+                    'Click to create and add to contacts',
                     style:
                         TextStyle(fontSize: 11, color: AppColors.textSecondary),
                     overflow: TextOverflow.ellipsis,
@@ -1389,7 +1389,7 @@ class _EmptyState extends StatelessWidget {
             Text(
               hasAny
                   ? 'Try a different search'
-                  : 'Add trusted peers by their\npublic key to allow connections.',
+                  : 'Add people by their\npublic key to start chatting.',
               textAlign: TextAlign.center,
               style:
                   const TextStyle(fontSize: 14, color: AppColors.textSecondary),
@@ -1400,3 +1400,4 @@ class _EmptyState extends StatelessWidget {
     );
   }
 }
+

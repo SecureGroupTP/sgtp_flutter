@@ -14,7 +14,7 @@ class ChatState extends Equatable {
   final String myPublicKeyHex;
   final String? errorMessage;
 
-  /// Whitelist: ed25519PubHex → nickname (from whitelist file names).
+  /// Contact nicknames: ed25519PubHex -> nickname.
   final Map<String, String> nicknames;
 
   /// Runtime: sessionUUID → nickname (populated as peers join).

@@ -162,13 +162,6 @@ class ChatToggleReaction extends ChatEvent {
   List<Object?> get props => [messageId, emoji];
 }
 
-/// Hot-update the whitelist on a live connection (no reconnect needed).
-class ChatUpdateWhitelist extends ChatEvent {
-  final Set<String> whitelist;
-  const ChatUpdateWhitelist(this.whitelist);
-  @override
-  List<Object?> get props => [whitelist];
-}
 
 /// Hot-update nicknames (ed25519PubHex → name) without reconnect.
 /// Called when the user adds/edits/removes a contact while rooms are live.

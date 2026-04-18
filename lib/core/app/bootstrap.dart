@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:openmls/openmls.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:sgtp_chat_core/sgtp_chat_core.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:sgtp_flutter/core/di/injector.dart';
@@ -28,7 +28,7 @@ Future<AppDependencies> bootstrapApp() async {
     await WindowSizeService.restoreSize();
   }
 
-  await MessengerMls.ensureInitialized();
+  await Openmls.init();
 
   return AppInjector.build();
 }

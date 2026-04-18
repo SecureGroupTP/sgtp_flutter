@@ -37,7 +37,7 @@ class HomeScreen extends StatefulWidget {
   final Map<String, String> nicknames;
   final String serverAddress;
   final Uint8List? userAvatar;
-  final List<WhitelistEntry> initialWhitelist;
+  final List<ContactEntry> initialContacts;
 
   const HomeScreen({
     super.key,
@@ -46,7 +46,7 @@ class HomeScreen extends StatefulWidget {
     required this.nicknames,
     required this.serverAddress,
     this.userAvatar,
-    this.initialWhitelist = const [],
+    this.initialContacts = const [],
   });
 
   @override
@@ -66,7 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
       nicknames: widget.nicknames,
       serverAddress: widget.serverAddress,
       userAvatar: widget.userAvatar,
-      initialWhitelist: widget.initialWhitelist,
+      initialContacts: widget.initialContacts,
       settingsManagementService: context.read<SettingsManagementService>(),
       chatStorageGateway: context.read<ChatStorageGateway>(),
       sgtpConnectionService: context.read<SgtpConnectionService>(),
@@ -156,7 +156,7 @@ class _HomeScreenViewState extends State<_HomeScreenView> {
                     accountId: state.accountId,
                     serverNodeId: state.config.nodeId,
                     myPubkeyHex: state.myPubkeyHex,
-                    initialEntries: state.whitelist,
+                    initialContacts: state.contacts,
                     contactProfiles: state.contactProfiles,
                     friendStates: state.friendStates,
                   ),
@@ -203,14 +203,14 @@ class _HomeAppSessionController implements AppSessionController {
     required SgtpConfig config,
     required Map<String, String> nicknames,
     required String serverAddress,
-    required List<WhitelistEntry> whitelistEntries,
+    required List<ContactEntry> contactEntries,
   }) {
     _homeCubit.onConfigChanged(
       accountId,
       config,
       nicknames,
       serverAddress,
-      whitelistEntries,
+      contactEntries,
     );
   }
 
@@ -230,8 +230,8 @@ class _HomeAppSessionController implements AppSessionController {
   }
 
   @override
-  void setWhitelistEntries(List<WhitelistEntry> entries) {
-    _homeCubit.onWhitelistChanged(entries);
+  void setContactEntries(List<ContactEntry> entries) {
+    _homeCubit.onContactsChanged(entries);
   }
 
   @override
@@ -331,7 +331,7 @@ class _AppStartScreenState extends State<AppStartScreen> {
               nicknames: data.nicknames,
               serverAddress: data.serverAddress,
               userAvatar: data.userAvatar,
-              initialWhitelist: data.initialWhitelist,
+              initialContacts: data.initialContacts,
             ),
           ),
         );
@@ -349,3 +349,4 @@ class _AppStartScreenState extends State<AppStartScreen> {
     );
   }
 }
+

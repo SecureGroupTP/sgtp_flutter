@@ -62,11 +62,11 @@ class HomePersistenceService {
     return _settings.saveFriendStates(accountId, friendStates);
   }
 
-  Future<void> saveWhitelistEntries(
+  Future<void> saveContactEntries(
     String accountId,
-    List<WhitelistEntry> entries,
+    List<ContactEntry> entries,
   ) {
-    return _settings.saveWhitelistEntriesForNode(accountId, entries);
+    return _settings.saveContactEntriesForNode(accountId, entries);
   }
 
   Future<ResolvedUserDirNode?> resolveUserDirNode({
@@ -121,3 +121,4 @@ class HomePersistenceService {
     );
   }
 }
+

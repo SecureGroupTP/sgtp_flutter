@@ -14,7 +14,7 @@ class ContactsPage extends StatefulWidget {
     required this.accountId,
     this.serverNodeId,
     this.myPubkeyHex,
-    required this.initialEntries,
+    required this.initialContacts,
     this.contactProfiles = const {},
     this.friendStates = const {},
   });
@@ -22,7 +22,7 @@ class ContactsPage extends StatefulWidget {
   final String accountId;
   final String? serverNodeId;
   final String? myPubkeyHex;
-  final List<WhitelistEntry> initialEntries;
+  final List<ContactEntry> initialContacts;
   final Map<String, ContactProfile> contactProfiles;
   final Map<String, FriendStateRecord> friendStates;
 
@@ -44,7 +44,7 @@ class _ContactsPageState extends State<ContactsPage> {
       accountId: widget.accountId,
       serverNodeId: widget.serverNodeId,
       myPubkeyHex: widget.myPubkeyHex,
-      initialEntries: widget.initialEntries,
+      initialContacts: widget.initialContacts,
       contactProfiles: widget.contactProfiles,
       friendStates: widget.friendStates,
     );
@@ -57,7 +57,7 @@ class _ContactsPageState extends State<ContactsPage> {
       accountId: widget.accountId,
       serverNodeId: widget.serverNodeId,
       myPubkeyHex: widget.myPubkeyHex,
-      initialEntries: widget.initialEntries,
+      initialContacts: widget.initialContacts,
       contactProfiles: widget.contactProfiles,
       friendStates: widget.friendStates,
     );
@@ -77,3 +77,4 @@ class _ContactsPageState extends State<ContactsPage> {
     );
   }
 }
+

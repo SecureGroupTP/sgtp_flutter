@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 class SettingsBootstrapData {
   const SettingsBootstrapData({
@@ -32,7 +33,7 @@ class SettingsAccountSnapshot {
     required this.privateKeyBytes,
     required this.privateKeyName,
     required this.publicKey,
-    required this.whitelistEntries,
+    required this.contactEntries,
   });
 
   final String nickname;
@@ -41,7 +42,7 @@ class SettingsAccountSnapshot {
   final Uint8List? privateKeyBytes;
   final String? privateKeyName;
   final Uint8List? publicKey;
-  final List<WhitelistEntry> whitelistEntries;
+  final List<ContactEntry> contactEntries;
 }
 
 class SettingsPrivateKeyData {
@@ -88,14 +89,14 @@ class SettingsAppliedConfig {
     required this.serverAddress,
     required this.config,
     required this.nicknames,
-    required this.whitelistEntries,
+    required this.contactEntries,
   });
 
   final String accountId;
   final String serverAddress;
   final SgtpConfig config;
   final Map<String, String> nicknames;
-  final List<WhitelistEntry> whitelistEntries;
+  final List<ContactEntry> contactEntries;
 }
 
 class SettingsNodeServerOptionsState {
@@ -107,3 +108,4 @@ class SettingsNodeServerOptionsState {
   final SgtpServerOptions? options;
   final DateTime? savedAt;
 }
+

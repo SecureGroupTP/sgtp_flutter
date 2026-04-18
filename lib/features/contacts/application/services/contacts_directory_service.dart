@@ -10,11 +10,11 @@ class ContactsDirectoryService {
 
   final SettingsManagementService _settings;
 
-  Future<void> saveWhitelistEntries({
+  Future<void> saveContactEntries({
     required String accountId,
-    required List<WhitelistEntry> entries,
+    required List<ContactEntry> entries,
   }) {
-    return _settings.saveWhitelistEntriesForNode(accountId, entries);
+    return _settings.saveContactEntriesForNode(accountId, entries);
   }
 
   /// Searches for an exact username match on the server.
@@ -24,7 +24,7 @@ class ContactsDirectoryService {
   Future<ContactsServerSearchHit?> searchExactUser({
     required IUserDirClient? client,
     required String normalizedUsername,
-    required List<WhitelistEntry> existingEntries,
+    required List<ContactEntry> existingEntries,
   }) async {
     if (client == null) return null;
 
@@ -47,3 +47,4 @@ class ContactsDirectoryService {
     );
   }
 }
+

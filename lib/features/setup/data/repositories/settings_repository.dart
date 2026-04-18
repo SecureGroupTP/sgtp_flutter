@@ -24,7 +24,7 @@ class SettingsRepository {
   // Legacy (global) identity + profile keys. New code should prefer per-account scoped variants.
   static const _privKeyB64Key = 'sgtp_private_key_b64';
   static const _privKeyNameKey = 'sgtp_private_key_name';
-  static const _whitelistJsonKey = 'sgtp_whitelist_json'; // [{b64, name}]
+  static const _contactEntriesJsonKey = 'sgtp_contacts_json'; // [{b64, name}]
   static const _userAvatarB64Key = 'sgtp_user_avatar_b64';
   static const _userNicknameKey = 'sgtp_user_nickname';
   static const _userUsernameKey = 'sgtp_user_username';
@@ -277,7 +277,7 @@ class SettingsRepository {
     final prefixes = <String>[
       '${_accountMarkerKey}_',
       '${_privKeyB64Key}_',
-      '${_whitelistJsonKey}_',
+      '${_contactEntriesJsonKey}_',
       '${_userAvatarB64Key}_',
       '${_userNicknameKey}_',
       '${_userUsernameKey}_',
@@ -304,7 +304,7 @@ class SettingsRepository {
     if (id.isEmpty) return false;
     final priv = p.getString(_scopedKey(_privKeyB64Key, id));
     if (priv != null && priv.isNotEmpty) return true;
-    final wl = p.getStringList(_scopedKey(_whitelistJsonKey, id));
+    final wl = p.getStringList(_scopedKey(_contactEntriesJsonKey, id));
     if (wl != null && wl.isNotEmpty) return true;
     final avatar = p.getString(_scopedKey(_userAvatarB64Key, id));
     if (avatar != null && avatar.isNotEmpty) return true;
@@ -476,7 +476,7 @@ class SettingsRepository {
 
     final scopedPriv = _scopedKey(_privKeyB64Key, nodeId);
     final scopedPrivName = _scopedKey(_privKeyNameKey, nodeId);
-    final scopedWl = _scopedKey(_whitelistJsonKey, nodeId);
+    final scopedWl = _scopedKey(_contactEntriesJsonKey, nodeId);
     final scopedAvatar = _scopedKey(_userAvatarB64Key, nodeId);
     final scopedNick = _scopedKey(_userNicknameKey, nodeId);
 
@@ -490,7 +490,7 @@ class SettingsRepository {
       if (legacy != null) await p.setString(scopedPrivName, legacy);
     }
     if (p.getStringList(scopedWl) == null) {
-      final legacy = p.getStringList(_whitelistJsonKey);
+      final legacy = p.getStringList(_contactEntriesJsonKey);
       if (legacy != null) await p.setStringList(scopedWl, legacy);
     }
     if (p.getString(scopedAvatar) == null) {
@@ -569,28 +569,28 @@ class SettingsRepository {
     await p.remove(_scopedKey(_privKeyNameKey, nodeId));
   }
 
-  // ── Whitelist ─────────────────────────────────────────────────────────────
+  // ── Contact entries ───────────────────────────────────────────────────────
 
-  /// Whitelist entry: public key bytes + display name (editable)
+  /// Contact entry: public key bytes plus editable display name.
   /// Stored as JSON list: [{b64, name}]
-  Future<void> saveWhitelistEntries(List<WhitelistEntry> entries) async {
+  Future<void> saveContactEntries(List<ContactEntry> entries) async {
     final p = await SharedPreferences.getInstance();
     final jsonList = entries
         .map(
             (e) => json.encode({'b64': base64.encode(e.bytes), 'name': e.name}))
         .toList();
-    await p.setStringList(_whitelistJsonKey, jsonList);
+    await p.setStringList(_contactEntriesJsonKey, jsonList);
   }
 
-  Future<List<WhitelistEntry>> loadWhitelistEntries() async {
+  Future<List<ContactEntry>> loadContactEntries() async {
     final p = await SharedPreferences.getInstance();
-    final jsonList = p.getStringList(_whitelistJsonKey);
+    final jsonList = p.getStringList(_contactEntriesJsonKey);
     if (jsonList == null) return [];
-    final result = <WhitelistEntry>[];
+    final result = <ContactEntry>[];
     for (final s in jsonList) {
       try {
         final m = json.decode(s) as Map<String, dynamic>;
-        result.add(WhitelistEntry(
+        result.add(ContactEntry(
           bytes: base64.decode(m['b64'] as String),
           name: m['name'] as String? ?? 'unknown',
         ));
@@ -599,26 +599,26 @@ class SettingsRepository {
     return result;
   }
 
-  Future<void> saveWhitelistEntriesForNode(
-      String nodeId, List<WhitelistEntry> entries) async {
+  Future<void> saveContactEntriesForNode(
+      String nodeId, List<ContactEntry> entries) async {
     final p = await SharedPreferences.getInstance();
     final jsonList = entries
         .map(
             (e) => json.encode({'b64': base64.encode(e.bytes), 'name': e.name}))
         .toList();
-    await p.setStringList(_scopedKey(_whitelistJsonKey, nodeId), jsonList);
+    await p.setStringList(_scopedKey(_contactEntriesJsonKey, nodeId), jsonList);
   }
 
-  Future<List<WhitelistEntry>> loadWhitelistEntriesForNode(
+  Future<List<ContactEntry>> loadContactEntriesForNode(
       String nodeId) async {
     final p = await SharedPreferences.getInstance();
-    final jsonList = p.getStringList(_scopedKey(_whitelistJsonKey, nodeId));
+    final jsonList = p.getStringList(_scopedKey(_contactEntriesJsonKey, nodeId));
     if (jsonList == null) return [];
-    final result = <WhitelistEntry>[];
+    final result = <ContactEntry>[];
     for (final s in jsonList) {
       try {
         final m = json.decode(s) as Map<String, dynamic>;
-        result.add(WhitelistEntry(
+        result.add(ContactEntry(
           bytes: base64.decode(m['b64'] as String),
           name: m['name'] as String? ?? 'unknown',
         ));
@@ -628,16 +628,16 @@ class SettingsRepository {
   }
 
   /// Backwards-compat helpers using old schema
-  Future<void> saveWhitelist(
+  Future<void> saveLegacyContactEntries(
       List<Uint8List> bytesList, List<String> paths) async {
     final entries = List.generate(bytesList.length,
-        (i) => WhitelistEntry(bytes: bytesList[i], name: paths[i]));
-    await saveWhitelistEntries(entries);
+        (i) => ContactEntry(bytes: bytesList[i], name: paths[i]));
+    await saveContactEntries(entries);
   }
 
   Future<({List<Uint8List> bytesList, List<String> paths})?>
-      loadWhitelist() async {
-    final entries = await loadWhitelistEntries();
+      loadLegacyContactEntries() async {
+    final entries = await loadContactEntries();
     if (entries.isEmpty) return null;
     return (
       bytesList: entries.map((e) => e.bytes).toList(),
@@ -645,14 +645,14 @@ class SettingsRepository {
     );
   }
 
-  Future<void> clearWhitelist() async {
+  Future<void> clearContactEntries() async {
     final p = await SharedPreferences.getInstance();
-    await p.remove(_whitelistJsonKey);
+    await p.remove(_contactEntriesJsonKey);
   }
 
-  Future<void> clearWhitelistForNode(String nodeId) async {
+  Future<void> clearContactEntriesForNode(String nodeId) async {
     final p = await SharedPreferences.getInstance();
-    await p.remove(_scopedKey(_whitelistJsonKey, nodeId));
+    await p.remove(_scopedKey(_contactEntriesJsonKey, nodeId));
   }
 
   // ── User avatar ───────────────────────────────────────────────────────────
@@ -1147,3 +1147,4 @@ class QrStyleSettings {
     );
   }
 }
+

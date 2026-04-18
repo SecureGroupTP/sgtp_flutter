@@ -25,7 +25,6 @@ abstract class ISgtpSession {
   Future<void> probeConnection();
 
   void setUserAvatar(Uint8List? bytes);
-  void updateWhitelist(Set<String> whitelist);
 
   Future<void> sendMessage(
     String text, {

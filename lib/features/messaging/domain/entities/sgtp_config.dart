@@ -11,7 +11,6 @@ class SgtpConfig {
   final Uint8List roomUUID;
   final SimpleKeyPairData identityKeyPair;
   final Uint8List myPublicKey;
-  final Set<String> whitelist;
   final SgtpTransportFamily transport;
   final bool useTls;
   final String fakeSni;
@@ -30,7 +29,6 @@ class SgtpConfig {
     required this.roomUUID,
     required this.identityKeyPair,
     required this.myPublicKey,
-    required this.whitelist,
     this.transport = SgtpTransportFamily.tcp,
     this.useTls = false,
     this.fakeSni = '',
@@ -50,7 +48,6 @@ class SgtpConfig {
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
-        whitelist: whitelist,
         transport: transport,
         useTls: useTls,
         fakeSni: fakeSni,
@@ -70,7 +67,6 @@ class SgtpConfig {
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
-        whitelist: whitelist,
         transport: transport,
         useTls: useTls,
         fakeSni: fakeSni,
@@ -89,20 +85,12 @@ class SgtpConfig {
     bool? bootstrapDirectRoom,
     String? directPeerPublicKeyHex,
   }) {
-    final effectivePeerHex =
-        (directPeerPublicKeyHex ?? this.directPeerPublicKeyHex ?? '')
-            .trim()
-            .toLowerCase();
-    final effectiveWhitelist = isDirectMessage
-        ? (effectivePeerHex.length == 64 ? {effectivePeerHex} : <String>{})
-        : whitelist;
     return SgtpConfig(
       accountId: accountId,
       serverAddr: serverAddr,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,
-      whitelist: effectiveWhitelist,
       transport: transport,
       useTls: useTls,
       fakeSni: fakeSni,
@@ -119,7 +107,6 @@ class SgtpConfig {
   }
 
   SgtpConfig copyWith({
-    Set<String>? whitelist,
     String? serverAddr,
     String? accountId,
     int? mediaChunkSizeBytes,
@@ -134,7 +121,6 @@ class SgtpConfig {
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,
-      whitelist: whitelist ?? this.whitelist,
       transport: transport ?? this.transport,
       useTls: useTls ?? this.useTls,
       fakeSni: fakeSni ?? this.fakeSni,

@@ -11,7 +11,7 @@ class HomeViewState {
     required this.nicknames,
     required this.serverAddress,
     this.userAvatar,
-    this.whitelist = const [],
+    this.contacts = const [],
     this.contactProfiles = const {},
     this.friendStates = const {},
     this.nickname = '',
@@ -26,7 +26,7 @@ class HomeViewState {
   final Map<String, String> nicknames;
   final String serverAddress;
   final Uint8List? userAvatar;
-  final List<WhitelistEntry> whitelist;
+  final List<ContactEntry> contacts;
   final Map<String, ContactProfile> contactProfiles;
   final Map<String, FriendStateRecord> friendStates;
   final String nickname;
@@ -42,3 +42,4 @@ class HomeViewState {
         .join();
   }
 }
+

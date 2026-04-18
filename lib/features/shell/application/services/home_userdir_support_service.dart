@@ -44,10 +44,10 @@ class HomeUserDirSupportService {
   }
 
   Map<String, Uint8List> buildContactAvatarsByPubkey({
-    required List<WhitelistEntry> whitelist,
+    required List<ContactEntry> contacts,
     required Map<String, ContactProfile> contactProfiles,
   }) {
-    final allowed = whitelist.map((e) => e.hexKey).toSet();
+    final allowed = contacts.map((e) => e.hexKey).toSet();
     final out = <String, Uint8List>{};
     for (final entry in contactProfiles.entries) {
       if (!allowed.contains(entry.key)) continue;
@@ -59,3 +59,4 @@ class HomeUserDirSupportService {
     return out;
   }
 }
+

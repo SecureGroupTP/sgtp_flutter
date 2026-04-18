@@ -8,7 +8,7 @@ class HomeUserDirSession {
   const HomeUserDirSession({
     required this.accountId,
     required this.config,
-    required this.whitelist,
+    required this.contacts,
     required this.nicknames,
     required this.nickname,
     required this.username,
@@ -19,7 +19,7 @@ class HomeUserDirSession {
 
   final String accountId;
   final SgtpConfig config;
-  final List<WhitelistEntry> whitelist;
+  final List<ContactEntry> contacts;
   final Map<String, String> nicknames;
   final String nickname;
   final String username;
@@ -36,13 +36,14 @@ class HomeUserDirState {
     required this.contactProfiles,
     required this.friendStates,
     required this.suppressedContacts,
-    required this.whitelist,
+    required this.contacts,
     required this.nicknames,
   });
 
   final Map<String, ContactProfile> contactProfiles;
   final Map<String, FriendStateRecord> friendStates;
   final Set<String> suppressedContacts;
-  final List<WhitelistEntry> whitelist;
+  final List<ContactEntry> contacts;
   final Map<String, String> nicknames;
 }
+

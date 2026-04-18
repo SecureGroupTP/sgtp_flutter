@@ -10,6 +10,7 @@ import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/shared_direct_room_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/data/services/openmls_runtime.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/shared_key_package_publisher.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
@@ -123,16 +124,19 @@ class AppInjector {
     final directRoomGateway = SharedDirectRoomGateway(
       connectionService: sgtpConnectionService,
     );
+    final openMlsRuntimeFactory = OpenMlsRuntimeFactory();
     final keyPackagePublisher = SharedKeyPackagePublisher(
       connectionService: sgtpConnectionService,
+      openMlsRuntimeFactory: openMlsRuntimeFactory,
     );
 
-    // The active chat session runtime is the dedicated chat_core/OpenMLS-backed
+    // The active chat session runtime is the dedicated OpenMLS-backed
     // implementation. `SgtpClient` remains only as a deprecated compatibility
     // alias and is intentionally not wired here.
     ISgtpSession sgtpSessionFactory(SgtpConfig config) => ServerV2ChatSession(
           config,
           connectionService: sgtpConnectionService,
+          openMlsRuntimeFactory: openMlsRuntimeFactory,
         );
 
     final contactsDirectoryService = ContactsDirectoryService(
