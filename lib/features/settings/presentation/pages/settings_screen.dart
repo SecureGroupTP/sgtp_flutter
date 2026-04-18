@@ -40,6 +40,7 @@ import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage
 enum _SettingsSection {
   key,
   chats,
+  notifications,
   system,
   data,
   help,
@@ -1155,6 +1156,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: 'Chats & Media',
               titleSize: 18.0
             ),
+          _SettingsSection.notifications => (
+              backColor: AppColors.textPrimary,
+              title: 'Notifications',
+              titleSize: 18.0
+            ),
           _SettingsSection.help => (
               backColor: const Color(0xFF0A84FF),
               title: 'Information',
@@ -1253,6 +1259,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const Divider(height: 1, color: AppColors.border),
               _SettingsNavTile(
+                iconBgColor: const Color(0xFF2c2c2e),
+                icon: Icons.notifications_none_rounded,
+                title: 'Notifications',
+                onTap: () => setState(
+                    () => _activeSection = _SettingsSection.notifications),
+              ),
+              const Divider(height: 1, color: AppColors.border),
+              _SettingsNavTile(
                 iconBgColor: const Color(0xFF995a00),
                 icon: Icons.storage_rounded,
                 title: 'Data',
@@ -1299,6 +1313,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _RoundedSettingsSection(
               title: 'Media & Devices',
               child: _buildMediaCard(state),
+            ),
+          ],
+        _SettingsSection.notifications => [
+            _RoundedSettingsSection(
+              title: 'Notifications',
+              child: _buildNotificationsCard(state),
             ),
           ],
         _SettingsSection.system => [
@@ -2745,6 +2765,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
+        ),
+      ],
+    );
+  }
+
+  // ── Notifications card ───────────────────────────────────────────────────
+
+  Widget _buildNotificationsCard(SettingsViewState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SwitchRow(
+          label: 'Enable notifications',
+          subtitle: 'Windows only',
+          value: state.notificationsEnabled,
+          onChanged: (v) {
+            unawaited(_cubit.setNotificationsEnabled(v));
+          },
         ),
       ],
     );

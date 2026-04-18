@@ -117,3 +117,17 @@ class RoomsUpsertChat extends RoomsEvent {
   @override
   List<Object?> get props => [uuid, serverAddress, name, avatarBytes];
 }
+
+/// Mute/unmute notifications for a chat (local-only).
+class RoomsSetChatMuted extends RoomsEvent {
+  final String uuid;
+  final String serverAddress;
+  final bool muted;
+  const RoomsSetChatMuted(
+    this.uuid, {
+    required this.serverAddress,
+    required this.muted,
+  });
+  @override
+  List<Object?> get props => [uuid, serverAddress, muted];
+}

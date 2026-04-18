@@ -31,10 +31,6 @@
     <!-- ── Вибрация (опционально, для UI-фидбека) ──────────────────────────── -->
     <uses-permission android:name="android.permission.VIBRATE"/>
 
-    <!-- ── Уведомления (flutter_local_notifications) ───────────────────────── -->
-    <!-- Push-уведомления (Android 13+) -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-
     <!-- Удержание CPU/сети при свёрнутом приложении -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
@@ -75,19 +71,6 @@
             android:name="flutterEmbedding"
             android:value="2"/>
 
-        <!-- flutter_local_notifications: плановые и boot-уведомления -->
-        <receiver
-            android:exported="false"
-            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>
-        <receiver
-            android:exported="false"
-            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
-                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
-            </intent-filter>
-        </receiver>
     </application>
 
     <queries>

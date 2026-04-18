@@ -72,6 +72,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String _doubleTapDesktop = 'react';
   bool _swipeToReply = true;
   bool _longPressMenu = true;
+  bool _notificationsEnabled = true;
 
   List<NodeConfig> _nodes = const [];
   List<String> _accountIdsList = const [];
@@ -334,6 +335,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     InteractionPrefs.doubleTapDesktop = _doubleTapDesktop;
     InteractionPrefs.swipeToReply = _swipeToReply;
     InteractionPrefs.longPressShowsMenu = _longPressMenu;
+    _notificationsEnabled = await NotificationService.loadEnabled();
     _buildState();
 
     unawaited(_refreshProfilesCache(accountIds));
@@ -669,6 +671,12 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _buildState();
   }
 
+  Future<void> setNotificationsEnabled(bool value) async {
+    _notificationsEnabled = value;
+    _buildState();
+    await NotificationService.setEnabled(value);
+  }
+
   // ── Intent: Backup/restore ──────────────────────────────────────────────
 
   Future<BackupExportData> createBackup() async {
@@ -743,6 +751,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       doubleTapDesktop: _doubleTapDesktop,
       swipeToReply: _swipeToReply,
       longPressMenu: _longPressMenu,
+      notificationsEnabled: _notificationsEnabled,
       nodes: List.unmodifiable(_nodes),
       accountIdsList: List.unmodifiable(_accountIdsList),
       nodesLoading: _nodesLoading,

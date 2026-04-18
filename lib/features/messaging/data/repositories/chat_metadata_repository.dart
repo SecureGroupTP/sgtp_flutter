@@ -379,6 +379,7 @@ class ChatMetadataRepository {
       'avatar': metadata.avatarBytes != null
           ? base64Encode(metadata.avatarBytes!)
           : null,
+      'isMuted': metadata.isMuted,
       'isDirectMessage': metadata.isDirectMessage,
       'createdAt': metadata.createdAt.toIso8601String(),
       'updatedAt': metadata.updatedAt.toIso8601String(),
@@ -425,6 +426,7 @@ class ChatMetadataRepository {
               .trim(),
       remoteRoomId: (json['remoteRoomId'] as String?)?.trim(),
       avatarBytes: avatarBytes,
+      isMuted: (json['isMuted'] as bool?) ?? false,
       isDirectMessage: (json['isDirectMessage'] as bool?) ?? false,
       createdAt: DateTime.parse(
           json['createdAt'] as String? ?? DateTime.now().toIso8601String()),

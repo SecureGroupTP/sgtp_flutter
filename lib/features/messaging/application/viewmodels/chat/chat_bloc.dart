@@ -677,6 +677,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         name: existing?.name ?? state.chatName,
         serverAddress: _activeServerAddress,
         avatarBytes: existing?.avatarBytes ?? state.chatAvatarBytes,
+        isMuted: existing?.isMuted ?? false,
         isDirectMessage: existing?.isDirectMessage ?? state.isDirectChat,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,

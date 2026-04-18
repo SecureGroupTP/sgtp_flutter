@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
+import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
@@ -40,6 +41,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   Uint8List? _userAvatar;
   DateTime? _lastServerRoomSyncAt;
   final Map<String, StreamSubscription<dynamic>> _chatSubs = {};
+  final Map<String, int> _lastUnreadByRoomKey = {};
+  final Map<String, _PendingChatNotification> _pendingNotifs = {};
+  final Map<String, Timer> _pendingNotifTimers = {};
   late final ChatMetadataStore _chatMetadataRepo;
 
   static const int _maxParallelConnects = 3;
@@ -78,6 +82,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     on<RoomsSyncStoredChats>(_onSyncStoredChats);
     on<RoomsDeleteStoredChat>(_onDeleteStoredChat);
     on<RoomsUpsertChat>(_onUpsertChat);
+    on<RoomsSetChatMuted>(_onSetChatMuted);
     on<_RoomsRefresh>(_onRefresh);
   }
 
@@ -283,6 +288,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
             shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
         avatarBytes:
             hasAvatar ? chatState.chatAvatarBytes : existing?.avatarBytes,
+        isMuted: existing?.isMuted ?? false,
         isDirectMessage: existing?.isDirectMessage ?? chatState.isDirectChat,
         createdAt: existing?.createdAt ?? now,
         updatedAt: existing?.updatedAt ?? now,
@@ -328,6 +334,34 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       serverAddress: server,
       remoteRoomId: existing?.remoteRoomId,
       avatarBytes: event.avatarBytes ?? existing?.avatarBytes,
+      isMuted: existing?.isMuted ?? false,
+      isDirectMessage: existing?.isDirectMessage ?? false,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      windowWidth: existing?.windowWidth,
+      windowHeight: existing?.windowHeight,
+    ));
+    add(const RoomsLoadStoredChats());
+  }
+
+  Future<void> _onSetChatMuted(
+    RoomsSetChatMuted event,
+    Emitter<RoomsState> emit,
+  ) async {
+    final server = event.serverAddress.trim();
+    if (server.isEmpty) return;
+    final existing = await _chatMetadataRepo.loadChat(
+      event.uuid,
+      serverAddress: server,
+    );
+    final now = DateTime.now();
+    await _chatMetadataRepo.saveChat(ChatMetadata(
+      uuid: event.uuid,
+      name: existing?.name ?? 'Chat',
+      serverAddress: server,
+      remoteRoomId: existing?.remoteRoomId,
+      avatarBytes: existing?.avatarBytes,
+      isMuted: event.muted,
       isDirectMessage: existing?.isDirectMessage ?? false,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -487,6 +521,12 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
     final key = _roomKey(hexUUID, config.serverAddr);
     _chatSubs[key] = chatBloc.stream.listen((chatState) {
+      _onChatStateChangedForNotifications(
+        roomKey: key,
+        roomUUID: hexUUID,
+        serverAddress: config.serverAddr,
+        chatState: chatState,
+      );
       // Release a connect slot once the room leaves connecting/handshaking.
       if (_connectInFlightKeys.contains(key) &&
           chatState.status != ChatStatus.connecting &&
@@ -531,6 +571,8 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   Future<void> _onRemove(
       RoomsRemoveRoom event, Emitter<RoomsState> emit) async {
     final roomKey = _roomKey(event.roomUUID, event.serverAddress);
+    _clearPendingNotification(roomKey);
+    _lastUnreadByRoomKey.remove(roomKey);
     await _chatSubs[roomKey]?.cancel();
     _chatSubs.remove(roomKey);
     final room = state.rooms
@@ -557,10 +599,92 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     emit(state.copyWith());
   }
 
+  bool _isChatMuted({
+    required String roomUUID,
+    required String serverAddress,
+  }) {
+    final targetServer = _normalizeAddress(serverAddress);
+    for (final chat in state.storedChats) {
+      if (chat.uuid == roomUUID &&
+          _normalizeAddress(chat.serverAddress) == targetServer) {
+        return chat.isMuted;
+      }
+    }
+    return false;
+  }
+
+  void _clearPendingNotification(String roomKey) {
+    _pendingNotifTimers.remove(roomKey)?.cancel();
+    _pendingNotifs.remove(roomKey);
+  }
+
+  void _onChatStateChangedForNotifications({
+    required String roomKey,
+    required String roomUUID,
+    required String serverAddress,
+    required ChatState chatState,
+  }) {
+    final prevUnread = _lastUnreadByRoomKey[roomKey] ?? 0;
+    final nextUnread = chatState.unreadCount;
+    _lastUnreadByRoomKey[roomKey] = nextUnread;
+
+    // Reset/cancel when user focuses the chat again.
+    if (nextUnread == 0) {
+      _clearPendingNotification(roomKey);
+      return;
+    }
+
+    // Only notify on increments (message(s) arrived while chat not visible).
+    if (nextUnread <= prevUnread) return;
+
+    if (!NotificationService.enabled.value) return;
+    if (_isChatMuted(roomUUID: roomUUID, serverAddress: serverAddress)) return;
+
+    final delta = nextUnread - prevUnread;
+    final name = (chatState.chatName.trim().isNotEmpty &&
+            chatState.chatName.trim() != 'Chat')
+        ? chatState.chatName.trim()
+        : roomUUID.substring(0, 8);
+
+    final existing = _pendingNotifs[roomKey];
+    final next = _PendingChatNotification(
+      roomUUID: roomUUID,
+      serverAddress: serverAddress,
+      chatName: name,
+      avatarBytes: chatState.chatAvatarBytes,
+      count: (existing?.count ?? 0) + delta,
+    );
+    _pendingNotifs[roomKey] = next;
+
+    _pendingNotifTimers.remove(roomKey)?.cancel();
+    _pendingNotifTimers[roomKey] =
+        Timer(const Duration(milliseconds: 700), () async {
+      final pending = _pendingNotifs.remove(roomKey);
+      _pendingNotifTimers.remove(roomKey);
+      if (pending == null) return;
+      if (!NotificationService.enabled.value) return;
+      if (_isChatMuted(
+          roomUUID: pending.roomUUID, serverAddress: pending.serverAddress)) {
+        return;
+      }
+      await NotificationService.showChatMessageCount(
+        chatId: pending.roomUUID,
+        chatName: pending.chatName,
+        newMessagesCount: pending.count,
+        avatarBytes: pending.avatarBytes,
+      );
+    });
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
   Future<void> close() async {
+    for (final t in _pendingNotifTimers.values) {
+      t.cancel();
+    }
+    _pendingNotifTimers.clear();
+    _pendingNotifs.clear();
     for (final sub in _chatSubs.values) {
       await sub.cancel();
     }
@@ -569,4 +693,20 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
     return super.close();
   }
+}
+
+class _PendingChatNotification {
+  final String roomUUID;
+  final String serverAddress;
+  final String chatName;
+  final Uint8List? avatarBytes;
+  final int count;
+
+  const _PendingChatNotification({
+    required this.roomUUID,
+    required this.serverAddress,
+    required this.chatName,
+    required this.avatarBytes,
+    required this.count,
+  });
 }

@@ -28,6 +28,7 @@ class SettingsViewState {
     this.doubleTapDesktop = 'react',
     this.swipeToReply = true,
     this.longPressMenu = true,
+    this.notificationsEnabled = true,
     this.nodes = const [],
     this.accountIdsList = const [],
     this.nodesLoading = true,
@@ -61,6 +62,7 @@ class SettingsViewState {
   final String doubleTapDesktop;
   final bool swipeToReply;
   final bool longPressMenu;
+  final bool notificationsEnabled;
 
   final List<NodeConfig> nodes;
   final List<String> accountIdsList;

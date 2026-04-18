@@ -316,6 +316,16 @@ class _ChatListTile extends StatelessWidget {
       trailing: PopupMenuButton(
         itemBuilder: (context) => [
           PopupMenuItem(
+            child: Text(chat.isMuted ? 'Unmute' : 'Mute'),
+            onTap: () {
+              context.read<ChatListBloc>().add(ChatListSetMuted(
+                    uuid: chat.uuid,
+                    serverAddress: chat.serverAddress,
+                    muted: !chat.isMuted,
+                  ));
+            },
+          ),
+          PopupMenuItem(
             child: const Text('Edit'),
             onTap: onEdit,
           ),

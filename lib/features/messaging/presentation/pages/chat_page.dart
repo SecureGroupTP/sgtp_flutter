@@ -23,7 +23,6 @@ import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/message_bubble.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_avatar.dart';
-import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
@@ -127,16 +126,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final has = _messageCtrl.text.trim().isNotEmpty;
       if (has != _hasText) setState(() => _hasText = has);
     });
-    NotificationService.init();
-    NotificationService.onMarkAsRead = (messageId) {
-      if (!_sentReadReceipts.contains(messageId)) {
-        _sentReadReceipts.add(messageId);
-        _chatBloc?.add(ChatSendMessageRead(messageId));
-      }
-    };
-    // Flush any "Mark as Read" taps that arrived while the app was killed
-    // (stored in SharedPreferences by the background isolate handler).
-    NotificationService.flushPendingMarkAsRead();
   }
 
   @override
@@ -144,7 +133,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _saveScrollPosition();
     _chatBloc?.add(const ChatSetVisibility(false));
     WidgetsBinding.instance.removeObserver(this);
-    NotificationService.onMarkAsRead = null;
     _messageCtrl.dispose();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
@@ -160,8 +148,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         setState(() => _isPageVisible = true);
         _chatBloc?.add(const ChatSetVisibility(true));
         unawaited(_loadCaptureCapabilities());
-        NotificationService.cancelAll();
-        NotificationService.flushPendingMarkAsRead();
 
         final bloc = _chatBloc;
         if (bloc != null) {
@@ -1244,26 +1230,6 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // was still null.
             _sentReadReceipts.add(msg.id);
             bloc.add(ChatSendMessageRead(msg.id));
-          } else {
-            // App in background → show notification so the user can read it.
-            final senderLabel = state.peerNicknames[msg.senderUUID] ??
-                state.peerNicknamesHistory[msg.senderUUID] ??
-                (msg.senderUUID.length >= 8
-                    ? msg.senderUUID.substring(0, 8)
-                    : msg.senderUUID);
-            final body = msg.type == MessageType.text
-                ? msg.content
-                : '[${msg.type.name}]';
-            // Pass sender avatar if available — shown as icon on Android
-            // and as attachment thumbnail on iOS/macOS.
-            final avatar =
-                state.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
-            NotificationService.showMessage(
-              sender: senderLabel,
-              body: body,
-              messageId: msg.id,
-              avatarBytes: avatar,
-            );
           }
         }
         // Don't auto-pop — user can reconnect from the chat page
