@@ -16,6 +16,7 @@ dependencies:
   cross_file: ^0.3.4+2
   cryptography: ^2.7.0
   path_provider: ^2.1.4
+  path: ^1.9.1
   record: ^6.2.0
   audioplayers: ^6.1.0
   media_kit: ^1.1.11
@@ -34,6 +35,10 @@ dependencies:
   window_manager: ^0.4.3
   url_launcher: ^6.3.0
   flutter_local_notifications: ^17.2.3
+  sqflite: ^2.4.2
+  sqflite_common_ffi: ^2.3.6
+  sqlite3_flutter_libs: ^0.5.39
+  idb_shim: ^2.7.0
   camera: ^0.11.0
   camera_desktop: ^1.0.6
   flutter_zxing: ^2.2.1

@@ -9,6 +9,7 @@ import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
@@ -35,6 +36,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   final SettingsManagementService _settings;
   final ChatStorageGateway _chatStorage;
   final SgtpConnectionService _connectionService;
+  final MessagingMediaStorageService _mediaStorageService;
   final SgtpSessionFactory _sessionFactory;
   Map<String, Uint8List> _contactAvatarsByPub = const {};
   Uint8List? _userAvatar;
@@ -55,6 +57,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     required SettingsManagementService settingsRepository,
     required ChatStorageGateway chatStorage,
     required SgtpConnectionService connectionService,
+    required MessagingMediaStorageService mediaStorageService,
     required String serverAddress,
     required SgtpSessionFactory sessionFactory,
     Uint8List? userAvatar,
@@ -64,6 +67,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         _settings = settingsRepository,
         _chatStorage = chatStorage,
         _connectionService = connectionService,
+        _mediaStorageService = mediaStorageService,
         _sessionFactory = sessionFactory,
         _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
@@ -463,9 +467,11 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       return;
     }
     final chatBloc = ChatBloc(
-        accountId: _accountId,
-        storageGateway: _chatStorage,
-        sessionFactory: _sessionFactory);
+      accountId: _accountId,
+      storageGateway: _chatStorage,
+      mediaStorageService: _mediaStorageService,
+      sessionFactory: _sessionFactory,
+    );
 
     // Push user avatar into the new bloc
     if (_userAvatar != null) {

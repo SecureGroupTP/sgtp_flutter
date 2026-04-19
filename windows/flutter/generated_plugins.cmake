@@ -11,6 +11,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   pasteboard
   record_windows
   screen_retriever_windows
+  sqlite3_flutter_libs
   url_launcher_windows
   volume_controller
   window_manager

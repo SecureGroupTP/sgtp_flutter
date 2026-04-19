@@ -14,9 +14,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_recorder.dart';
@@ -43,6 +43,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   static const int _targetUploadImageBytes = 3 * 1024 * 1024;
 
   late final SettingsManagementService _settingsRepo;
+  late final MessagingMediaStorageService _mediaStorage;
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final _recorder = AudioRecorder();
@@ -119,6 +120,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _settingsRepo = context.read<SettingsManagementService>();
+    _mediaStorage = context.read<MessagingMediaStorageService>();
     _chatBloc = context.read<ChatBloc>()..add(const ChatSetVisibility(true));
     WidgetsBinding.instance.addObserver(this);
     _scrollCtrl.addListener(_onScroll);
@@ -347,7 +349,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     final roomUUID = _chatBloc?.state.roomUUID ?? '';
     if (roomUUID.isEmpty || !_scrollCtrl.hasClients) return;
     final pos = _scrollCtrl.offset;
-    unawaited(_settingsRepo.saveChatScrollPosition(roomUUID, pos));
+    unawaited(
+      _settingsRepo.saveChatScrollPosition(widget.accountId, roomUUID, pos),
+    );
   }
 
   /// Restore the saved scroll position for [roomUUID], or jump to bottom if
@@ -358,7 +362,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       return;
     }
     try {
-      final savedPos = await _settingsRepo.loadChatScrollPosition(roomUUID);
+      final savedPos = await _settingsRepo.loadChatScrollPosition(
+        widget.accountId,
+        roomUUID,
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scrollCtrl.hasClients) return;
         if (savedPos != null) {
@@ -760,6 +767,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final capture = await Navigator.of(context).push<VideoNoteCaptureResult?>(
         MaterialPageRoute(
           builder: (_) => VideoNoteRecorderPage(
+            accountId: widget.accountId,
             preferredCameraName: preferredDesktop?.id ?? _selectedCameraName,
           ),
           fullscreenDialog: true,
@@ -803,9 +811,11 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         // record_web ignores filesystem path and returns a blob URL on stop.
         _recordingPath = 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       } else {
-        final tmpDir = await getTemporaryDirectory();
-        _recordingPath =
-            '${tmpDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        _recordingPath = await _mediaStorage.createRecordingPath(
+          accountId: widget.accountId,
+          prefix: 'voice',
+          extension: 'm4a',
+        );
       }
       await _recorder.start(
           RecordConfig(
@@ -1589,6 +1599,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             msg.type != MessageType.messageRead;
 
         Widget bubble = MessageBubble(
+          accountId: widget.accountId,
           message: msg,
           peerNicknames: {
             ...state.peerNicknames,

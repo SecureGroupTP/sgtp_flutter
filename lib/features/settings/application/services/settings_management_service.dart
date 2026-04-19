@@ -142,10 +142,14 @@ class SettingsManagementService {
       _settings.loadQrStyleSettings();
   Future<void> saveQrStyleSettings(QrStyleSettings settings) =>
       _settings.saveQrStyleSettings(settings);
-  Future<double?> loadChatScrollPosition(String roomUUID) =>
-      _settings.loadChatScrollPosition(roomUUID);
-  Future<void> saveChatScrollPosition(String roomUUID, double offset) =>
-      _settings.saveChatScrollPosition(roomUUID, offset);
+  Future<double?> loadChatScrollPosition(String accountId, String roomUUID) =>
+      _settings.loadChatScrollPosition(accountId, roomUUID);
+  Future<void> saveChatScrollPosition(
+    String accountId,
+    String roomUUID,
+    double offset,
+  ) =>
+      _settings.saveChatScrollPosition(accountId, roomUUID, offset);
   Future<void> clearPrivateKey() => _settings.clearPrivateKey();
   Future<List<ContactEntry>> loadContactEntries() =>
       _settings.loadContactEntries();
@@ -284,6 +288,7 @@ class SettingsManagementService {
     await _settings.clearUserAvatarForNode(accountId);
     await _settings.saveUserNicknameForNode(accountId, '');
     await _settings.saveUserUsernameForNode(accountId, '');
+    await _settings.deleteAccountStorage(accountId);
     await _settings.deleteAccountId(accountId);
   }
 

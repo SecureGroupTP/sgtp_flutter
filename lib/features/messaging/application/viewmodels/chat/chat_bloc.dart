@@ -7,6 +7,7 @@ import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
@@ -15,6 +16,8 @@ import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_sessi
 class ChatBloc extends Bloc<ChatEvent, ChatState> {
   final _log = AppLog('ChatBloc');
   final _logVideo = AppLog('VideoNote');
+  final String _accountId;
+  final MessagingMediaStorageService _mediaStorageService;
   ISgtpSession? _client;
   StreamSubscription<SgtpEvent>? _eventSub;
   late final SgtpSessionFactory _sessionFactory;
@@ -39,8 +42,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   ChatBloc({
     required String accountId,
     required ChatStorageGateway storageGateway,
+    required MessagingMediaStorageService mediaStorageService,
     required SgtpSessionFactory sessionFactory,
-  })  : _metaRepo = storageGateway.metadataForAccount(accountId),
+  })  : _accountId = accountId,
+        _mediaStorageService = mediaStorageService,
+        _metaRepo = storageGateway.metadataForAccount(accountId),
         super(const ChatState()) {
     _sessionFactory = sessionFactory;
     on<ChatConnect>(_onConnect);
@@ -520,7 +526,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
               mime: event.mime,
               metadata: event.metadata!,
             )
-          : await VideoNotePipeline.prepare(sourceFile: event.xFile);
+          : await VideoNotePipeline.prepare(
+              sourceFile: event.xFile,
+              outputPath: await _mediaStorageService.createDerivedPath(
+                accountId: _accountId,
+                prefix: 'videonote',
+                extension: 'mp4',
+              ),
+            );
       _logVideo.info('[ChatBloc] Video note prepared: mime=${prepared.mime}, '
           '${prepared.metadata.width}x${prepared.metadata.height}, '
           'duration=${prepared.metadata.durationMs}ms');

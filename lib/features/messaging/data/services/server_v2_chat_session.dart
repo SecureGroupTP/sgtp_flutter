@@ -11,6 +11,7 @@ import 'package:sgtp_flutter/core/network/events/sgtp_server_events.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/mls_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
+import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_repository.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_metadata_repository.dart';
@@ -91,6 +92,7 @@ class ServerV2ChatSession implements ISgtpSession {
   final Set<String> _invitedPeerDevices = {};
   final ChatMetadataRepository? _metadataRepository;
   final OpenMlsRuntimeFactory _openMlsRuntimeFactory;
+  final MainDatabaseFactory _mainDatabaseFactory;
   final Map<String, ChatMessage> _pendingOutgoingMessagesByLocalId = {};
   final Map<String, _PendingSelfAck> _pendingSelfAcksByFingerprint = {};
   final Map<String, String> _pendingSelfAckFingerprintByLocalId = {};
@@ -128,12 +130,17 @@ class ServerV2ChatSession implements ISgtpSession {
     SgtpConfig config, {
     required SgtpConnectionService connectionService,
     required OpenMlsRuntimeFactory openMlsRuntimeFactory,
+    required MainDatabaseFactory mainDatabaseFactory,
   })  : _config = config,
         _connectionService = connectionService,
         _openMlsRuntimeFactory = openMlsRuntimeFactory,
+        _mainDatabaseFactory = mainDatabaseFactory,
         _metadataRepository = (config.accountId ?? '').trim().isEmpty
             ? null
-            : ChatMetadataRepository(accountId: config.accountId) {
+            : ChatMetadataRepository(
+                accountId: config.accountId,
+                mainDatabaseFactory: mainDatabaseFactory,
+              ) {
     _isDirectRoom = config.isDirectMessage;
     _directRoomNeedsBootstrap = config.bootstrapDirectRoom;
     _roomUUID = config.roomUUID.every((b) => b == 0)
@@ -524,6 +531,7 @@ class ServerV2ChatSession implements ISgtpSession {
       accountId: accountId,
       serverAddress: _config.serverAddr,
       chatUUID: chatUUID,
+      mainDatabaseFactory: _mainDatabaseFactory,
     );
   }
 

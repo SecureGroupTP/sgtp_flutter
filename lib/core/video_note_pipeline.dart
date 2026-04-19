@@ -7,7 +7,6 @@ import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image/image.dart' as img;
 import 'package:media_kit/media_kit.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/video_note_metadata.dart';
@@ -32,6 +31,7 @@ class VideoNotePipeline {
 
   static Future<PreparedVideoNote> prepare({
     required XFile sourceFile,
+    String? outputPath,
   }) async {
     _log.info('Preparing video note from {path}', parameters: {'path': sourceFile.path});
     if (kIsWeb) {
@@ -42,9 +42,8 @@ class VideoNotePipeline {
       return _preparePassthrough(sourceFile);
     }
 
-    final tmpDir = await getTemporaryDirectory();
     final basename = DateTime.now().millisecondsSinceEpoch;
-    final normalizedPath = '${tmpDir.path}/videonote_$basename.mp4';
+    final normalizedPath = outputPath ?? 'videonote_$basename.mp4';
 
     final filters = <String>[
       'crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2',
@@ -104,7 +103,10 @@ class VideoNotePipeline {
     final fileSize = await videoFile.length();
     final mediaInfo = await _probeDesktopMediaInfo(normalizedPath);
     final durationMs = mediaInfo.durationMs.clamp(0, maxDurationSeconds * 1000);
-    final thumbnail = await _buildDesktopThumbnail(normalizedPath, tmpDir.path);
+    final thumbnail = await _buildDesktopThumbnail(
+      normalizedPath,
+      File(normalizedPath).parent.path,
+    );
 
     return PreparedVideoNote(
       xFile: XFile(normalizedPath),

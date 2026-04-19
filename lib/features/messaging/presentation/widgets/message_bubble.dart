@@ -5,14 +5,15 @@ import 'package:audioplayers/audioplayers.dart' hide PlayerState;
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/features/contacts/presentation/widgets/user_avatar.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 
 enum _MessageContextAction { copyMessage, react, reply }
@@ -51,6 +52,7 @@ Future<void> _waitForVideoMetadata(Player player) async {
 }
 
 class MessageBubble extends StatelessWidget {
+  final String accountId;
   final ChatMessage message;
   final Map<String, String> peerNicknames;
   final String myUUID;
@@ -69,6 +71,7 @@ class MessageBubble extends StatelessWidget {
 
   const MessageBubble({
     super.key,
+    required this.accountId,
     required this.message,
     this.peerNicknames = const {},
     this.myUUID = '',
@@ -1091,6 +1094,7 @@ class MessageBubble extends StatelessWidget {
             ),
             child: ClipOval(
               child: _VideoNotePlayer(
+                accountId: accountId,
                 videoBytes: message.videoBytes,
                 localPath: message.localMediaPath,
                 mediaMime: message.mediaMime,
@@ -1126,6 +1130,7 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _VideoThumbnail(
+            accountId: accountId,
             videoBytes: message.videoBytes,
             localPath: message.localMediaPath,
             mediaName: message.mediaName ?? 'video',
@@ -1158,6 +1163,7 @@ class MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _VoicePlayer(
+            accountId: accountId,
             audioBytes: message.audioBytes,
             localPath: message.localMediaPath,
             mediaMime: message.mediaMime ?? 'audio/m4a',
@@ -1189,11 +1195,13 @@ class MessageBubble extends StatelessWidget {
 // ─── Circular video note player ───────────────────────────────────────────────
 
 class _VideoNotePlayer extends StatefulWidget {
+  final String accountId;
   final Uint8List? videoBytes;
   final String? localPath;
   final String? mediaMime;
   final VideoNoteMetadata? metadata;
   const _VideoNotePlayer({
+    required this.accountId,
     this.videoBytes,
     this.localPath,
     this.mediaMime,
@@ -1297,12 +1305,16 @@ class _VideoNotePlayerState extends State<_VideoNotePlayer> {
           ).path;
           _ownsTempFile = false;
         } else {
-          final tmpDir = await getTemporaryDirectory();
+          final mediaStorage = context.read<MessagingMediaStorageService>();
           final ext = _tempExtForMime(widget.mediaMime);
-          final file = File('${tmpDir.path}/vnote_${bytes.hashCode}.$ext');
-          if (!file.existsSync()) await file.writeAsBytes(bytes);
-          path = file.path;
-          _ownsTempFile = true;
+          path = await mediaStorage.ensureCachedFile(
+            accountId: widget.accountId,
+            namespace: 'video_note',
+            cacheKey: 'vnote_${bytes.hashCode}_${widget.mediaMime ?? 'video_mp4'}',
+            bytes: bytes,
+            extension: ext,
+          );
+          _ownsTempFile = false;
         }
       }
       _tmpPath = path;
@@ -1695,12 +1707,14 @@ class _VideoNoteProgressRingPainter extends CustomPainter {
 // ─── Video thumbnail + inline player (media_kit) ──────────────────────────────
 
 class _VideoThumbnail extends StatefulWidget {
+  final String accountId;
   final Uint8List? videoBytes;
   final String? localPath;
   final String mediaName;
   final bool isMe;
 
   const _VideoThumbnail({
+    required this.accountId,
     this.videoBytes,
     this.localPath,
     required this.mediaName,
@@ -1759,14 +1773,16 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
           ).path;
           _ownsTempFile = false;
         } else {
-          final tmpDir = await getTemporaryDirectory();
           final ext = widget.mediaName.split('.').last;
-          final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-          if (!file.existsSync()) {
-            await file.writeAsBytes(bytes);
-          }
-          path = file.path;
-          _ownsTempFile = true;
+          final mediaStorage = context.read<MessagingMediaStorageService>();
+          path = await mediaStorage.ensureCachedFile(
+            accountId: widget.accountId,
+            namespace: 'video',
+            cacheKey: widget.mediaName,
+            bytes: bytes,
+            extension: ext,
+          );
+          _ownsTempFile = false;
         }
       }
       _tmpPath = path;
@@ -1834,6 +1850,7 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
           Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => _VideoPlayerPage(
+                accountId: widget.accountId,
                 videoBytes: widget.videoBytes,
                 localPath: widget.localPath,
                 mediaName: widget.mediaName,
@@ -1967,11 +1984,13 @@ class _VideoThumbnailState extends State<_VideoThumbnail> {
 }
 
 class _VideoPlayerPage extends StatefulWidget {
+  final String accountId;
   final Uint8List? videoBytes;
   final String? localPath;
   final String mediaName;
 
   const _VideoPlayerPage({
+    required this.accountId,
     this.videoBytes,
     this.localPath,
     required this.mediaName,
@@ -2041,14 +2060,16 @@ class _VideoPlayerPageState extends State<_VideoPlayerPage> {
           ).path;
           _ownsTempFile = false;
         } else {
-          final tmpDir = await getTemporaryDirectory();
           final ext = widget.mediaName.split('.').last;
-          final file = File('${tmpDir.path}/${widget.mediaName.hashCode}.$ext');
-          if (!file.existsSync()) {
-            await file.writeAsBytes(bytes);
-          }
-          path = file.path;
-          _ownsTempFile = true;
+          final mediaStorage = context.read<MessagingMediaStorageService>();
+          path = await mediaStorage.ensureCachedFile(
+            accountId: widget.accountId,
+            namespace: 'video',
+            cacheKey: widget.mediaName,
+            bytes: bytes,
+            extension: ext,
+          );
+          _ownsTempFile = false;
         }
       }
       _tmpPath = path;
@@ -2629,12 +2650,14 @@ class _AlwaysVisibleProgressBar extends StatelessWidget {
 // ─── Voice player ─────────────────────────────────────────────────────────────
 
 class _VoicePlayer extends StatefulWidget {
+  final String accountId;
   final Uint8List? audioBytes;
   final String? localPath;
   final String mediaMime;
   final bool isMe;
 
   const _VoicePlayer({
+    required this.accountId,
     this.audioBytes,
     this.localPath,
     required this.mediaMime,
@@ -2755,12 +2778,16 @@ class _VoicePlayerState extends State<_VoicePlayer> {
       _ownsTempFile = false;
       return;
     }
-    final tmpDir = await getTemporaryDirectory();
     final ext = _mimeToExt(widget.mediaMime);
-    final file = File('${tmpDir.path}/voice_play_${bytes.hashCode}.$ext');
-    if (!file.existsSync()) await file.writeAsBytes(bytes);
-    _tmpPath = file.path;
-    _ownsTempFile = true;
+    final mediaStorage = context.read<MessagingMediaStorageService>();
+    _tmpPath = await mediaStorage.ensureCachedFile(
+      accountId: widget.accountId,
+      namespace: 'voice',
+      cacheKey: 'voice_play_${bytes.hashCode}',
+      bytes: bytes,
+      extension: ext,
+    );
+    _ownsTempFile = false;
   }
 
   String _mimeToExt(String mime) => switch (mime) {

@@ -1,19 +1,20 @@
-import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:openmls/openmls.dart';
-import 'package:path_provider/path_provider.dart';
 
+import 'package:sgtp_flutter/core/storage/account_storage_paths.dart';
+import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 
 class OpenMlsRuntimeFactory {
-  OpenMlsRuntimeFactory({HashAlgorithm? hashAlgorithm})
-      : _hashAlgorithm = hashAlgorithm ?? Sha256();
+  OpenMlsRuntimeFactory({
+    required AccountStoragePaths accountStoragePaths,
+    required StorageKeyService storageKeyService,
+  })  : _accountStoragePaths = accountStoragePaths,
+        _storageKeyService = storageKeyService;
 
-  final HashAlgorithm _hashAlgorithm;
+  final AccountStoragePaths _accountStoragePaths;
+  final StorageKeyService _storageKeyService;
 
   Future<OpenMlsRuntime> create(SgtpConfig config) async {
     final publicKey = Uint8List.fromList(config.myPublicKey);
@@ -27,10 +28,7 @@ class OpenMlsRuntimeFactory {
     );
     final engine = await MlsEngine.create(
       dbPath: await _dbPath(config),
-      encryptionKey: await _encryptionKey(
-        config: config,
-        privateKey: privateKey,
-      ),
+      encryptionKey: await _encryptionKey(config),
     );
     return OpenMlsRuntime(
       engine: engine,
@@ -44,48 +42,12 @@ class OpenMlsRuntimeFactory {
   }
 
   Future<String> _dbPath(SgtpConfig config) async {
-    final accountId = (config.accountId ?? '').trim();
-    final publicHex = _hex(config.myPublicKey);
-    final addressHash = await _hashHex(utf8.encode(config.serverAddr));
-    final name = 'mls_${publicHex.substring(0, 16)}_${addressHash.substring(0, 12)}';
-    if (kIsWeb) {
-      final accountSegment = accountId.isEmpty ? 'default' : accountId;
-      return 'sgtp_${accountSegment}_$name';
-    }
-
-    final supportDir = await getApplicationSupportDirectory();
-    final base = accountId.isEmpty
-        ? '${supportDir.path}/sgtp_mls'
-        : '${supportDir.path}/sgtp_accounts/$accountId/sgtp_mls';
-    await Directory(base).create(recursive: true);
-    return '$base/$name.db';
+    final layout = await _accountStoragePaths.resolve(config.accountId ?? '');
+    return layout.mlsDatabasePath;
   }
 
-  Future<Uint8List> _encryptionKey({
-    required SgtpConfig config,
-    required Uint8List privateKey,
-  }) async {
-    final builder = BytesBuilder(copy: false)
-      ..add(utf8.encode('sgtp-openmls-runtime-v1'))
-      ..addByte(0)
-      ..add(utf8.encode(config.serverAddr))
-      ..addByte(0)
-      ..add(utf8.encode(config.accountId ?? ''))
-      ..addByte(0)
-      ..add(config.myPublicKey)
-      ..addByte(0)
-      ..add(privateKey);
-    final digest = await _hashAlgorithm.hash(builder.takeBytes());
-    return Uint8List.fromList(digest.bytes);
-  }
-
-  Future<String> _hashHex(List<int> bytes) async {
-    final digest = await _hashAlgorithm.hash(bytes);
-    return _hex(digest.bytes);
-  }
-
-  String _hex(List<int> bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  Future<Uint8List> _encryptionKey(SgtpConfig config) =>
+      _storageKeyService.loadOrCreateAccountKey(config.accountId ?? '');
 }
 
 class OpenMlsRuntime {

@@ -2,6 +2,9 @@ import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
+import 'package:sgtp_flutter/core/storage/account_storage_paths.dart';
+import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
+import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
 import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
 import 'package:sgtp_flutter/core/network/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/core/network/transport/websocket_sgtp_transport.dart';
@@ -10,6 +13,7 @@ import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/shared_direct_room_gateway.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/openmls_runtime.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/shared_key_package_publisher.dart';
@@ -40,6 +44,7 @@ class AppDependencies {
     required this.sgtpConnectionService,
     required this.directRoomGateway,
     required this.keyPackagePublisher,
+    required this.mediaStorageService,
     required this.sgtpSessionFactory,
     required this.homeUserDirCoordinatorFactory,
   });
@@ -53,6 +58,7 @@ class AppDependencies {
   final SgtpConnectionService sgtpConnectionService;
   final DirectRoomGateway directRoomGateway;
   final KeyPackagePublisher keyPackagePublisher;
+  final MessagingMediaStorageService mediaStorageService;
   final SgtpSessionFactory sgtpSessionFactory;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
@@ -67,7 +73,20 @@ class AppDependencies {
 
 class AppInjector {
   static Future<AppDependencies> build() async {
-    final settingsRepository = SettingsRepository();
+    final accountStoragePaths = createAccountStoragePaths();
+    final storageKeyService = StorageKeyService();
+    final mainDatabaseFactory = MainDatabaseFactory(
+      accountStoragePaths: accountStoragePaths,
+      storageKeyService: storageKeyService,
+    );
+    final mediaStorageService = createMessagingMediaStorageService(
+      accountStoragePaths: accountStoragePaths,
+    );
+    final settingsRepository = SettingsRepository(
+      accountStoragePaths: accountStoragePaths,
+      storageKeyService: storageKeyService,
+      mainDatabaseFactory: mainDatabaseFactory,
+    );
     final appBackupRepository = AppBackupRepository();
 
     UserDirClient? userDirClientFactory(
@@ -109,7 +128,9 @@ class AppInjector {
       appBackupRepository: appBackupRepository,
       userDirClientFactory: userDirClientFactory,
     );
-    const chatStorageGateway = DefaultChatStorageGateway();
+    final chatStorageGateway = DefaultChatStorageGateway(
+      mainDatabaseFactory: mainDatabaseFactory,
+    );
     final sgtpConnectionService = SgtpConnectionService();
     final sharedUserDirClient = UserDirClient(
       rpcProvider: sgtpConnectionService.ensureConnected,
@@ -124,7 +145,10 @@ class AppInjector {
     final directRoomGateway = SharedDirectRoomGateway(
       connectionService: sgtpConnectionService,
     );
-    final openMlsRuntimeFactory = OpenMlsRuntimeFactory();
+    final openMlsRuntimeFactory = OpenMlsRuntimeFactory(
+      accountStoragePaths: accountStoragePaths,
+      storageKeyService: storageKeyService,
+    );
     final keyPackagePublisher = SharedKeyPackagePublisher(
       connectionService: sgtpConnectionService,
       openMlsRuntimeFactory: openMlsRuntimeFactory,
@@ -137,6 +161,7 @@ class AppInjector {
           config,
           connectionService: sgtpConnectionService,
           openMlsRuntimeFactory: openMlsRuntimeFactory,
+          mainDatabaseFactory: mainDatabaseFactory,
         );
 
     final contactsDirectoryService = ContactsDirectoryService(
@@ -154,6 +179,7 @@ class AppInjector {
       sgtpConnectionService: sgtpConnectionService,
       directRoomGateway: directRoomGateway,
       keyPackagePublisher: keyPackagePublisher,
+      mediaStorageService: mediaStorageService,
       sgtpSessionFactory: sgtpSessionFactory,
       homeUserDirCoordinatorFactory: ({
         required onDirectMessageReady,

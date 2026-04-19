@@ -32,40 +32,34 @@ class BackupRestoreSummary {
 class AppBackupRepository {
   static const int _schemaVersion = 1;
   static const String _deviceIdKeyPrefix = 'sgtp_device_id_v1';
+  static const String _storageKeyPrefix = 'sgtp_storage_key_v1';
   static const List<String> _docsRoots = <String>[
     'sgtp',
     'sgtp_accounts',
     'sgtp_chats',
     'sgtp_media_cache',
   ];
+  static const List<String> _supportRoots = <String>[
+    'sgtp_accounts',
+  ];
 
   Future<BackupExportData> createBackup() async {
     final prefs = await SharedPreferences.getInstance();
     final docs = await getApplicationDocumentsDirectory();
+    final support = await getApplicationSupportDirectory();
 
     final prefEntries = <Map<String, dynamic>>[];
     for (final key in prefs.getKeys().toList()..sort()) {
       if (key.startsWith(_deviceIdKeyPrefix)) continue;
+      if (key.startsWith(_storageKeyPrefix)) continue;
       final value = prefs.get(key);
       final encoded = _encodePrefEntry(key, value);
       if (encoded != null) prefEntries.add(encoded);
     }
 
     final files = <Map<String, dynamic>>[];
-    for (final root in _docsRoots) {
-      final dir = Directory('${docs.path}/$root');
-      if (!await dir.exists()) continue;
-      await for (final entity in dir.list(recursive: true, followLinks: false)) {
-        if (entity is! File) continue;
-        final rel = _relativeToDocs(entity.path, docs.path);
-        if (rel == null) continue;
-        final bytes = await entity.readAsBytes();
-        files.add(<String, dynamic>{
-          'path': 'docs/$rel',
-          'bytesB64': base64Encode(bytes),
-        });
-      }
-    }
+    await _collectFilesForRoot(files, docs, _docsRoots, prefix: 'docs');
+    await _collectFilesForRoot(files, support, _supportRoots, prefix: 'support');
 
     final payload = <String, dynamic>{
       'schema': _schemaVersion,
@@ -108,8 +102,15 @@ class AppBackupRepository {
     if (!merge) {
       await prefs.clear();
       final docs = await getApplicationDocumentsDirectory();
+      final support = await getApplicationSupportDirectory();
       for (final root in _docsRoots) {
         final dir = Directory('${docs.path}/$root');
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+      }
+      for (final root in _supportRoots) {
+        final dir = Directory('${support.path}/$root');
         if (await dir.exists()) {
           await dir.delete(recursive: true);
         }
@@ -132,6 +133,7 @@ class AppBackupRepository {
     }
 
     final docs = await getApplicationDocumentsDirectory();
+    final support = await getApplicationSupportDirectory();
     var filesImported = 0;
     var filesSkipped = 0;
     final touchedOrderFiles = <String>{};
@@ -143,18 +145,22 @@ class AppBackupRepository {
       }
       final path = (raw['path'] as String?)?.trim() ?? '';
       final b64 = raw['bytesB64'] as String?;
-      if (!path.startsWith('docs/') || b64 == null || b64.isEmpty) {
+      if ((!path.startsWith('docs/') && !path.startsWith('support/')) ||
+          b64 == null ||
+          b64.isEmpty) {
         filesSkipped++;
         continue;
       }
 
-      final relative = path.substring('docs/'.length);
+      final isSupportPath = path.startsWith('support/');
+      final relative = path.substring(isSupportPath ? 'support/'.length : 'docs/'.length);
       if (relative.isEmpty) {
         filesSkipped++;
         continue;
       }
 
-      final file = File('${docs.path}/$relative');
+      final baseDir = isSupportPath ? support : docs;
+      final file = File('${baseDir.path}/$relative');
       final bytes = Uint8List.fromList(base64Decode(b64));
       await file.parent.create(recursive: true);
 
@@ -232,6 +238,7 @@ class AppBackupRepository {
 
     if (key.isEmpty || type.isEmpty) return false;
     if (key.startsWith(_deviceIdKeyPrefix)) return false;
+    if (key.startsWith(_storageKeyPrefix)) return false;
 
     if (!merge || !prefs.containsKey(key)) {
       return _setPrefByType(prefs, key, type, value);
@@ -294,9 +301,31 @@ class AppBackupRepository {
     }
   }
 
-  String? _relativeToDocs(String filePath, String docsPath) {
+  Future<void> _collectFilesForRoot(
+    List<Map<String, dynamic>> files,
+    Directory baseDir,
+    List<String> roots, {
+    required String prefix,
+  }) async {
+    for (final root in roots) {
+      final dir = Directory('${baseDir.path}/$root');
+      if (!await dir.exists()) continue;
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        final rel = _relativeToBase(entity.path, baseDir.path);
+        if (rel == null) continue;
+        final bytes = await entity.readAsBytes();
+        files.add(<String, dynamic>{
+          'path': '$prefix/$rel',
+          'bytesB64': base64Encode(bytes),
+        });
+      }
+    }
+  }
+
+  String? _relativeToBase(String filePath, String basePath) {
     var full = filePath.replaceAll('\\', '/');
-    var base = docsPath.replaceAll('\\', '/');
+    var base = basePath.replaceAll('\\', '/');
     if (!base.endsWith('/')) base = '$base/';
     if (!full.startsWith(base)) return null;
     return full.substring(base.length);

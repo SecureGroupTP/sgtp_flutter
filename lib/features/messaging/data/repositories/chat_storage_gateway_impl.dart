@@ -2,6 +2,7 @@ import 'package:sgtp_flutter/features/messaging/data/repositories/chat_history_r
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_metadata_repository.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/chat_metadata.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
+import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
 
 class _ChatMetadataStoreAdapter implements ChatMetadataStore {
   final ChatMetadataRepository _repo;
@@ -38,7 +39,11 @@ class _ChatHistoryStoreAdapter implements ChatHistoryStore {
 }
 
 class DefaultChatStorageGateway implements ChatStorageGateway {
-  const DefaultChatStorageGateway();
+  DefaultChatStorageGateway({
+    required MainDatabaseFactory mainDatabaseFactory,
+  }) : _mainDatabaseFactory = mainDatabaseFactory;
+
+  final MainDatabaseFactory _mainDatabaseFactory;
 
   String _serverKey(String raw) {
     return raw
@@ -51,7 +56,10 @@ class DefaultChatStorageGateway implements ChatStorageGateway {
   @override
   ChatMetadataStore metadataForAccount(String accountId) {
     return _ChatMetadataStoreAdapter(
-      ChatMetadataRepository(accountId: accountId),
+      ChatMetadataRepository(
+        accountId: accountId,
+        mainDatabaseFactory: _mainDatabaseFactory,
+      ),
     );
   }
 
@@ -66,6 +74,7 @@ class DefaultChatStorageGateway implements ChatStorageGateway {
         accountId: accountId,
         serverAddress: serverAddress,
         chatUUID: chatUUID,
+        mainDatabaseFactory: _mainDatabaseFactory,
       ),
     );
   }
@@ -82,7 +91,10 @@ class DefaultChatStorageGateway implements ChatStorageGateway {
     if (acc.isEmpty || fromRaw.isEmpty || toRaw.isEmpty) return 0;
     if (_serverKey(fromRaw) == _serverKey(toRaw)) return 0;
 
-    final metadataRepo = ChatMetadataRepository(accountId: acc);
+    final metadataRepo = ChatMetadataRepository(
+      accountId: acc,
+      mainDatabaseFactory: _mainDatabaseFactory,
+    );
     final all = await metadataRepo.loadAllChats();
     final source =
         all.where((m) => _serverKey(m.serverAddress) == _serverKey(fromRaw));
@@ -102,11 +114,13 @@ class DefaultChatStorageGateway implements ChatStorageGateway {
         accountId: acc,
         serverAddress: oldServer,
         chatUUID: chat.uuid,
+        mainDatabaseFactory: _mainDatabaseFactory,
       );
       final newHistory = ChatHistoryRepository(
         accountId: acc,
         serverAddress: toRaw,
         chatUUID: chat.uuid,
+        mainDatabaseFactory: _mainDatabaseFactory,
       );
 
       const page = 250;

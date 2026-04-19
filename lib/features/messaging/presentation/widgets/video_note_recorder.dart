@@ -7,13 +7,14 @@ import 'package:camera/camera.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:sgtp_camera/sgtp_camera.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/video_note_pipeline.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 
 class VideoNoteCaptureResult {
   final XFile xFile;
@@ -33,10 +34,12 @@ bool get _isDesktop =>
 // ---------------------------------------------------------------------------
 
 class VideoNoteRecorderPage extends StatefulWidget {
+  final String accountId;
   final String? preferredCameraName;
 
   const VideoNoteRecorderPage({
     super.key,
+    required this.accountId,
     this.preferredCameraName,
   });
 
@@ -234,9 +237,12 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
     if (_isRecording || _isProcessing) return;
     try {
       if (_isDesktop) {
-        final tmp = await getTemporaryDirectory();
-        _recordingPath =
-            '${tmp.path}/videonote_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        final mediaStorage = context.read<MessagingMediaStorageService>();
+        _recordingPath = await mediaStorage.createRecordingPath(
+          accountId: widget.accountId,
+          prefix: 'videonote',
+          extension: 'mp4',
+        );
         final rc = SgtpCamera.startRecording(outputPath: _recordingPath!);
         if (rc != 0) throw Exception('start_recording failed: $rc');
       } else {
@@ -348,7 +354,15 @@ class _VideoNoteRecorderPageState extends State<VideoNoteRecorderPage>
       return;
     }
 
-    final prepared = await VideoNotePipeline.prepare(sourceFile: recorded);
+    final mediaStorage = context.read<MessagingMediaStorageService>();
+    final prepared = await VideoNotePipeline.prepare(
+      sourceFile: recorded,
+      outputPath: await mediaStorage.createDerivedPath(
+        accountId: widget.accountId,
+        prefix: 'videonote',
+        extension: 'mp4',
+      ),
+    );
     if (prepared.xFile.path != recorded.path) await _deleteFile(recorded.path);
 
     if (!mounted) return;

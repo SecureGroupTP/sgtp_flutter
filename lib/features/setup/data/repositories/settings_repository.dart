@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:sgtp_flutter/core/storage/account_storage_paths.dart';
+import 'package:sgtp_flutter/core/storage/main_database.dart';
+import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
+import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
@@ -13,6 +16,20 @@ import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 /// Repository for persisting user settings between sessions.
 class SettingsRepository {
+  SettingsRepository({
+    AccountStoragePaths? accountStoragePaths,
+    StorageKeyService? storageKeyService,
+    MainDatabaseFactory? mainDatabaseFactory,
+  })  : _accountStoragePaths =
+            accountStoragePaths ?? createAccountStoragePaths(),
+        _storageKeyService = storageKeyService ?? StorageKeyService(),
+        _mainDatabaseFactory = mainDatabaseFactory ??
+            MainDatabaseFactory(
+              accountStoragePaths:
+                  accountStoragePaths ?? createAccountStoragePaths(),
+              storageKeyService: storageKeyService ?? StorageKeyService(),
+            );
+
   static const _savedAddressesKey = 'sgtp_saved_addresses';
   static const _lastAddressKey = 'sgtp_last_address';
   static const _nodesJsonKey =
@@ -43,10 +60,6 @@ class SettingsRepository {
   static const _qrSecondaryColorKey = 'sgtp_qr_secondary_color';
   static const _qrShapeStyleKey = 'sgtp_qr_shape_style';
   static const _qrShowLogoKey = 'sgtp_qr_show_logo';
-  static const _contactProfilesKey = 'sgtp_contact_profiles';
-  static const _friendStatesKey = 'sgtp_friend_states_v1';
-  static const _suppressedContactsKey = 'sgtp_suppressed_contacts_v1';
-  static const _chatScrollKeyPrefix = 'chat_scroll_';
   static const _pingIntervalKey = 'sgtp_ping_interval';
   static const _doubleTapDesktopKey = 'iprefs_doubletap_desktop';
   static const _swipeToReplyKey = 'iprefs_swipe_to_reply';
@@ -58,10 +71,57 @@ class SettingsRepository {
       'sgtp_node_editor_advanced_expanded_v1';
   static const int _maxSaved = 10;
 
+  final AccountStoragePaths _accountStoragePaths;
+  final StorageKeyService _storageKeyService;
+  final MainDatabaseFactory _mainDatabaseFactory;
+
   String _scopedKey(String base, String? nodeId) {
     final id = (nodeId ?? '').trim();
     if (id.isEmpty) return base;
     return '${base}_$id';
+  }
+
+  Future<MainDatabase> _accountDb(String accountId) {
+    final normalized = accountId.trim().isEmpty ? 'default' : accountId.trim();
+    return _mainDatabaseFactory.openForAccount(normalized);
+  }
+
+  Future<String?> _loadAccountStringSetting(String accountId, String key) async {
+    final db = await _accountDb(accountId);
+    return db.loadSettingString(key);
+  }
+
+  Future<void> _saveAccountStringSetting(
+    String accountId,
+    String key,
+    String value,
+  ) async {
+    final db = await _accountDb(accountId);
+    await db.saveSettingString(key, value);
+  }
+
+  Future<Uint8List?> _loadAccountBytesSetting(String accountId, String key) async {
+    final db = await _accountDb(accountId);
+    return db.loadSettingBytes(key);
+  }
+
+  Future<void> _saveAccountBytesSetting(
+    String accountId,
+    String key,
+    Uint8List value,
+  ) async {
+    final db = await _accountDb(accountId);
+    await db.saveSettingBytes(key, value);
+  }
+
+  Future<void> _deleteAccountSetting(String accountId, String key) async {
+    final db = await _accountDb(accountId);
+    await db.deleteSetting(key);
+  }
+
+  Future<void> deleteAccountStorage(String accountId) async {
+    await _mainDatabaseFactory.deleteAccount(accountId);
+    await _storageKeyService.deleteAccountKey(accountId);
   }
 
   // ── Shared sgtp directory ──────────────────────────────────────────────────
@@ -83,7 +143,18 @@ class SettingsRepository {
   /// - documents folders used for SGTP files/metadata
   Future<void> clearAllLocalData() async {
     final p = await SharedPreferences.getInstance();
+    final accountIds = ((p.getStringList(_accountIdsKey) ?? const <String>[])
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty))
+        .toSet()
+        .toList(growable: false);
     await p.clear();
+    for (final accountId in accountIds) {
+      await deleteAccountStorage(accountId);
+    }
+    await _mainDatabaseFactory.clearAll();
+    await _accountStoragePaths.clearAll();
+    await _storageKeyService.clearAll();
 
     final docsDir = await getApplicationDocumentsDirectory();
     final folders = <Directory>[
@@ -541,12 +612,12 @@ class SettingsRepository {
     final p = await SharedPreferences.getInstance();
     await p.setString(_scopedKey(_privKeyB64Key, nodeId), base64.encode(bytes));
     await p.setString(_scopedKey(_privKeyNameKey, nodeId), name);
-    // Also write to sgtp dir (account-scoped filename).
+    // Also write to the account root for easier manual inspection/recovery.
     try {
-      final dir = await getSgtpDirectory();
-      final safe = nodeId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]+'), '');
-      final fileName = safe.isEmpty ? 'identity' : 'identity_$safe';
-      final file = File('${dir.path}/$fileName');
+      final layout = await _accountStoragePaths.resolve(nodeId);
+      final root = layout.accountRootPath;
+      if (root == null) return;
+      final file = File('$root/identity');
       await file.writeAsBytes(bytes, flush: true);
     } catch (_) {}
   }
@@ -568,24 +639,31 @@ class SettingsRepository {
     final p = await SharedPreferences.getInstance();
     await p.remove(_scopedKey(_privKeyB64Key, nodeId));
     await p.remove(_scopedKey(_privKeyNameKey, nodeId));
+    try {
+      final layout = await _accountStoragePaths.resolve(nodeId);
+      final root = layout.accountRootPath;
+      if (root == null) return;
+      final file = File('$root/identity');
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
   }
 
   Future<String?> loadDeviceIdForNode(String accountId) async {
-    final p = await SharedPreferences.getInstance();
-    final value = p.getString(_scopedKey(_deviceIdKey, accountId))?.trim();
+    final value = (await _loadAccountStringSetting(accountId, _deviceIdKey))
+        ?.trim();
     if (value == null || value.isEmpty) return null;
     return value;
   }
 
   Future<void> saveDeviceIdForNode(String accountId, String deviceId) async {
-    final p = await SharedPreferences.getInstance();
     final value = deviceId.trim();
-    final key = _scopedKey(_deviceIdKey, accountId);
     if (value.isEmpty) {
-      await p.remove(key);
+      await _deleteAccountSetting(accountId, _deviceIdKey);
       return;
     }
-    await p.setString(key, value);
+    await _saveAccountStringSetting(accountId, _deviceIdKey, value);
   }
 
   Future<String> loadOrCreateDeviceIdForNode(String accountId) async {
@@ -597,14 +675,12 @@ class SettingsRepository {
   }
 
   Future<void> clearDeviceIdForNode(String accountId) async {
-    final p = await SharedPreferences.getInstance();
-    await p.remove(_scopedKey(_deviceIdKey, accountId));
+    await _deleteAccountSetting(accountId, _deviceIdKey);
   }
 
   // ── Contact entries ───────────────────────────────────────────────────────
 
   /// Contact entry: public key bytes plus editable display name.
-  /// Stored as JSON list: [{b64, name}]
   Future<void> saveContactEntries(List<ContactEntry> entries) async {
     final p = await SharedPreferences.getInstance();
     final jsonList = entries
@@ -633,30 +709,33 @@ class SettingsRepository {
 
   Future<void> saveContactEntriesForNode(
       String nodeId, List<ContactEntry> entries) async {
-    final p = await SharedPreferences.getInstance();
-    final jsonList = entries
-        .map(
-            (e) => json.encode({'b64': base64.encode(e.bytes), 'name': e.name}))
-        .toList();
-    await p.setStringList(_scopedKey(_contactEntriesJsonKey, nodeId), jsonList);
+    final db = await _accountDb(nodeId);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.replaceContactEntries(
+      entries
+          .map(
+            (entry) => MainDatabaseContactEntryRecord(
+              peerPubkeyHex: entry.hexKey,
+              peerPubkeyBytes: Uint8List.fromList(entry.bytes),
+              displayName: entry.name,
+              updatedAtMs: now,
+            ),
+          )
+          .toList(growable: false),
+    );
   }
 
-  Future<List<ContactEntry>> loadContactEntriesForNode(
-      String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final jsonList = p.getStringList(_scopedKey(_contactEntriesJsonKey, nodeId));
-    if (jsonList == null) return [];
-    final result = <ContactEntry>[];
-    for (final s in jsonList) {
-      try {
-        final m = json.decode(s) as Map<String, dynamic>;
-        result.add(ContactEntry(
-          bytes: base64.decode(m['b64'] as String),
-          name: m['name'] as String? ?? 'unknown',
-        ));
-      } catch (_) {}
-    }
-    return result;
+  Future<List<ContactEntry>> loadContactEntriesForNode(String nodeId) async {
+    final db = await _accountDb(nodeId);
+    final rows = await db.loadContactEntries();
+    return rows
+        .map(
+          (row) => ContactEntry(
+            bytes: Uint8List.fromList(row.peerPubkeyBytes),
+            name: row.displayName,
+          ),
+        )
+        .toList(growable: false);
   }
 
   /// Backwards-compat helpers using old schema
@@ -683,8 +762,8 @@ class SettingsRepository {
   }
 
   Future<void> clearContactEntriesForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    await p.remove(_scopedKey(_contactEntriesJsonKey, nodeId));
+    final db = await _accountDb(nodeId);
+    await db.replaceContactEntries(const []);
   }
 
   // ── User avatar ───────────────────────────────────────────────────────────
@@ -711,61 +790,45 @@ class SettingsRepository {
   }
 
   Future<void> saveUserAvatarForNode(String nodeId, Uint8List bytes) async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString(
-        _scopedKey(_userAvatarB64Key, nodeId), base64.encode(bytes));
+    await _saveAccountBytesSetting(nodeId, _userAvatarB64Key, bytes);
   }
 
   Future<Uint8List?> loadUserAvatarForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final b64 = p.getString(_scopedKey(_userAvatarB64Key, nodeId));
-    if (b64 == null) return null;
-    try {
-      return base64.decode(b64);
-    } catch (_) {
-      return null;
-    }
+    return _loadAccountBytesSetting(nodeId, _userAvatarB64Key);
   }
 
   Future<void> clearUserAvatarForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    await p.remove(_scopedKey(_userAvatarB64Key, nodeId));
+    await _deleteAccountSetting(nodeId, _userAvatarB64Key);
   }
 
   // ── User nickname ────────────────────────────────────────────────────────
 
   Future<String> loadUserNicknameForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    return p.getString(_scopedKey(_userNicknameKey, nodeId)) ?? '';
+    return await _loadAccountStringSetting(nodeId, _userNicknameKey) ?? '';
   }
 
   Future<void> saveUserNicknameForNode(String nodeId, String nickname) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_userNicknameKey, nodeId);
     final value = nickname.trim();
     if (value.isEmpty) {
-      await p.remove(key);
+      await _deleteAccountSetting(nodeId, _userNicknameKey);
       return;
     }
-    await p.setString(key, value);
+    await _saveAccountStringSetting(nodeId, _userNicknameKey, value);
   }
 
   // ── User username ────────────────────────────────────────────────────────
 
   Future<String> loadUserUsernameForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    return p.getString(_scopedKey(_userUsernameKey, nodeId)) ?? '';
+    return await _loadAccountStringSetting(nodeId, _userUsernameKey) ?? '';
   }
 
   Future<void> saveUserUsernameForNode(String nodeId, String username) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_userUsernameKey, nodeId);
     final value = username.trim();
     if (value.isEmpty) {
-      await p.remove(key);
+      await _deleteAccountSetting(nodeId, _userUsernameKey);
       return;
     }
-    await p.setString(key, value);
+    await _saveAccountStringSetting(nodeId, _userUsernameKey, value);
   }
 
   // ── Media transfer ───────────────────────────────────────────────────────
@@ -788,18 +851,29 @@ class SettingsRepository {
     await p.setInt(_mediaChunkSizeKey, settings.mediaChunkSizeBytes);
   }
 
-  Future<double?> loadChatScrollPosition(String roomUUID) async {
-    final key = '$_chatScrollKeyPrefix${roomUUID.trim()}';
-    if (roomUUID.trim().isEmpty) return null;
-    final p = await SharedPreferences.getInstance();
-    return p.getDouble(key);
+  Future<double?> loadChatScrollPosition(String accountId, String roomUUID) async {
+    final trimmed = roomUUID.trim();
+    if (trimmed.isEmpty) return null;
+    final db = await _accountDb(accountId);
+    final state = await db.loadChatUiState(trimmed);
+    return state?.scrollOffset;
   }
 
-  Future<void> saveChatScrollPosition(String roomUUID, double offset) async {
+  Future<void> saveChatScrollPosition(
+    String accountId,
+    String roomUUID,
+    double offset,
+  ) async {
     final trimmed = roomUUID.trim();
     if (trimmed.isEmpty) return;
-    final p = await SharedPreferences.getInstance();
-    await p.setDouble('$_chatScrollKeyPrefix$trimmed', offset);
+    final db = await _accountDb(accountId);
+    await db.saveChatUiState(
+      MainDatabaseChatUiStateRecord(
+        roomUuid: trimmed,
+        scrollOffset: offset,
+        updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
   }
 
   Future<UiInteractionSettings> loadUiInteractionSettings() async {
@@ -827,42 +901,40 @@ class SettingsRepository {
   // ── Capture devices ──────────────────────────────────────────────────────
 
   Future<String?> loadPreferredMicrophoneForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final raw = p.getString(_scopedKey(_preferredMicIdKey, nodeId))?.trim();
+    final raw =
+        (await _loadAccountStringSetting(nodeId, _preferredMicIdKey))?.trim();
     if (raw == null || raw.isEmpty) return null;
     return raw;
   }
 
   Future<void> savePreferredMicrophoneForNode(
       String nodeId, String? microphoneId) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_preferredMicIdKey, nodeId);
     final value = (microphoneId ?? '').trim();
     if (value.isEmpty) {
-      await p.remove(key);
+      await _deleteAccountSetting(nodeId, _preferredMicIdKey);
       return;
     }
-    await p.setString(key, value);
+    await _saveAccountStringSetting(nodeId, _preferredMicIdKey, value);
   }
 
   Future<String?> loadPreferredCameraForNode(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final raw =
-        p.getString(_scopedKey(_preferredCameraNameKey, nodeId))?.trim();
+    final raw = (await _loadAccountStringSetting(
+      nodeId,
+      _preferredCameraNameKey,
+    ))
+        ?.trim();
     if (raw == null || raw.isEmpty) return null;
     return raw;
   }
 
   Future<void> savePreferredCameraForNode(
       String nodeId, String? cameraName) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_preferredCameraNameKey, nodeId);
     final value = (cameraName ?? '').trim();
     if (value.isEmpty) {
-      await p.remove(key);
+      await _deleteAccountSetting(nodeId, _preferredCameraNameKey);
       return;
     }
-    await p.setString(key, value);
+    await _saveAccountStringSetting(nodeId, _preferredCameraNameKey, value);
   }
 
   // ── QR style ─────────────────────────────────────────────────────────────
@@ -897,120 +969,54 @@ class SettingsRepository {
 
   // ── Contact profiles ──────────────────────────────────────────────────────
 
-  Future<Directory> _contactAvatarDir(String nodeId) async {
-    final base = await getSgtpDirectory();
-    final dir = Directory('${base.path}/contact_avatars/$nodeId');
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir;
-  }
-
   Future<void> saveContactProfile(String nodeId, ContactProfile profile) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_contactProfilesKey, nodeId);
-    final raw = p.getString(key);
-    final map = raw != null
-        ? (json.decode(raw) as Map<String, dynamic>)
-        : <String, dynamic>{};
-    final entry = <String, dynamic>{
-      'username': profile.username,
-      'fullname': profile.fullname,
-      'sha256': profile.avatarSha256Hex,
-      'updatedAt': profile.updatedAt,
-    };
-    if (kIsWeb &&
-        profile.avatarBytes != null &&
-        profile.avatarBytes!.isNotEmpty) {
-      entry['avatarB64'] = base64Encode(profile.avatarBytes!);
-    }
-    map[profile.pubkeyHex] = entry;
-    await p.setString(key, json.encode(map));
-    if (!kIsWeb &&
-        profile.avatarBytes != null &&
-        profile.avatarBytes!.isNotEmpty) {
-      try {
-        final dir = await _contactAvatarDir(nodeId);
-        final file = File('${dir.path}/${profile.pubkeyHex}.bin');
-        await file.writeAsBytes(profile.avatarBytes!);
-      } catch (_) {}
-    }
+    final db = await _accountDb(nodeId);
+    await db.saveContactProfile(
+      MainDatabaseContactProfileRecord(
+        peerPubkeyHex: profile.pubkeyHex,
+        username: profile.username,
+        fullname: profile.fullname,
+        avatarBytes: profile.avatarBytes == null
+            ? null
+            : Uint8List.fromList(profile.avatarBytes!),
+        avatarSha256Hex: profile.avatarSha256Hex,
+        updatedAtMs: profile.updatedAt,
+      ),
+    );
   }
 
   Future<ContactProfile?> loadContactProfile(
       String nodeId, String pubkeyHex) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_contactProfilesKey, nodeId);
-    final raw = p.getString(key);
-    if (raw == null) return null;
-    final map = json.decode(raw) as Map<String, dynamic>;
-    final entry = map[pubkeyHex] as Map<String, dynamic>?;
-    if (entry == null) return null;
-
-    Uint8List? avatar;
-    if (kIsWeb) {
-      final b64 = entry['avatarB64'] as String?;
-      if (b64 != null && b64.isNotEmpty) {
-        try {
-          avatar = base64Decode(b64);
-        } catch (_) {}
-      }
-    } else {
-      try {
-        final dir = await _contactAvatarDir(nodeId);
-        final file = File('${dir.path}/$pubkeyHex.bin');
-        if (await file.exists()) avatar = await file.readAsBytes();
-      } catch (_) {}
-    }
-
+    final db = await _accountDb(nodeId);
+    final row = await db.loadContactProfile(pubkeyHex);
+    if (row == null) return null;
     return ContactProfile(
-      pubkeyHex: pubkeyHex,
-      username: entry['username'] as String?,
-      fullname: entry['fullname'] as String?,
-      avatarBytes: avatar,
-      avatarSha256Hex: entry['sha256'] as String? ?? '',
-      updatedAt: entry['updatedAt'] as int? ?? 0,
+      pubkeyHex: row.peerPubkeyHex,
+      username: row.username,
+      fullname: row.fullname,
+      avatarBytes: row.avatarBytes == null
+          ? null
+          : Uint8List.fromList(row.avatarBytes!),
+      avatarSha256Hex: row.avatarSha256Hex,
+      updatedAt: row.updatedAtMs,
     );
   }
 
   Future<Map<String, ContactProfile>> loadAllContactProfiles(
       String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_contactProfilesKey, nodeId);
-    final raw = p.getString(key);
-    if (raw == null) return {};
-    final map = json.decode(raw) as Map<String, dynamic>;
+    final db = await _accountDb(nodeId);
+    final rows = await db.loadAllContactProfiles();
     final result = <String, ContactProfile>{};
-    Directory? dir;
-    if (!kIsWeb) {
-      try {
-        dir = await _contactAvatarDir(nodeId);
-      } catch (_) {}
-    }
-    for (final kv in map.entries) {
-      final pubkeyHex = kv.key;
-      final data = kv.value as Map<String, dynamic>;
-      Uint8List? avatar;
-      if (kIsWeb) {
-        final b64 = data['avatarB64'] as String?;
-        if (b64 != null && b64.isNotEmpty) {
-          try {
-            avatar = base64Decode(b64);
-          } catch (_) {}
-        }
-      } else {
-        try {
-          final base = dir;
-          if (base == null) throw Exception('No avatar directory');
-          final file = File('${base.path}/$pubkeyHex.bin');
-          if (await file.exists()) avatar = await file.readAsBytes();
-        } catch (_) {}
-      }
-      result[pubkeyHex] = ContactProfile(
-        pubkeyHex: pubkeyHex,
-        username: data['username'] as String?,
-        fullname: data['fullname'] as String?,
-        avatarBytes: avatar,
-        avatarSha256Hex: data['sha256'] as String? ?? '',
-        updatedAt: data['updatedAt'] as int? ?? 0,
+    for (final row in rows) {
+      result[row.peerPubkeyHex] = ContactProfile(
+        pubkeyHex: row.peerPubkeyHex,
+        username: row.username,
+        fullname: row.fullname,
+        avatarBytes: row.avatarBytes == null
+            ? null
+            : Uint8List.fromList(row.avatarBytes!),
+        avatarSha256Hex: row.avatarSha256Hex,
+        updatedAt: row.updatedAtMs,
       );
     }
     return result;
@@ -1019,67 +1025,51 @@ class SettingsRepository {
   // ── Friend states ─────────────────────────────────────────────────────────
 
   Future<Map<String, FriendStateRecord>> loadFriendStates(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_friendStatesKey, nodeId);
-    final raw = p.getString(key);
-    if (raw == null || raw.isEmpty) return {};
-    try {
-      final decoded = json.decode(raw) as Map<String, dynamic>;
-      final out = <String, FriendStateRecord>{};
-      for (final entry in decoded.entries) {
-        final peer = entry.key.toLowerCase();
-        final m = entry.value as Map<String, dynamic>;
-        out[peer] = FriendStateRecord(
-          peerPubkeyHex: peer,
-          status: (m['status'] as String? ?? FriendStatus.none.name),
-          roomUUIDHex: (m['roomUUIDHex'] as String?)?.trim(),
-          updatedAt: (m['updatedAt'] as int?) ?? 0,
-        );
-      }
-      return out;
-    } catch (_) {
-      return {};
-    }
-  }
-
-  Future<void> saveFriendStates(
-      String nodeId, Map<String, FriendStateRecord> states) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_friendStatesKey, nodeId);
-    final encoded = <String, dynamic>{};
-    for (final e in states.entries) {
-      final v = e.value;
-      encoded[e.key.toLowerCase()] = {
-        'status': v.status,
-        'roomUUIDHex': v.roomUUIDHex,
-        'updatedAt': v.updatedAt,
-      };
-    }
-    await p.setString(key, json.encode(encoded));
-  }
-
-  Future<Set<String>> loadSuppressedContacts(String nodeId) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_suppressedContactsKey, nodeId);
-    final raw = p.getStringList(key) ?? const [];
-    final out = <String>{};
-    for (final item in raw) {
-      final t = item.trim().toLowerCase();
-      if (t.length == 64) out.add(t);
+    final db = await _accountDb(nodeId);
+    final rows = await db.loadFriendStates();
+    final out = <String, FriendStateRecord>{};
+    for (final row in rows) {
+      final peer = row.peerPubkeyHex.toLowerCase();
+      out[peer] = FriendStateRecord(
+        peerPubkeyHex: peer,
+        status: row.status.isEmpty ? FriendStatus.none.name : row.status,
+        roomUUIDHex: row.roomUuidHex,
+        updatedAt: row.updatedAtMs,
+      );
     }
     return out;
   }
 
+  Future<void> saveFriendStates(
+      String nodeId, Map<String, FriendStateRecord> states) async {
+    final db = await _accountDb(nodeId);
+    await db.replaceFriendStates(
+      states.entries
+          .map(
+            (entry) => MainDatabaseFriendStateRecord(
+              peerPubkeyHex: entry.key.toLowerCase(),
+              status: entry.value.status,
+              roomUuidHex: entry.value.roomUUIDHex,
+              updatedAtMs: entry.value.updatedAt,
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  Future<Set<String>> loadSuppressedContacts(String nodeId) async {
+    final db = await _accountDb(nodeId);
+    return db.loadSuppressedContacts();
+  }
+
   Future<void> saveSuppressedContacts(
       String nodeId, Set<String> pubkeysHex) async {
-    final p = await SharedPreferences.getInstance();
-    final key = _scopedKey(_suppressedContactsKey, nodeId);
-    final list = pubkeysHex
+    final set = pubkeysHex
         .map((e) => e.trim().toLowerCase())
         .where((e) => e.length == 64)
-        .toList()
-      ..sort();
-    await p.setStringList(key, list);
+        .toSet();
+    final db = await _accountDb(nodeId);
+    await db.replaceSuppressedContacts(set);
   }
 }
 
