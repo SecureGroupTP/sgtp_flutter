@@ -9,6 +9,7 @@ import 'package:sgtp_camera/sgtp_camera.dart';
 import 'package:image/image.dart' as img;
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
+import 'package:sgtp_flutter/core/platform/android_keyboard_content_loader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -894,6 +895,17 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _ => 'video/mp4',
       };
 
+  String _imageExtensionForMime(String mime) => switch (mime.toLowerCase()) {
+        'image/jpeg' => 'jpg',
+        'image/jpg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'image/gif' => 'gif',
+        'image/bmp' => 'bmp',
+        'image/tiff' => 'tiff',
+        _ => 'png',
+      };
+
   Future<void> _pasteImageFromClipboard(
     BuildContext context, {
     Uint8List? preloadedBytes,
@@ -981,6 +993,50 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       _showSnack(this.context, 'Failed to paste image: $e');
+    }
+  }
+
+  Future<void> _handleKeyboardInsertedContent(
+    KeyboardInsertedContent content,
+  ) async {
+    if (!content.mimeType.toLowerCase().startsWith('image/')) {
+      return;
+    }
+    try {
+      final bytes = content.hasData
+          ? content.data
+          : await AndroidKeyboardContentLoader.loadBytes(content.uri);
+      if (!mounted || bytes == null || bytes.isEmpty) {
+        return;
+      }
+
+      final mediaSettings = await _settingsRepo.loadMediaTransferSettings();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final name = 'keyboard_$now.${_imageExtensionForMime(content.mimeType)}';
+      final prepared = mediaSettings.shouldCompressPhotos
+          ? await _prepareImageForUpload(
+              bytes: bytes,
+              name: name,
+              mime: content.mimeType,
+            )
+          : (
+              bytes: bytes,
+              name: name,
+              mime: content.mimeType,
+            );
+
+      if (!mounted) return;
+      this.context.read<ChatBloc>().add(
+            ChatSendImage(
+              bytes: prepared.bytes,
+              name: prepared.name,
+              mime: prepared.mime,
+            ),
+          );
+      _scrollToBottom();
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack(this.context, 'Failed to insert image: $e');
     }
   }
 
@@ -1802,6 +1858,12 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
                         controller: _messageCtrl,
                         focusNode: _focusNode,
                         enabled: canSend && !_isRecording,
+                        contentInsertionConfiguration:
+                            ContentInsertionConfiguration(
+                          onContentInserted: (content) {
+                            unawaited(_handleKeyboardInsertedContent(content));
+                          },
+                        ),
                         decoration: InputDecoration(
                           hintText: _isRecording
                               ? 'Recording…'

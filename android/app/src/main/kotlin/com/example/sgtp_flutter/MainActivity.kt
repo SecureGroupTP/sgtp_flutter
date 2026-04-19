@@ -1,5 +1,6 @@
 package com.example.sgtp_flutter
 
+import android.net.Uri
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -15,11 +16,12 @@ import java.nio.ByteBuffer
 
 class MainActivity : FlutterActivity() {
 
-    private val channel = "com.example.sgtp_flutter/video_merger"
+    private val videoMergerChannel = "com.example.sgtp_flutter/video_merger"
+    private val keyboardContentChannel = "com.example.sgtp_flutter/keyboard_content"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, videoMergerChannel)
             .setMethodCallHandler { call, result ->
                 if (call.method == "mergeVideoAudio") {
                     val videoPath = call.argument<String>("videoPath") ?: run {
@@ -45,6 +47,34 @@ class MainActivity : FlutterActivity() {
                     result.notImplemented()
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, keyboardContentChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "readContentUriBytes") {
+                    val rawUri = call.argument<String>("uri") ?: run {
+                        result.error("INVALID_ARGS", "uri missing", null)
+                        return@setMethodCallHandler
+                    }
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val bytes = readContentUriBytes(rawUri)
+                            withContext(Dispatchers.Main) { result.success(bytes) }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                result.error("READ_CONTENT_FAILED", e.message, null)
+                            }
+                        }
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+    }
+
+    private fun readContentUriBytes(rawUri: String): ByteArray {
+        val uri = Uri.parse(rawUri)
+        val stream = contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("Unable to open content URI: $rawUri")
+        stream.use { input -> return input.readBytes() }
     }
 
     private fun mergeVideoAudio(videoPath: String, audioPath: String, outputPath: String) {
