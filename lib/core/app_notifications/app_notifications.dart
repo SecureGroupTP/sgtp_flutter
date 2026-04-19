@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:window_manager/window_manager.dart';
 
 class AppNotificationHandle {
   AppNotificationHandle._(this.id, this._owner);
@@ -95,9 +94,7 @@ class AppNotifications {
 
   Future<AppNotificationHandle> show(AppNotificationRequest request) async {
     final id = _nextId();
-    if (!_supportsCustomNotifications ||
-        !_hasVisiblePayload(request) ||
-        !await _shouldShowWindowsNotification()) {
+    if (!_supportsCustomNotifications || !_hasVisiblePayload(request)) {
       return AppNotificationHandle._(id, this);
     }
     await _channel.invokeMethod<void>('showNotification', <String, Object?>{
@@ -128,14 +125,6 @@ class AppNotifications {
 
   bool get _supportsCustomNotifications =>
       !kIsWeb && Platform.isWindows;
-
-  Future<bool> _shouldShowWindowsNotification() async {
-    try {
-      return await windowManager.isMinimized();
-    } catch (_) {
-      return false;
-    }
-  }
 
   bool _hasVisiblePayload(AppNotificationRequest request) {
     return (request.title != null && request.title!.isNotEmpty) ||

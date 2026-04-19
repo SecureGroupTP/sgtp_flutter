@@ -131,6 +131,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       if (has != _hasText) setState(() => _hasText = has);
     });
     NotificationService.init();
+    NotificationService.setSuppressedRoomId(_chatBloc?.state.roomUUID);
     NotificationService.onMarkAsRead = (messageId) {
       if (!_sentReadReceipts.contains(messageId)) {
         _sentReadReceipts.add(messageId);
@@ -147,6 +148,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _saveScrollPosition();
     _chatBloc?.add(const ChatSetVisibility(false));
     WidgetsBinding.instance.removeObserver(this);
+    NotificationService.setSuppressedRoomId(null);
     NotificationService.onMarkAsRead = null;
     _messageCtrl.dispose();
     _scrollCtrl.removeListener(_onScroll);
@@ -162,6 +164,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         setState(() => _isPageVisible = true);
         _chatBloc?.add(const ChatSetVisibility(true));
+        NotificationService.setSuppressedRoomId(_chatBloc?.state.roomUUID);
         unawaited(_loadCaptureCapabilities());
         NotificationService.cancelAll();
         NotificationService.flushPendingMarkAsRead();
@@ -212,6 +215,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _wentToBackground ??= DateTime.now();
         setState(() => _isPageVisible = false);
         _chatBloc?.add(const ChatSetVisibility(false));
+        NotificationService.setSuppressedRoomId(null);
         break;
 
       case AppLifecycleState.detached:
@@ -1275,6 +1279,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             if (roomUUID != _lastScrollRoomUUID) {
               _lastScrollRoomUUID = roomUUID;
             }
+            NotificationService.setSuppressedRoomId(
+              _isPageVisible ? roomUUID : null,
+            );
             _tryRestoreScrollPosition(roomUUID);
           } else if (newCount > prevCount) {
             final newest = state.messages.last;
@@ -1290,6 +1297,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               }
             }
           }
+          NotificationService.setSuppressedRoomId(
+            _isPageVisible ? state.roomUUID : null,
+          );
           _lastMessageCount = newCount;
         }
         if (state.status == ChatStatus.ready && !_infoShown) {
@@ -1324,12 +1334,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // and as attachment thumbnail on iOS/macOS.
             final avatar =
                 state.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
-            NotificationService.showMessage(
-              sender: senderLabel,
-              body: body,
-              messageId: msg.id,
-              avatarBytes: avatar,
-            );
+            // Notifications are dispatched globally from RoomsBloc.
           }
         }
         // Don't auto-pop — user can reconnect from the chat page

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +13,9 @@ class NotificationService {
 
   static final _plugin = FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
+  static bool _lifecycleAttached = false;
+  static bool _appIsInteractive = true;
+  static String? _suppressedRoomId;
 
   /// Called when the user taps "Mark as Read" in a notification.
   static void Function(String messageId)? onMarkAsRead;
@@ -42,6 +46,7 @@ class NotificationService {
   // ── Init ─────────────────────────────────────────────────────────────────
 
   static Future<void> init() async {
+    _ensureLifecycleObserver();
     if (!_supported || _initialized) return;
 
     const androidSettings =
@@ -103,8 +108,12 @@ class NotificationService {
     required String sender,
     required String body,
     required String messageId,
+    String? roomId,
     Uint8List? avatarBytes,
   }) async {
+    if (_shouldSuppressForRoom(roomId)) {
+      return;
+    }
     if (!kIsWeb && Platform.isWindows) {
       final resolvedAvatar = await NotificationAvatarImage.resolve(
         avatarBytes: avatarBytes,
@@ -250,7 +259,52 @@ class NotificationService {
     await file.writeAsBytes(bytes, flush: true);
     return file.path;
   }
+
+  static void setSuppressedRoomId(String? roomId) {
+    _ensureLifecycleObserver();
+    final normalized = roomId?.trim();
+    _suppressedRoomId =
+        normalized == null || normalized.isEmpty ? null : normalized;
+  }
+
+  static bool _shouldSuppressForRoom(String? roomId) {
+    if (kIsWeb || !_appIsInteractive) {
+      return false;
+    }
+    final normalized = roomId?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return false;
+    }
+    return normalized == _suppressedRoomId;
+  }
+
+  static void _ensureLifecycleObserver() {
+    if (kIsWeb || _lifecycleAttached) {
+      return;
+    }
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+    _lifecycleAttached = true;
+  }
 }
+
+class _NotificationLifecycleObserver with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        NotificationService._appIsInteractive = true;
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        NotificationService._appIsInteractive = false;
+        break;
+    }
+  }
+}
+
+final _lifecycleObserver = _NotificationLifecycleObserver();
 
 // ── Background isolate handler ────────────────────────────────────────────────
 // Called when a notification action is tapped while the app is KILLED.

@@ -23,11 +23,17 @@ constexpr wchar_t kNotificationWindowTitle[] = L"SGTP App Notifications";
 constexpr int kWindowWidth = 360;
 constexpr int kCardHeight = 88;
 constexpr int kCardSpacing = 12;
+constexpr int kStackStep = kCardHeight + kCardSpacing;
+constexpr int kRolloverStackStep = 68;
+constexpr int kMaxVisibleNotifications = 3;
 constexpr int kPadding = 12;
+constexpr int kMaxStackHeight =
+    (kPadding * 2) + (kCardHeight * kMaxVisibleNotifications) +
+    (kCardSpacing * (kMaxVisibleNotifications - 1));
 constexpr int kImageSize = 48;
 constexpr int kCornerRadius = 18;
 constexpr int kFadeInMs = 180;
-constexpr int kFadeOutMs = 220;
+constexpr int kFadeOutMs = 1000;
 constexpr double kPositionLerp = 0.24;
 constexpr UINT_PTR kAnimationTimerId = 1001;
 constexpr UINT kAnimationTimerIntervalMs = 16;
@@ -282,10 +288,25 @@ void AppNotificationManager::ShowNotification(
           notifications_.begin(), notifications_.end(),
           [&](const auto& existing) { return existing->id == item->id; }),
       notifications_.end());
-  notifications_.insert(notifications_.begin(), std::move(item));
+  pending_notifications_.erase(
+      std::remove_if(
+          pending_notifications_.begin(), pending_notifications_.end(),
+          [&](const auto& existing) { return existing->id == item->id; }),
+      pending_notifications_.end());
+
+  if (notifications_.size() >= kMaxVisibleNotifications) {
+    if (!notifications_.back()->dismissing) {
+      notifications_.back()->dismissing = true;
+      notifications_.back()->dismiss_started_at_ms = GetTickCount64();
+    }
+    pending_notifications_.push_back(std::move(item));
+  } else {
+    notifications_.insert(notifications_.begin(), std::move(item));
+  }
 
   const auto now = GetTickCount64();
-  for (size_t index = 3; index < notifications_.size(); index += 1) {
+  for (size_t index = kMaxVisibleNotifications; index < notifications_.size();
+       index += 1) {
     if (!notifications_[index]->dismissing) {
       notifications_[index]->dismissing = true;
       notifications_[index]->dismiss_started_at_ms = now;
@@ -301,6 +322,11 @@ void AppNotificationManager::DismissNotification(const std::string& id) {
   if (id.empty()) {
     return;
   }
+  pending_notifications_.erase(
+      std::remove_if(
+          pending_notifications_.begin(), pending_notifications_.end(),
+          [&](const auto& item) { return item->id == id; }),
+      pending_notifications_.end());
   const auto now = GetTickCount64();
   for (auto& item : notifications_) {
     if (item->id == id && !item->dismissing) {
@@ -314,6 +340,7 @@ void AppNotificationManager::DismissNotification(const std::string& id) {
 }
 
 void AppNotificationManager::DismissAllNotifications() {
+  pending_notifications_.clear();
   const auto now = GetTickCount64();
   for (auto& item : notifications_) {
     if (!item->dismissing) {
@@ -335,6 +362,15 @@ void AppNotificationManager::Tick() {
   }
 
   const auto now = GetTickCount64();
+  const auto visible_count = static_cast<int>(notifications_.size());
+  const auto base_slot =
+      std::max(0, kMaxVisibleNotifications - visible_count);
+  const bool rollover_mode =
+      !pending_notifications_.empty() && visible_count == kMaxVisibleNotifications &&
+      notifications_.back()->dismissing;
+  const auto layout_step = rollover_mode ? kRolloverStackStep : kStackStep;
+  const auto bottom_anchor =
+      static_cast<double>(kPadding + (kMaxVisibleNotifications - 1) * kStackStep);
   for (size_t index = 0; index < notifications_.size(); index += 1) {
     auto& item = notifications_[index];
     if (!item->dismissing &&
@@ -343,14 +379,20 @@ void AppNotificationManager::Tick() {
       item->dismiss_started_at_ms = now;
     }
 
-    const auto target_y =
-        static_cast<double>(kPadding + index * (kCardHeight + kCardSpacing));
+    const auto target_y = rollover_mode
+                              ? (bottom_anchor -
+                                 static_cast<double>(
+                                     (visible_count - 1 - static_cast<int>(index)) *
+                                     layout_step))
+                              : static_cast<double>(
+                                    kPadding +
+                                    (base_slot + static_cast<int>(index)) *
+                                        kStackStep);
     if (item->dismissing) {
       const auto progress = std::clamp(
           static_cast<double>(now - item->dismiss_started_at_ms) / kFadeOutMs,
           0.0, 1.0);
       item->opacity = 1.0 - progress;
-      item->current_y += 1.2;
     } else {
       const auto progress = std::clamp(
           static_cast<double>(now - item->created_at_ms) / kFadeInMs, 0.0,
@@ -415,7 +457,9 @@ void AppNotificationManager::RenderWindow() {
   Gdiplus::StringFormat string_format;
   string_format.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
 
-  for (const auto& item : notifications_) {
+  for (auto iterator = notifications_.rbegin();
+       iterator != notifications_.rend(); ++iterator) {
+    const auto& item = *iterator;
     if (item->opacity <= 0.01) {
       continue;
     }
@@ -506,18 +550,8 @@ void AppNotificationManager::UpdateWindowBounds() {
     return;
   }
 
-  double max_bottom = static_cast<double>(kPadding);
-  for (const auto& item : notifications_) {
-    if (item->opacity <= 0.0) {
-      continue;
-    }
-    max_bottom = std::max(max_bottom, item->current_y + kCardHeight);
-  }
-  const auto height =
-      std::max(kCardHeight + (kPadding * 2),
-               static_cast<int>(std::ceil(max_bottom + kPadding)));
   const auto scaled_window_width = ScalePx(kWindowWidth, current_dpi_);
-  const auto scaled_height = ScalePx(height, current_dpi_);
+  const auto scaled_height = ScalePx(kMaxStackHeight, current_dpi_);
   const auto screen_margin = ScalePx(16, current_dpi_);
 
   RECT work_area{};
@@ -532,6 +566,7 @@ void AppNotificationManager::UpdateWindowBounds() {
 
 void AppNotificationManager::RemoveExpiredNotifications() {
   const auto now = GetTickCount64();
+  const auto old_size = notifications_.size();
   notifications_.erase(
       std::remove_if(
           notifications_.begin(), notifications_.end(),
@@ -540,6 +575,21 @@ void AppNotificationManager::RemoveExpiredNotifications() {
                    (now - item->dismiss_started_at_ms) >= kFadeOutMs;
           }),
       notifications_.end());
+  if (notifications_.size() == old_size) {
+    return;
+  }
+
+  while (notifications_.size() < kMaxVisibleNotifications &&
+         !pending_notifications_.empty()) {
+    auto next = std::move(pending_notifications_.front());
+    pending_notifications_.erase(pending_notifications_.begin());
+    next->created_at_ms = now;
+    next->dismiss_started_at_ms = 0;
+    next->dismissing = false;
+    next->opacity = 0.0;
+    next->current_y = -static_cast<double>(kCardHeight);
+    notifications_.insert(notifications_.begin(), std::move(next));
+  }
 }
 
 LRESULT CALLBACK AppNotificationManager::WndProc(HWND hwnd,

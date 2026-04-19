@@ -49,6 +49,7 @@ class AppNotificationManager {
   UINT_PTR timer_id_ = 0;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
   std::vector<std::unique_ptr<NotificationItem>> notifications_;
+  std::vector<std::unique_ptr<NotificationItem>> pending_notifications_;
 };
 
 #endif  // RUNNER_APP_NOTIFICATION_MANAGER_H_

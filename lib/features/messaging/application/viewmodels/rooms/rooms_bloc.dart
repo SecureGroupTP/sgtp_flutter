@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
+import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
@@ -16,6 +18,7 @@ import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_state.dart';
+import 'package:sgtp_flutter/features/messaging/domain/entities/message.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -49,6 +52,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   final Queue<({String key, ChatBloc bloc, ChatConnect event})> _connectQueue =
       Queue();
   final Set<String> _connectInFlightKeys = {};
+  final Map<String, Set<String>> _knownMessageIdsByRoomKey = {};
 
   RoomsBloc({
     required String accountId,
@@ -488,6 +492,8 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
 
     final key = _roomKey(hexUUID, config.serverAddr);
+    _knownMessageIdsByRoomKey[key] =
+        chatBloc.state.messages.map((m) => m.id).toSet();
     _chatSubs[key] = chatBloc.stream.listen((chatState) {
       // Release a connect slot once the room leaves connecting/handshaking.
       if (_connectInFlightKeys.contains(key) &&
@@ -497,6 +503,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         _activeConnects = (_activeConnects - 1).clamp(0, 1 << 30);
         _drainConnectQueue();
       }
+      _dispatchNotificationsForRoom(key, chatState);
       add(const _RoomsRefresh());
     });
 
@@ -535,6 +542,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     final roomKey = _roomKey(event.roomUUID, event.serverAddress);
     await _chatSubs[roomKey]?.cancel();
     _chatSubs.remove(roomKey);
+    _knownMessageIdsByRoomKey.remove(roomKey);
     final room = state.rooms
         .where((r) =>
             r.roomUUID == event.roomUUID &&
@@ -560,6 +568,46 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  void _dispatchNotificationsForRoom(String roomKey, ChatState chatState) {
+    final knownIds = _knownMessageIdsByRoomKey.putIfAbsent(roomKey, () => {});
+    final newMessages = <ChatMessage>[];
+    for (final message in chatState.messages) {
+      if (knownIds.add(message.id)) {
+        newMessages.add(message);
+      }
+    }
+    if (newMessages.isEmpty) return;
+
+    for (final msg in newMessages) {
+      final shouldNotify = !msg.isFromMe &&
+          !msg.isFromHistory &&
+          msg.type != MessageType.system &&
+          msg.type != MessageType.messageRead &&
+          msg.type != MessageType.reaction &&
+          msg.type != MessageType.viewed;
+      if (!shouldNotify) continue;
+
+      final senderLabel = chatState.peerNicknames[msg.senderUUID] ??
+          chatState.peerNicknamesHistory[msg.senderUUID] ??
+          (msg.senderUUID.length >= 8
+              ? msg.senderUUID.substring(0, 8)
+              : msg.senderUUID);
+      final body =
+          msg.type == MessageType.text ? msg.content : '[${msg.type.name}]';
+      final avatar =
+          chatState.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
+      unawaited(
+        NotificationService.showMessage(
+          sender: senderLabel,
+          body: body,
+          messageId: msg.id,
+          roomId: chatState.roomUUID,
+          avatarBytes: avatar,
+        ),
+      );
+    }
+  }
 
   @override
   Future<void> close() async {
