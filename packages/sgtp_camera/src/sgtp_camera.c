@@ -8,6 +8,10 @@
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 
+#if defined(_WIN32)
+#  include <windows.h>
+#endif
+
 #ifdef __APPLE__
 #  include <TargetConditionals.h>
 #  if TARGET_OS_IOS
@@ -20,7 +24,7 @@
 // ---------------------------------------------------------------------------
 
 #if defined(_WIN32)
-#  define SGTP_VIDEO_SRC  "ksvideosrc"
+#  define SGTP_VIDEO_SRC  "mfvideosrc"
 #  define SGTP_AUDIO_SRC  "wasapisrc"
 #  define SGTP_DEV_PROP   "device-index"   // integer index
 #  define SGTP_AUDIO_ENC  "avenc_aac"      // from gst-libav
@@ -74,6 +78,54 @@ typedef struct {
 } SgtpCtx;
 
 static SgtpCtx *g_ctx = NULL;
+
+#if defined(_WIN32)
+static void ensure_gstreamer_windows_env(void) {
+    HMODULE module = NULL;
+    char module_path[MAX_PATH] = {0};
+    char module_dir[MAX_PATH] = {0};
+    char current_path[32767] = {0};
+    char merged_path[32767] = {0};
+    char scanner_path[MAX_PATH] = {0};
+
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            (LPCSTR)&ensure_gstreamer_windows_env,
+            &module)) {
+        return;
+    }
+    if (GetModuleFileNameA(module, module_path, MAX_PATH) == 0) {
+        return;
+    }
+
+    strncpy(module_dir, module_path, sizeof(module_dir) - 1);
+    for (int i = (int)strlen(module_dir) - 1; i >= 0; --i) {
+        if (module_dir[i] == '\\' || module_dir[i] == '/') {
+            module_dir[i] = '\0';
+            break;
+        }
+    }
+
+    _putenv_s("GST_PLUGIN_PATH_1_0", module_dir);
+    _putenv_s("GST_PLUGIN_SYSTEM_PATH_1_0", module_dir);
+
+    snprintf(scanner_path, sizeof(scanner_path),
+             "%s\\gst-plugin-scanner.exe", module_dir);
+    if (GetFileAttributesA(scanner_path) != INVALID_FILE_ATTRIBUTES) {
+        _putenv_s("GST_PLUGIN_SCANNER", scanner_path);
+    }
+
+    DWORD got = GetEnvironmentVariableA("PATH", current_path, (DWORD)sizeof(current_path));
+    if (got == 0 || got >= sizeof(current_path)) {
+        _putenv_s("PATH", module_dir);
+        return;
+    }
+
+    snprintf(merged_path, sizeof(merged_path), "%s;%s", module_dir, current_path);
+    _putenv_s("PATH", merged_path);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -325,6 +377,9 @@ static int start_pipeline(
 SGTP_CAM_EXPORT void sgtp_camera_init(void) {
 #if defined(__APPLE__) && TARGET_OS_IOS
     gst_ios_init();
+#endif
+#if defined(_WIN32)
+    ensure_gstreamer_windows_env();
 #endif
     gst_init(NULL, NULL);
 

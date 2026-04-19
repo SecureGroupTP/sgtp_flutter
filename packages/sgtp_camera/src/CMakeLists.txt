@@ -104,6 +104,33 @@ elseif(WIN32)
     endif()
   endforeach()
 
+  file(GLOB SGTP_CAMERA_GST_RUNTIME_DLLS
+    "${GST_WIN_ROOT}/bin/*.dll"
+  )
+  file(GLOB SGTP_CAMERA_GST_PLUGIN_DLLS
+    "${GST_WIN_ROOT}/lib/gstreamer-1.0/*.dll"
+  )
+
+  set(SGTP_CAMERA_GST_PLUGIN_SCANNER
+    "${GST_WIN_ROOT}/libexec/gstreamer-1.0/gst-plugin-scanner.exe"
+  )
+  if(EXISTS "${SGTP_CAMERA_GST_PLUGIN_SCANNER}")
+    list(APPEND SGTP_CAMERA_WINDOWS_BUNDLED_FILES
+      "${SGTP_CAMERA_GST_PLUGIN_SCANNER}"
+    )
+  endif()
+
+  list(APPEND SGTP_CAMERA_WINDOWS_BUNDLED_FILES
+    ${SGTP_CAMERA_GST_RUNTIME_DLLS}
+    ${SGTP_CAMERA_GST_PLUGIN_DLLS}
+  )
+
+  list(REMOVE_DUPLICATES SGTP_CAMERA_WINDOWS_BUNDLED_FILES)
+  set(SGTP_CAMERA_WINDOWS_BUNDLED_FILES
+    "${SGTP_CAMERA_WINDOWS_BUNDLED_FILES}"
+    PARENT_SCOPE
+  )
+
 else()
   # ---- Linux / macOS / iOS: pkg-config ----
   list(APPEND SGTP_CAMERA_SOURCES sgtp_camera.c)

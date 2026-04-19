@@ -8,5 +8,6 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../src"
 # Tell Flutter to bundle the built DLL next to the executable.
 set(sgtp_camera_bundled_libraries
   $<TARGET_FILE:sgtp_camera>
+  ${SGTP_CAMERA_WINDOWS_BUNDLED_FILES}
   PARENT_SCOPE
 )
