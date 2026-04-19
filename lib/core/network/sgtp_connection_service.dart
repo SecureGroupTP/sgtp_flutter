@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
+
+import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
+import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/connection_events.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
@@ -185,6 +189,7 @@ class SgtpConnectionService {
       if (authError != null) {
         throw StateError(authError);
       }
+      unawaited(_showAuthenticationTestNotification(config));
       _transport = transport;
       _rpc = rpc;
       _emit(const SgtpConnectionStateChanged(
@@ -325,6 +330,39 @@ class SgtpConnectionService {
     _state = event;
     if (!_events.isClosed) {
       _events.add(event);
+    }
+  }
+
+  Future<void> _showAuthenticationTestNotification(SgtpConfig config) async {
+    if (kIsWeb) {
+      return;
+    }
+    final title = config.userUsername?.trim();
+    if ((title == null || title.isEmpty) &&
+        (config.userAvatarBytes == null || config.userAvatarBytes!.isEmpty)) {
+      return;
+    }
+    try {
+      final fallbackName =
+          (title == null || title.isEmpty) ? 'Account' : title;
+      final resolvedAvatar = await NotificationAvatarImage.resolve(
+        avatarBytes: config.userAvatarBytes,
+        fallbackName: fallbackName,
+      );
+      await AppNotifications.instance
+          .builder()
+          .setImage(resolvedAvatar)
+          .setTitle(fallbackName)
+          .setSubtitle('Authentication successful')
+          .setDuration(const Duration(seconds: 6))
+          .show();
+    } catch (e, st) {
+      _log.warning(
+        'Failed to show authentication test notification: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 }

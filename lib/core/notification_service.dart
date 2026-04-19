@@ -1,8 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
 
 /// Handles local push notifications (Android / iOS / macOS).
 /// On Windows/Linux desktop — silently no-ops.
@@ -104,6 +105,20 @@ class NotificationService {
     required String messageId,
     Uint8List? avatarBytes,
   }) async {
+    if (!kIsWeb && Platform.isWindows) {
+      final resolvedAvatar = await NotificationAvatarImage.resolve(
+        avatarBytes: avatarBytes,
+        fallbackName: sender,
+      );
+      await AppNotifications.instance
+          .builder()
+          .setImage(resolvedAvatar)
+          .setTitle(sender)
+          .setSubtitle(body)
+          .setDuration(const Duration(seconds: 6))
+          .show();
+      return;
+    }
     if (!_supported || !_initialized) return;
 
     // ── Android ──────────────────────────────────────────────────────────
@@ -194,6 +209,10 @@ class NotificationService {
   // ── Cancel ───────────────────────────────────────────────────────────────
 
   static Future<void> cancelAll() async {
+    if (!kIsWeb && Platform.isWindows) {
+      await AppNotifications.instance.dismissAll();
+      return;
+    }
     if (!_supported || !_initialized) return;
     await _plugin.cancelAll();
   }

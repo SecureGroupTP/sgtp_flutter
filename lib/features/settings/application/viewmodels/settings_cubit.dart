@@ -398,6 +398,8 @@ class SettingsCubit extends Cubit<SettingsViewState> {
         accountId: accountId,
         deviceId: _deviceId,
         privateKeyBytes: _privateKeyBytes!,
+        username: _username,
+        userAvatarBytes: _userAvatar,
         nodes: _nodes,
         preferredNodeId: _preferredNodeId,
         standaloneServerAddress: _standaloneServerAddress,

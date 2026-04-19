@@ -80,6 +80,7 @@ class AppStartupService {
       final keyPair = makeKeyPair(parsed.seed, parsed.publicKey);
       final mediaSettings = await _settings.loadMediaTransferSettings();
       final deviceId = await _settings.loadOrCreateDeviceIdForNode(accountId);
+      final username = await _settings.loadUserUsernameForNode(accountId);
 
       final entries = accountId.trim().isEmpty
           ? await _settings.loadContactEntries()
@@ -115,6 +116,8 @@ class AppStartupService {
             useTls: preferredNode?.useTls ?? false,
             fakeSni: preferredNode?.fakeSni ?? '',
             nodeId: preferredNode?.id,
+            userUsername: username.trim().isEmpty ? null : username.trim(),
+            userAvatarBytes: userAvatar,
             mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
           ),
           nicknames: nicknames,

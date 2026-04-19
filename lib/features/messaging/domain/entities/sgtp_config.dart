@@ -17,6 +17,8 @@ class SgtpConfig {
   final bool useTls;
   final String fakeSni;
   final String? nodeId;
+  final String? userUsername;
+  final Uint8List? userAvatarBytes;
   final String chatName;
   final Uint8List? chatAvatarBytes;
   final bool isDirectMessage;
@@ -37,6 +39,8 @@ class SgtpConfig {
     this.useTls = false,
     this.fakeSni = '',
     this.nodeId,
+    this.userUsername,
+    this.userAvatarBytes,
     this.chatName = 'Chat',
     this.chatAvatarBytes,
     this.isDirectMessage = false,
@@ -58,6 +62,8 @@ class SgtpConfig {
         useTls: useTls,
         fakeSni: fakeSni,
         nodeId: nodeId,
+        userUsername: userUsername,
+        userAvatarBytes: userAvatarBytes,
         chatName: chatName,
         chatAvatarBytes: chatAvatarBytes,
         isDirectMessage: isDirectMessage,
@@ -79,6 +85,8 @@ class SgtpConfig {
         useTls: useTls,
         fakeSni: fakeSni,
         nodeId: nodeId,
+        userUsername: userUsername,
+        userAvatarBytes: userAvatarBytes,
         chatName: name ?? chatName,
         chatAvatarBytes: avatar ?? chatAvatarBytes,
         isDirectMessage: isDirectMessage,
@@ -105,6 +113,8 @@ class SgtpConfig {
       useTls: useTls,
       fakeSni: fakeSni,
       nodeId: nodeId,
+      userUsername: userUsername,
+      userAvatarBytes: userAvatarBytes,
       chatName: chatName,
       chatAvatarBytes: chatAvatarBytes,
       isDirectMessage: isDirectMessage,
@@ -126,6 +136,8 @@ class SgtpConfig {
     bool? useTls,
     String? fakeSni,
     String? nodeId,
+    String? userUsername,
+    Uint8List? userAvatarBytes,
   }) {
     return SgtpConfig(
       accountId: accountId ?? this.accountId,
@@ -139,6 +151,8 @@ class SgtpConfig {
       useTls: useTls ?? this.useTls,
       fakeSni: fakeSni ?? this.fakeSni,
       nodeId: nodeId ?? this.nodeId,
+      userUsername: userUsername ?? this.userUsername,
+      userAvatarBytes: userAvatarBytes ?? this.userAvatarBytes,
       chatName: chatName,
       chatAvatarBytes: chatAvatarBytes,
       isDirectMessage: isDirectMessage,
