@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:idb_shim/idb.dart';
 import 'package:idb_shim/idb_browser.dart';
 
 import 'main_database.dart';
@@ -483,7 +482,10 @@ class _WebMainDatabase implements MainDatabase {
     await store.openCursor(autoAdvance: true).forEach((cursor) {
       final value = cursor.value;
       if (value is Map && (value['roomUuid'] as String? ?? '') == roomUuid) {
-        keys.add(cursor.key);
+        final key = cursor.key;
+        if (key != null) {
+          keys.add(key);
+        }
       }
     });
     for (final key in keys) {
@@ -570,7 +572,10 @@ class _WebMainDatabase implements MainDatabase {
     await store.openCursor(autoAdvance: true).forEach((cursor) {
       final value = cursor.value;
       if (value is Map && (value['roomUuid'] as String? ?? '') == roomUuid) {
-        keys.add(cursor.key);
+        final key = cursor.key;
+        if (key != null) {
+          keys.add(key);
+        }
       }
     });
     for (final key in keys) {

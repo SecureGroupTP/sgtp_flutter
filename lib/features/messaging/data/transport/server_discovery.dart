@@ -10,7 +10,6 @@ class SgtpServerDiscovery {
   /// Tries an explicitly supplied port first, then default discovery ports:
   /// 1) HTTPS 443
   /// 2) HTTP 80
-  /// 3) HTTP 77
   /// Throws if all attempts fail.
   static Future<({SgtpServerOptions opts, int port, bool tls})> discover(
     String host, {
@@ -20,13 +19,14 @@ class SgtpServerDiscovery {
   }) async {
     final cleanHost = _stripPort(host);
     final explicitPort = preferredPort ?? _portFromHost(host);
-    final attempts = <({int port, bool tls})>[
-      if (explicitPort != null && explicitPort > 0)
-        (port: explicitPort, tls: preferredTls ?? false),
-      (port: 443, tls: true),
-      (port: 80, tls: false),
-      (port: 77, tls: false),
-    ];
+    final attempts = explicitPort != null && explicitPort > 0
+        ? <({int port, bool tls})>[
+            (port: explicitPort, tls: preferredTls ?? false),
+          ]
+        : <({int port, bool tls})>[
+            (port: 443, tls: true),
+            (port: 80, tls: false),
+          ];
     Object? lastError;
     for (final a in _dedupeAttempts(attempts)) {
       try {

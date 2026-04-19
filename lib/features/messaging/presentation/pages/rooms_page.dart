@@ -756,7 +756,9 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
       _nodes = nodes;
       final target = widget.defaultServerAddress.trim().toLowerCase();
       final matchedByAddress = nodes
-          .where((n) => n.chatAddress.trim().toLowerCase() == target)
+          .where((n) =>
+              n.chatAddress.trim().toLowerCase() == target ||
+              n.discoveryAddress.trim().toLowerCase() == target)
           .firstOrNull;
       _selectedNodeId = matchedByAddress?.id ??
           preferredNode?.id ??
@@ -779,7 +781,10 @@ class _AddRoomSheetState extends State<_AddRoomSheet> {
     final target = (serverAddress ?? '').trim().toLowerCase();
     if (target.isEmpty) return null;
     for (final n in _nodes) {
-      if (n.chatAddress.trim().toLowerCase() == target) return n;
+      if (n.chatAddress.trim().toLowerCase() == target ||
+          n.discoveryAddress.trim().toLowerCase() == target) {
+        return n;
+      }
     }
     return null;
   }

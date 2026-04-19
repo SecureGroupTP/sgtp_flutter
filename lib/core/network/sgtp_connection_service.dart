@@ -216,7 +216,7 @@ class SgtpConnectionService {
     final tls = config.useTls;
     final result = await SgtpServerDiscovery.discover(
       parsed.host,
-      preferredPort: parsed.explicitPort,
+      preferredPort: config.discoveryPort ?? parsed.explicitPort,
       preferredTls: tls,
     );
     final opts = result.opts;

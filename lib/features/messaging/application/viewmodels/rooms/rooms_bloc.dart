@@ -143,12 +143,14 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     bool? useTls,
   }) async {
     final addr = serverAddress?.trim();
+    int? discoveryPort;
     if ((transport == null || useTls == null) &&
         addr != null &&
         addr.isNotEmpty) {
       final resolved = await _resolveServerTransport(addr);
       transport ??= resolved?.$1;
       useTls ??= resolved?.$2;
+      discoveryPort ??= resolved?.$3;
     }
 
     if ((addr == null || addr.isEmpty) && transport == null && useTls == null) {
@@ -159,6 +161,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     if (addr != null && addr.isNotEmpty) {
       cfg = cfg.copyWith(serverAddr: addr);
     }
+    if (discoveryPort != null) {
+      cfg = cfg.copyWith(discoveryPort: discoveryPort);
+    }
     if (transport != null) {
       cfg = cfg.copyWith(transport: transport);
     }
@@ -168,14 +173,15 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     return cfg;
   }
 
-  Future<(SgtpTransportFamily, bool)?> _resolveServerTransport(
+  Future<(SgtpTransportFamily, bool, int?)?> _resolveServerTransport(
       String serverAddress) async {
     final target = _normalizeAddress(serverAddress);
     if (target.isEmpty) return null;
     final nodes = await _settings.loadNodes();
     for (final node in nodes) {
-      if (_normalizeAddress(node.chatAddress) == target) {
-        return (node.transport, node.useTls);
+      if (_normalizeAddress(node.chatAddress) == target ||
+          _normalizeAddress(node.discoveryAddress) == target) {
+        return (node.transport, node.useTls, node.effectiveDiscoveryPort);
       }
     }
     return null;

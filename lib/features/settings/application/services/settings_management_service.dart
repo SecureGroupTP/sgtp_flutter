@@ -114,7 +114,7 @@ class SettingsManagementService {
       final parsed = parseHostPort(normalizedHost);
       final result = await SgtpServerDiscovery.discover(
         parsed?.$1 ?? normalizedHost,
-        preferredPort: parsed?.$2,
+        preferredPort: node.effectiveDiscoveryPort ?? parsed?.$2,
       );
       return result.opts;
     } catch (_) {
@@ -567,6 +567,7 @@ class SettingsManagementService {
         accountId: accountId,
         deviceId: deviceId,
         serverAddr: serverAddress,
+        discoveryPort: node.effectiveDiscoveryPort,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,
         myPublicKey: parsed.publicKey,
@@ -585,7 +586,7 @@ class SettingsManagementService {
   Future<void> discoverNodeAndCache(NodeConfig node) async {
     final (:opts, :port, :tls) = await SgtpServerDiscovery.discover(
       node.host,
-      preferredPort: node.chatPort,
+      preferredPort: node.effectiveDiscoveryPort,
       preferredTls: node.useTls,
     );
     final labels = [
@@ -745,6 +746,7 @@ class SettingsManagementService {
       id: uuidBytesToHex(generateUUIDv7()),
       name: host,
       host: host,
+      discoveryPort: port,
       chatPort: port,
       voicePort: port,
     );

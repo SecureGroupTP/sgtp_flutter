@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -20,6 +21,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     super.initState();
     _cubit = OnboardingCubit(
       settings: context.read<SettingsManagementService>(),
+      preferWebTransportOrder: kIsWeb,
     );
   }
 

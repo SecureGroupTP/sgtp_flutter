@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/setup/application/viewmodels/onboarding_cubit.dart';
 import 'package:sgtp_flutter/features/setup/application/viewmodels/onboarding_view_state.dart';
 
@@ -185,6 +186,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Widget _buildServerStep(OnboardingViewState state) {
     final available = state.availableTransportsLabel;
+    final transportOptions = state.availableTransportFamilies;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -202,6 +204,45 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             'Detected transports: $available',
             style: const TextStyle(color: Colors.white70),
           ),
+        if (state.resolvedOptions != null) ...[
+          const SizedBox(height: 16),
+          DropdownButtonFormField<SgtpTransportFamily>(
+            value: state.resolvedTransport,
+            items: transportOptions
+                .map(
+                  (family) => DropdownMenuItem<SgtpTransportFamily>(
+                    value: family,
+                    child: Text(_transportLabel(family)),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: state.canChangeTransport
+                ? (value) {
+                    if (value != null) {
+                      _cubit.selectTransport(value);
+                    }
+                  }
+                : null,
+            decoration: const InputDecoration(
+              labelText: 'Transport',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            value: state.resolvedTls,
+            onChanged: state.tlsToggleEnabled ? _cubit.setTls : null,
+            title: const Text('TLS'),
+            subtitle: Text(
+              state.tlsToggleEnabled
+                  ? 'Prefer encrypted transport'
+                  : (state.selectedTransportHasTls
+                      ? 'Only TLS is available for this transport'
+                      : 'TLS is not available for this transport'),
+            ),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ],
       ],
     );
   }
@@ -209,11 +250,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget _buildProfileStep(OnboardingViewState state) {
     return ListView(
       children: [
-        if (state.resolvedHost != null && state.resolvedPort != null)
+        if (state.resolvedHost != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(
-              'Server: ${state.resolvedHost}:${state.resolvedPort}',
+              state.resolvedDiscoveryPort != null
+                  ? 'Server: ${state.resolvedHost}:${state.resolvedDiscoveryPort}'
+                  : 'Server: ${state.resolvedHost}',
               style: const TextStyle(color: Colors.white70),
             ),
           ),
@@ -251,5 +294,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
       ],
     );
+  }
+
+  String _transportLabel(SgtpTransportFamily family) {
+    switch (family) {
+      case SgtpTransportFamily.tcp:
+        return 'TCP';
+      case SgtpTransportFamily.websocket:
+        return 'WebSocket';
+      case SgtpTransportFamily.http:
+        return 'HTTP';
+    }
   }
 }

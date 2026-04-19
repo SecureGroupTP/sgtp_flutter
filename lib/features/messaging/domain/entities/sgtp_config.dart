@@ -9,6 +9,7 @@ class SgtpConfig {
   final String? accountId;
   final String deviceId;
   final String serverAddr;
+  final int? discoveryPort;
   final Uint8List roomUUID;
   final SimpleKeyPairData identityKeyPair;
   final Uint8List myPublicKey;
@@ -28,6 +29,7 @@ class SgtpConfig {
     this.accountId,
     required this.deviceId,
     required this.serverAddr,
+    this.discoveryPort,
     required this.roomUUID,
     required this.identityKeyPair,
     required this.myPublicKey,
@@ -48,6 +50,7 @@ class SgtpConfig {
         accountId: accountId,
         deviceId: deviceId,
         serverAddr: serverAddr,
+        discoveryPort: discoveryPort,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
@@ -68,6 +71,7 @@ class SgtpConfig {
         accountId: accountId,
         deviceId: deviceId,
         serverAddr: serverAddr,
+        discoveryPort: discoveryPort,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
         myPublicKey: myPublicKey,
@@ -93,6 +97,7 @@ class SgtpConfig {
       accountId: accountId,
       deviceId: deviceId,
       serverAddr: serverAddr,
+      discoveryPort: discoveryPort,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,
@@ -115,6 +120,7 @@ class SgtpConfig {
     String? serverAddr,
     String? accountId,
     String? deviceId,
+    int? discoveryPort,
     int? mediaChunkSizeBytes,
     SgtpTransportFamily? transport,
     bool? useTls,
@@ -125,6 +131,7 @@ class SgtpConfig {
       accountId: accountId ?? this.accountId,
       deviceId: deviceId ?? this.deviceId,
       serverAddr: serverAddr ?? this.serverAddr,
+      discoveryPort: discoveryPort ?? this.discoveryPort,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
       myPublicKey: myPublicKey,

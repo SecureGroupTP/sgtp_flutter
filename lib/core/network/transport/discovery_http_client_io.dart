@@ -20,8 +20,7 @@ Future<DiscoveryHttpResponse> httpGetDiscovery(
   required Duration timeout,
 }) async {
   final ioHttpClient = HttpClient()
-    ..connectionTimeout = timeout
-    ..badCertificateCallback = (_, __, ___) => true;
+    ..connectionTimeout = timeout;
   final client = IOClient(ioHttpClient);
   try {
     final res = await client

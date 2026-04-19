@@ -13,10 +13,13 @@ import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 class OnboardingCubit extends Cubit<OnboardingViewState> {
   OnboardingCubit({
     required SettingsManagementService settings,
+    required bool preferWebTransportOrder,
   })  : _settings = settings,
+        _preferWebTransportOrder = preferWebTransportOrder,
         super(const OnboardingViewState());
 
   final SettingsManagementService _settings;
+  final bool _preferWebTransportOrder;
 
   // ── Intent: Verify server ───────────────────────────────────────────────
 
@@ -40,14 +43,13 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         host,
         preferredPort: explicitPort,
       );
-      final picked = explicitPort == null
-          ? _pickTransport(result.opts)
-          : (SgtpTransportFamily.http, result.tls, result.port);
-      final port = explicitPort ?? picked.$3;
+      final picked = _pickTransport(result.opts);
+      final port = picked.$3 > 0 ? picked.$3 : result.port;
 
       emit(OnboardingViewState(
         step: 1,
         resolvedHost: host,
+        resolvedDiscoveryPort: explicitPort,
         resolvedPort: port,
         resolvedTransport: picked.$1,
         resolvedTls: picked.$2,
@@ -63,6 +65,53 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
     }
   }
 
+  void selectTransport(SgtpTransportFamily family) {
+    final opts = state.resolvedOptions;
+    if (opts == null) return;
+    if (!opts.supports(family, tls: false) && !opts.supports(family, tls: true)) {
+      return;
+    }
+    var useTls = state.resolvedTls;
+    if (!opts.supports(family, tls: useTls)) {
+      if (opts.supports(family, tls: true)) {
+        useTls = true;
+      } else if (opts.supports(family, tls: false)) {
+        useTls = false;
+      } else {
+        return;
+      }
+    }
+    final port = opts.portFor(family, tls: useTls);
+    emit(OnboardingViewState(
+      step: state.step,
+      resolvedHost: state.resolvedHost,
+      resolvedDiscoveryPort: state.resolvedDiscoveryPort,
+      resolvedPort: port > 0 ? port : state.resolvedPort,
+      resolvedTransport: family,
+      resolvedTls: useTls,
+      resolvedOptions: opts,
+      avatarBytes: state.avatarBytes,
+    ));
+  }
+
+  void setTls(bool value) {
+    final opts = state.resolvedOptions;
+    final transport = state.resolvedTransport;
+    if (opts == null || transport == null) return;
+    if (!opts.supports(transport, tls: value)) return;
+    final port = opts.portFor(transport, tls: value);
+    emit(OnboardingViewState(
+      step: state.step,
+      resolvedHost: state.resolvedHost,
+      resolvedDiscoveryPort: state.resolvedDiscoveryPort,
+      resolvedPort: port > 0 ? port : state.resolvedPort,
+      resolvedTransport: transport,
+      resolvedTls: value,
+      resolvedOptions: opts,
+      avatarBytes: state.avatarBytes,
+    ));
+  }
+
   // ── Intent: Pick avatar ─────────────────────────────────────────────────
 
   void setAvatar(Uint8List? bytes) {
@@ -76,6 +125,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
     emit(OnboardingViewState(
       step: 0,
       resolvedHost: state.resolvedHost,
+      resolvedDiscoveryPort: state.resolvedDiscoveryPort,
       resolvedPort: state.resolvedPort,
       resolvedTransport: state.resolvedTransport,
       resolvedTls: state.resolvedTls,
@@ -93,6 +143,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         step: state.step,
         error: 'Nickname is required',
         resolvedHost: state.resolvedHost,
+        resolvedDiscoveryPort: state.resolvedDiscoveryPort,
         resolvedPort: state.resolvedPort,
         resolvedTransport: state.resolvedTransport,
         resolvedTls: state.resolvedTls,
@@ -108,6 +159,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         step: state.step,
         error: 'Please verify server first',
         resolvedHost: state.resolvedHost,
+        resolvedDiscoveryPort: state.resolvedDiscoveryPort,
         resolvedPort: state.resolvedPort,
         resolvedTransport: state.resolvedTransport,
         resolvedTls: state.resolvedTls,
@@ -121,6 +173,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
       step: state.step,
       isSaving: true,
       resolvedHost: state.resolvedHost,
+      resolvedDiscoveryPort: state.resolvedDiscoveryPort,
       resolvedPort: state.resolvedPort,
       resolvedTransport: state.resolvedTransport,
       resolvedTls: state.resolvedTls,
@@ -130,7 +183,9 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
 
     try {
       final accountId = await _ensureAccountId();
-      final serverAddress = '${state.resolvedHost!}:${state.resolvedPort!}';
+      final serverAddress = state.resolvedDiscoveryPort != null
+          ? '${state.resolvedHost!}:${state.resolvedDiscoveryPort!}'
+          : state.resolvedHost!;
       final username = _sanitizeUsername(rawUsername);
 
       await _settings.saveAddress(serverAddress);
@@ -150,6 +205,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
           accountId: accountId,
           name: 'Connection',
           host: state.resolvedHost!,
+          discoveryPort: state.resolvedDiscoveryPort,
           chatPort: state.resolvedPort!,
           voicePort: state.resolvedPort!,
           transport: state.resolvedTransport!,
@@ -161,6 +217,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
           accountId: accountId,
           name: 'Connection',
           host: state.resolvedHost!,
+          discoveryPort: state.resolvedDiscoveryPort,
           chatPort: state.resolvedPort!,
           voicePort: state.resolvedPort!,
           transport: state.resolvedTransport!,
@@ -187,6 +244,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         step: state.step,
         completed: true,
         resolvedHost: state.resolvedHost,
+        resolvedDiscoveryPort: state.resolvedDiscoveryPort,
         resolvedPort: state.resolvedPort,
         resolvedTransport: state.resolvedTransport,
         resolvedTls: state.resolvedTls,
@@ -198,6 +256,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
         step: state.step,
         error: 'Failed to save onboarding data: $e',
         resolvedHost: state.resolvedHost,
+        resolvedDiscoveryPort: state.resolvedDiscoveryPort,
         resolvedPort: state.resolvedPort,
         resolvedTransport: state.resolvedTransport,
         resolvedTls: state.resolvedTls,
@@ -251,6 +310,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
       isRestoring: state.isRestoring,
       error: state.error,
       resolvedHost: state.resolvedHost,
+      resolvedDiscoveryPort: state.resolvedDiscoveryPort,
       resolvedPort: state.resolvedPort,
       resolvedTransport: state.resolvedTransport,
       resolvedTls: state.resolvedTls,
@@ -281,46 +341,36 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
 
   (SgtpTransportFamily family, bool tls, int port) _pickTransport(
       SgtpServerOptions opts) {
-    if (opts.supports(SgtpTransportFamily.http, tls: true)) {
-      return (
-        SgtpTransportFamily.http,
-        true,
-        opts.portFor(SgtpTransportFamily.http, tls: true)
-      );
+    final priority = _preferWebTransportOrder
+        ? const <SgtpTransportFamily>[
+            SgtpTransportFamily.websocket,
+            SgtpTransportFamily.http,
+          ]
+        : const <SgtpTransportFamily>[
+            SgtpTransportFamily.tcp,
+            SgtpTransportFamily.websocket,
+            SgtpTransportFamily.http,
+          ];
+
+    for (final family in priority) {
+      if (opts.supports(family, tls: true)) {
+        return (family, true, opts.portFor(family, tls: true));
+      }
+      if (opts.supports(family, tls: false)) {
+        return (family, false, opts.portFor(family, tls: false));
+      }
     }
-    if (opts.supports(SgtpTransportFamily.http, tls: false)) {
-      return (
-        SgtpTransportFamily.http,
-        false,
-        opts.portFor(SgtpTransportFamily.http, tls: false)
-      );
+
+    for (final family in SgtpTransportFamily.values) {
+      if (opts.supports(family, tls: true)) {
+        return (family, true, opts.portFor(family, tls: true));
+      }
+      if (opts.supports(family, tls: false)) {
+        return (family, false, opts.portFor(family, tls: false));
+      }
     }
-    if (opts.supports(SgtpTransportFamily.websocket, tls: true)) {
-      return (
-        SgtpTransportFamily.websocket,
-        true,
-        opts.portFor(SgtpTransportFamily.websocket, tls: true)
-      );
-    }
-    if (opts.supports(SgtpTransportFamily.websocket, tls: false)) {
-      return (
-        SgtpTransportFamily.websocket,
-        false,
-        opts.portFor(SgtpTransportFamily.websocket, tls: false)
-      );
-    }
-    if (opts.supports(SgtpTransportFamily.tcp, tls: true)) {
-      return (
-        SgtpTransportFamily.tcp,
-        true,
-        opts.portFor(SgtpTransportFamily.tcp, tls: true)
-      );
-    }
-    return (
-      SgtpTransportFamily.tcp,
-      false,
-      opts.portFor(SgtpTransportFamily.tcp, tls: false)
-    );
+
+    throw const FormatException('Server does not advertise any usable transport');
   }
 
   (String host, int? explicitPort) _parseHostPort(String raw) {

@@ -118,10 +118,9 @@ class WebSocketSgtpTransport implements IProtocolTransport {
       return SecureSocket.secure(
         raw,
         host: tlsServerName,
-        onBadCertificate: (_) => true,
       );
     }
-    return SecureSocket.connect(host, port, onBadCertificate: (_) => true);
+    return SecureSocket.connect(host, port);
   }
 
   @override

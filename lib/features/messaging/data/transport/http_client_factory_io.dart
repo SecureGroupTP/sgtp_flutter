@@ -9,8 +9,7 @@ http.Client createSgtpHttpClient({
   required bool useTls,
   String? fakeSni,
 }) {
-  final ioHttpClient = HttpClient()
-    ..badCertificateCallback = (_, __, ___) => true;
+  final ioHttpClient = HttpClient();
   final tlsServerName = (fakeSni ?? '').trim();
   if (useTls &&
       tlsServerName.isNotEmpty &&
@@ -32,7 +31,6 @@ http.Client createSgtpHttpClient({
         return SecureSocket.secure(
           raw,
           host: tlsServerName,
-          onBadCertificate: (_) => true,
         );
       }();
       return ConnectionTask.fromSocket<Socket>(

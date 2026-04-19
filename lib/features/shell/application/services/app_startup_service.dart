@@ -56,6 +56,8 @@ class AppStartupService {
 
     final chatServer = preferredNode?.chatAddress ??
         (lastAddr.isEmpty ? 'localhost:443' : lastAddr);
+    final discoveryServer = preferredNode?.discoveryAddress ??
+        (lastAddr.isEmpty ? 'localhost:443' : lastAddr);
 
     if (accountId.trim().isNotEmpty) {
       await _settings.migrateLegacyAccountDataToNodeIfNeeded(accountId);
@@ -105,6 +107,7 @@ class AppStartupService {
             accountId: accountId,
             deviceId: deviceId,
             serverAddr: chatServer,
+            discoveryPort: preferredNode?.effectiveDiscoveryPort,
             roomUUID: Uint8List(16),
             identityKeyPair: keyPair,
             myPublicKey: parsed.publicKey,
@@ -115,7 +118,7 @@ class AppStartupService {
             mediaChunkSizeBytes: mediaSettings.mediaChunkSizeBytes,
           ),
           nicknames: nicknames,
-          serverAddress: chatServer,
+          serverAddress: discoveryServer,
           userAvatar: userAvatar,
           initialContacts: sanitizedEntries,
         ),

@@ -5,6 +5,7 @@ class NodeConfig {
   final String accountId; // scoped profile/identity id
   final String name;
   final String host; // domain or IP, without scheme
+  final int? discoveryPort;
   final int chatPort;
   final int voicePort;
   final SgtpTransportFamily transport;
@@ -16,6 +17,7 @@ class NodeConfig {
     this.accountId = '',
     required this.name,
     required this.host,
+    this.discoveryPort,
     required this.chatPort,
     required this.voicePort,
     this.transport = SgtpTransportFamily.tcp,
@@ -28,13 +30,22 @@ class NodeConfig {
     return v.isEmpty ? id : v;
   }
 
-  String get chatAddress => '$host:$chatPort';
+  String get normalizedHost => _splitHostPort(host).$1;
+  int? get embeddedPort => _splitHostPort(host).$2;
+  int? get effectiveDiscoveryPort => discoveryPort ?? embeddedPort;
+
+  String get chatAddress => '$normalizedHost:$chatPort';
+  String get discoveryAddress =>
+      effectiveDiscoveryPort != null && effectiveDiscoveryPort! > 0
+          ? '$normalizedHost:$effectiveDiscoveryPort'
+          : normalizedHost;
 
   NodeConfig copyWith({
     String? id,
     String? accountId,
     String? name,
     String? host,
+    int? discoveryPort,
     int? chatPort,
     int? voicePort,
     SgtpTransportFamily? transport,
@@ -46,6 +57,7 @@ class NodeConfig {
       accountId: accountId ?? this.accountId,
       name: name ?? this.name,
       host: host ?? this.host,
+      discoveryPort: discoveryPort ?? this.discoveryPort,
       chatPort: chatPort ?? this.chatPort,
       voicePort: voicePort ?? this.voicePort,
       transport: transport ?? this.transport,
@@ -58,7 +70,8 @@ class NodeConfig {
         'id': id,
         if (accountId.trim().isNotEmpty) 'accountId': accountId.trim(),
         'name': name,
-        'host': host,
+        'host': normalizedHost,
+        if (effectiveDiscoveryPort != null) 'discoveryPort': effectiveDiscoveryPort,
         'chatPort': chatPort,
         'voicePort': voicePort,
         'transport': transport.id,
@@ -67,13 +80,16 @@ class NodeConfig {
       };
 
   static NodeConfig fromJson(Map<String, dynamic> json) {
+    final rawHost = (json['host'] as String? ?? '').trim();
+    final parsedHost = _splitHostPort(rawHost);
     return NodeConfig(
       id: json['id'] as String,
       accountId: (json['accountId'] as String?)?.trim() ?? '',
       name: (json['name'] as String?)?.trim().isNotEmpty == true
           ? (json['name'] as String).trim()
           : 'Node',
-      host: (json['host'] as String? ?? '').trim(),
+      host: parsedHost.$1,
+      discoveryPort: (json['discoveryPort'] as num?)?.toInt() ?? parsedHost.$2,
       chatPort: (json['chatPort'] as num?)?.toInt() ?? 443,
       voicePort: (json['voicePort'] as num?)?.toInt() ??
           ((json['chatPort'] as num?)?.toInt() ?? 443),
@@ -82,6 +98,38 @@ class NodeConfig {
       fakeSni: (json['fakeSni'] as String? ?? '').trim(),
       // 'usersPort' key is ignored for backward compatibility
     );
+  }
+
+  static (String, int?) _splitHostPort(String raw) {
+    final value = raw
+        .trim()
+        .replaceAll(RegExp(r'^https?://', caseSensitive: false), '')
+        .replaceAll(RegExp(r'^wss?://', caseSensitive: false), '')
+        .trim();
+    if (value.isEmpty) {
+      return ('', null);
+    }
+    if (value.startsWith('[')) {
+      final end = value.indexOf(']');
+      if (end <= 1) {
+        return (value, null);
+      }
+      final host = value.substring(1, end).trim();
+      final rest = value.substring(end + 1).trim();
+      if (rest.startsWith(':')) {
+        return (host, int.tryParse(rest.substring(1).trim()));
+      }
+      return (host, null);
+    }
+    final colon = value.lastIndexOf(':');
+    if (colon <= 0 || colon == value.length - 1) {
+      return (value, null);
+    }
+    final port = int.tryParse(value.substring(colon + 1).trim());
+    if (port == null) {
+      return (value, null);
+    }
+    return (value.substring(0, colon).trim(), port);
   }
 }
 
