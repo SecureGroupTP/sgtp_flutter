@@ -14,6 +14,7 @@ import 'package:sgtp_flutter/features/contacts/data/services/userdir_client.dart
 import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_gateway_impl.dart';
 import 'package:sgtp_flutter/features/messaging/data/repositories/shared_direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/openmls_runtime.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/shared_key_package_publisher.dart';
@@ -45,6 +46,7 @@ class AppDependencies {
     required this.directRoomGateway,
     required this.keyPackagePublisher,
     required this.mediaStorageService,
+    required this.messageNotificationService,
     required this.sgtpSessionFactory,
     required this.homeUserDirCoordinatorFactory,
   });
@@ -59,6 +61,7 @@ class AppDependencies {
   final DirectRoomGateway directRoomGateway;
   final KeyPackagePublisher keyPackagePublisher;
   final MessagingMediaStorageService mediaStorageService;
+  final MessageNotificationService messageNotificationService;
   final SgtpSessionFactory sgtpSessionFactory;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
@@ -82,6 +85,7 @@ class AppInjector {
     final mediaStorageService = createMessagingMediaStorageService(
       accountStoragePaths: accountStoragePaths,
     );
+    final messageNotificationService = MessageNotificationService();
     final settingsRepository = SettingsRepository(
       accountStoragePaths: accountStoragePaths,
       storageKeyService: storageKeyService,
@@ -180,6 +184,7 @@ class AppInjector {
       directRoomGateway: directRoomGateway,
       keyPackagePublisher: keyPackagePublisher,
       mediaStorageService: mediaStorageService,
+      messageNotificationService: messageNotificationService,
       sgtpSessionFactory: sgtpSessionFactory,
       homeUserDirCoordinatorFactory: ({
         required onDirectMessageReady,

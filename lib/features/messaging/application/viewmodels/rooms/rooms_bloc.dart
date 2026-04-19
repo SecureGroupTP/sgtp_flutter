@@ -1,17 +1,16 @@
 import 'dart:async';
-import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
-import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
@@ -40,6 +39,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   final ChatStorageGateway _chatStorage;
   final SgtpConnectionService _connectionService;
   final MessagingMediaStorageService _mediaStorageService;
+  final MessageNotificationService _messageNotificationService;
   final SgtpSessionFactory _sessionFactory;
   Map<String, Uint8List> _contactAvatarsByPub = const {};
   Uint8List? _userAvatar;
@@ -62,6 +62,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     required ChatStorageGateway chatStorage,
     required SgtpConnectionService connectionService,
     required MessagingMediaStorageService mediaStorageService,
+    required MessageNotificationService messageNotificationService,
     required String serverAddress,
     required SgtpSessionFactory sessionFactory,
     Uint8List? userAvatar,
@@ -72,6 +73,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
         _chatStorage = chatStorage,
         _connectionService = connectionService,
         _mediaStorageService = mediaStorageService,
+        _messageNotificationService = messageNotificationService,
         _sessionFactory = sessionFactory,
         _userAvatar = userAvatar,
         super(RoomsState(serverAddress: serverAddress)) {
@@ -598,7 +600,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       final avatar =
           chatState.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
       unawaited(
-        NotificationService.showMessage(
+        _messageNotificationService.showMessage(
           sender: senderLabel,
           body: body,
           messageId: msg.id,

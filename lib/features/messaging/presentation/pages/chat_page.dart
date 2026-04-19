@@ -17,6 +17,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:record/record.dart';
 
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_event.dart';
@@ -24,7 +25,6 @@ import 'package:sgtp_flutter/features/messaging/presentation/widgets/video_note_
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat_state.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/message_bubble.dart';
 import 'package:sgtp_flutter/features/messaging/presentation/widgets/room_avatar.dart';
-import 'package:sgtp_flutter/core/notification_service.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/features/messaging/application/models/messaging_models.dart';
@@ -44,6 +44,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   static const int _targetUploadImageBytes = 3 * 1024 * 1024;
 
   late final SettingsManagementService _settingsRepo;
+  late final MessageNotificationService _messageNotifications;
   late final MessagingMediaStorageService _mediaStorage;
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
@@ -121,6 +122,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _settingsRepo = context.read<SettingsManagementService>();
+    _messageNotifications = context.read<MessageNotificationService>();
     _mediaStorage = context.read<MessagingMediaStorageService>();
     _chatBloc = context.read<ChatBloc>()..add(const ChatSetVisibility(true));
     WidgetsBinding.instance.addObserver(this);
@@ -130,17 +132,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final has = _messageCtrl.text.trim().isNotEmpty;
       if (has != _hasText) setState(() => _hasText = has);
     });
-    NotificationService.init();
-    NotificationService.setSuppressedRoomId(_chatBloc?.state.roomUUID);
-    NotificationService.onMarkAsRead = (messageId) {
-      if (!_sentReadReceipts.contains(messageId)) {
-        _sentReadReceipts.add(messageId);
-        _chatBloc?.add(ChatSendMessageRead(messageId));
-      }
-    };
-    // Flush any "Mark as Read" taps that arrived while the app was killed
-    // (stored in SharedPreferences by the background isolate handler).
-    NotificationService.flushPendingMarkAsRead();
+    _messageNotifications.setSuppressedRoomId(_chatBloc?.state.roomUUID);
   }
 
   @override
@@ -148,8 +140,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _saveScrollPosition();
     _chatBloc?.add(const ChatSetVisibility(false));
     WidgetsBinding.instance.removeObserver(this);
-    NotificationService.setSuppressedRoomId(null);
-    NotificationService.onMarkAsRead = null;
+    _messageNotifications.setSuppressedRoomId(null);
     _messageCtrl.dispose();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
@@ -164,10 +155,9 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         setState(() => _isPageVisible = true);
         _chatBloc?.add(const ChatSetVisibility(true));
-        NotificationService.setSuppressedRoomId(_chatBloc?.state.roomUUID);
+        _messageNotifications.setSuppressedRoomId(_chatBloc?.state.roomUUID);
         unawaited(_loadCaptureCapabilities());
-        NotificationService.cancelAll();
-        NotificationService.flushPendingMarkAsRead();
+        unawaited(_messageNotifications.cancelAll());
 
         final bloc = _chatBloc;
         if (bloc != null) {
@@ -215,7 +205,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _wentToBackground ??= DateTime.now();
         setState(() => _isPageVisible = false);
         _chatBloc?.add(const ChatSetVisibility(false));
-        NotificationService.setSuppressedRoomId(null);
+        _messageNotifications.setSuppressedRoomId(null);
         break;
 
       case AppLifecycleState.detached:
@@ -1279,7 +1269,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             if (roomUUID != _lastScrollRoomUUID) {
               _lastScrollRoomUUID = roomUUID;
             }
-            NotificationService.setSuppressedRoomId(
+            _messageNotifications.setSuppressedRoomId(
               _isPageVisible ? roomUUID : null,
             );
             _tryRestoreScrollPosition(roomUUID);
@@ -1297,7 +1287,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               }
             }
           }
-          NotificationService.setSuppressedRoomId(
+          _messageNotifications.setSuppressedRoomId(
             _isPageVisible ? state.roomUUID : null,
           );
           _lastMessageCount = newCount;

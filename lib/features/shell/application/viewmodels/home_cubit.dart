@@ -8,6 +8,7 @@ import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_bloc.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_binding.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
@@ -38,6 +39,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     required DirectRoomGateway directRoomGateway,
     required KeyPackagePublisher keyPackagePublisher,
     required MessagingMediaStorageService mediaStorageService,
+    required MessageNotificationService messageNotificationService,
     required SgtpSessionFactory sessionFactory,
     required HomePersistenceService homePersistenceService,
     required HomeUserDirSupportService homeUserDirSupportService,
@@ -56,6 +58,7 @@ class HomeCubit extends Cubit<HomeViewState> {
         _directRoomGateway = directRoomGateway,
         _keyPackagePublisher = keyPackagePublisher,
         _mediaStorageService = mediaStorageService,
+        _messageNotificationService = messageNotificationService,
         _sessionFactory = sessionFactory,
         _homePersistence = homePersistenceService,
         _userDirSupport = homeUserDirSupportService,
@@ -91,6 +94,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       connectionService: sgtpConnectionService,
       serverAddress: serverAddress,
       mediaStorageService: mediaStorageService,
+      messageNotificationService: messageNotificationService,
       sessionFactory: sessionFactory,
       userAvatar: userAvatar,
     );
@@ -103,6 +107,7 @@ class HomeCubit extends Cubit<HomeViewState> {
   final DirectRoomGateway _directRoomGateway;
   final KeyPackagePublisher _keyPackagePublisher;
   final MessagingMediaStorageService _mediaStorageService;
+  final MessageNotificationService _messageNotificationService;
   final SgtpSessionFactory _sessionFactory;
   final HomePersistenceService _homePersistence;
   final HomeUserDirSupportService _userDirSupport;
@@ -175,6 +180,7 @@ class HomeCubit extends Cubit<HomeViewState> {
       connectionService: _sgtpConnection,
       serverAddress: newServer,
       mediaStorageService: _mediaStorageService,
+      messageNotificationService: _messageNotificationService,
       userAvatar: null,
       sessionFactory: _sessionFactory,
     );

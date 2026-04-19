@@ -11,7 +11,7 @@ import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
-import 'package:sgtp_flutter/core/notification_service.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/settings/application/models/app_storage_models.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
@@ -27,12 +27,14 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     required SettingsManagementService settings,
     required AppSessionController appSessionController,
     required SgtpConnectionService sgtpConnectionService,
+    required MessageNotificationService messageNotificationService,
     required SgtpConfig? initialConfig,
     required Uint8List? currentUserAvatar,
     required void Function()? onAllDataDeleted,
   })  : _settings = settings,
         _appSessionController = appSessionController,
         _sgtpConnection = sgtpConnectionService,
+        _messageNotifications = messageNotificationService,
         _onAllDataDeleted = onAllDataDeleted,
         super(const SettingsViewState()) {
     _userAvatar = currentUserAvatar;
@@ -46,6 +48,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   final SettingsManagementService _settings;
   final AppSessionController _appSessionController;
   final SgtpConnectionService _sgtpConnection;
+  final MessageNotificationService _messageNotifications;
   final void Function()? _onAllDataDeleted;
 
   String? _privateKeyPath;
@@ -703,7 +706,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   // ── Intent: Delete all data ─────────────────────────────────────────────
 
   Future<void> deleteAllData() async {
-    await NotificationService.cancelAll();
+    await _messageNotifications.cancelAll();
     await _settings.clearAllLocalData();
     _onAllDataDeleted?.call();
   }

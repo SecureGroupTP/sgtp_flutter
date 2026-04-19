@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_cubit.dart';
@@ -36,6 +37,7 @@ class _SettingsPageState extends State<SettingsPage> {
       settings: context.read<SettingsManagementService>(),
       appSessionController: context.read<AppSessionController>(),
       sgtpConnectionService: context.read<SgtpConnectionService>(),
+      messageNotificationService: context.read<MessageNotificationService>(),
       initialConfig: widget.initialConfig,
       currentUserAvatar: widget.currentUserAvatar,
       onAllDataDeleted: widget.onAllDataDeleted,

@@ -11,6 +11,7 @@ import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/window_size_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -93,6 +94,9 @@ RepositoryProvider<ChatStorageGateway>(
         ),
         RepositoryProvider<MessagingMediaStorageService>(
           create: (_) => widget.dependencies.mediaStorageService,
+        ),
+        RepositoryProvider<MessageNotificationService>(
+          create: (_) => widget.dependencies.messageNotificationService,
         ),
         RepositoryProvider<SgtpSessionFactory>(
           create: (_) => widget.dependencies.sgtpSessionFactory,

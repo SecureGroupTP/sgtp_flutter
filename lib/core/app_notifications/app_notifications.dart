@@ -1,8 +1,9 @@
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_stub.dart'
+    if (dart.library.io) 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_io.dart';
 
 class AppNotificationHandle {
   AppNotificationHandle._(this.id, this._owner);
@@ -65,72 +66,28 @@ class AppNotificationBuilder {
   }
 }
 
-class AppNotificationRequest {
-  const AppNotificationRequest({
-    this.imageBytes,
-    this.title,
-    this.subtitle,
-    required this.duration,
-  });
-
-  final Uint8List? imageBytes;
-  final String? title;
-  final String? subtitle;
-  final Duration duration;
-}
-
 class AppNotifications {
-  AppNotifications._();
+  AppNotifications._(this._backend);
 
-  static final AppNotifications instance = AppNotifications._();
+  static final AppNotifications instance =
+      AppNotifications._(createAppNotificationsBackend());
 
-  static const MethodChannel _channel = MethodChannel(
-    'com.example.sgtp_flutter/app_notifications',
-  );
-
+  final AppNotificationsBackend _backend;
   int _counter = 0;
 
   AppNotificationBuilder builder() => AppNotificationBuilder._(this);
 
   Future<AppNotificationHandle> show(AppNotificationRequest request) async {
     final id = _nextId();
-    if (!_supportsCustomNotifications || !_hasVisiblePayload(request)) {
-      return AppNotificationHandle._(id, this);
+    if (_backend.supports(request)) {
+      await _backend.show(id, request);
     }
-    await _channel.invokeMethod<void>('showNotification', <String, Object?>{
-      'id': id,
-      'title': request.title,
-      'subtitle': request.subtitle,
-      'durationMs': request.duration.inMilliseconds,
-      'imageBytes': request.imageBytes,
-    });
     return AppNotificationHandle._(id, this);
   }
 
-  Future<void> dismiss(String id) async {
-    if (!_supportsCustomNotifications) {
-      return;
-    }
-    await _channel.invokeMethod<void>('dismissNotification', <String, Object?>{
-      'id': id,
-    });
-  }
+  Future<void> dismiss(String id) => _backend.dismiss(id);
 
-  Future<void> dismissAll() async {
-    if (!_supportsCustomNotifications) {
-      return;
-    }
-    await _channel.invokeMethod<void>('dismissAllNotifications');
-  }
-
-  bool get _supportsCustomNotifications =>
-      !kIsWeb && Platform.isWindows;
-
-  bool _hasVisiblePayload(AppNotificationRequest request) {
-    return (request.title != null && request.title!.isNotEmpty) ||
-        (request.subtitle != null && request.subtitle!.isNotEmpty) ||
-        (request.imageBytes != null && request.imageBytes!.isNotEmpty);
-  }
+  Future<void> dismissAll() => _backend.dismissAll();
 
   String _nextId() {
     _counter += 1;
