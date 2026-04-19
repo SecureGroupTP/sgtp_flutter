@@ -7,6 +7,7 @@ import 'package:sgtp_flutter/core/sgtp_transport.dart';
 
 class SgtpConfig {
   final String? accountId;
+  final String deviceId;
   final String serverAddr;
   final Uint8List roomUUID;
   final SimpleKeyPairData identityKeyPair;
@@ -25,6 +26,7 @@ class SgtpConfig {
 
   const SgtpConfig({
     this.accountId,
+    required this.deviceId,
     required this.serverAddr,
     required this.roomUUID,
     required this.identityKeyPair,
@@ -44,6 +46,7 @@ class SgtpConfig {
 
   SgtpConfig copyWithRoomUUID(Uint8List roomUUID) => SgtpConfig(
         accountId: accountId,
+        deviceId: deviceId,
         serverAddr: serverAddr,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
@@ -63,6 +66,7 @@ class SgtpConfig {
 
   SgtpConfig copyWithMeta({String? name, Uint8List? avatar}) => SgtpConfig(
         accountId: accountId,
+        deviceId: deviceId,
         serverAddr: serverAddr,
         roomUUID: roomUUID,
         identityKeyPair: identityKeyPair,
@@ -87,6 +91,7 @@ class SgtpConfig {
   }) {
     return SgtpConfig(
       accountId: accountId,
+      deviceId: deviceId,
       serverAddr: serverAddr,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,
@@ -109,6 +114,7 @@ class SgtpConfig {
   SgtpConfig copyWith({
     String? serverAddr,
     String? accountId,
+    String? deviceId,
     int? mediaChunkSizeBytes,
     SgtpTransportFamily? transport,
     bool? useTls,
@@ -117,6 +123,7 @@ class SgtpConfig {
   }) {
     return SgtpConfig(
       accountId: accountId ?? this.accountId,
+      deviceId: deviceId ?? this.deviceId,
       serverAddr: serverAddr ?? this.serverAddr,
       roomUUID: roomUUID,
       identityKeyPair: identityKeyPair,

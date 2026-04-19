@@ -30,6 +30,7 @@ class SettingsAccountSnapshot {
     required this.nickname,
     required this.username,
     required this.avatar,
+    required this.deviceId,
     required this.privateKeyBytes,
     required this.privateKeyName,
     required this.publicKey,
@@ -39,6 +40,7 @@ class SettingsAccountSnapshot {
   final String nickname;
   final String username;
   final Uint8List? avatar;
+  final String deviceId;
   final Uint8List? privateKeyBytes;
   final String? privateKeyName;
   final Uint8List? publicKey;
@@ -88,6 +90,7 @@ class SettingsAppliedConfig {
     required this.accountId,
     required this.serverAddress,
     required this.config,
+    required this.deviceId,
     required this.nicknames,
     required this.contactEntries,
   });
@@ -95,6 +98,7 @@ class SettingsAppliedConfig {
   final String accountId;
   final String serverAddress;
   final SgtpConfig config;
+  final String deviceId;
   final Map<String, String> nicknames;
   final List<ContactEntry> contactEntries;
 }

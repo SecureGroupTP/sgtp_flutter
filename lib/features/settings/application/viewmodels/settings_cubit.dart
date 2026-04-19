@@ -51,6 +51,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String? _privateKeyPath;
   Uint8List? _privateKeyBytes;
   Uint8List? _myPublicKey;
+  String _deviceId = '';
   List<ContactEntry> _contactEntries = [];
   Uint8List? _userAvatar;
   String _nickname = '';
@@ -351,6 +352,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _username = snapshot.username;
     _usernameError = null;
     _userAvatar = snapshot.avatar;
+    _deviceId = snapshot.deviceId;
     _avatarsByNodeId[accountId] = snapshot.avatar;
     _nicknamesByNodeId[accountId] = snapshot.nickname;
     _privateKeyBytes = snapshot.privateKeyBytes;
@@ -394,6 +396,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       if (accountId == null || accountId.trim().isEmpty) return;
       final applied = _settings.buildAppliedConfig(
         accountId: accountId,
+        deviceId: _deviceId,
         privateKeyBytes: _privateKeyBytes!,
         nodes: _nodes,
         preferredNodeId: _preferredNodeId,

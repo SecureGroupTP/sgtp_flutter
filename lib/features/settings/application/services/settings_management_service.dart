@@ -47,6 +47,8 @@ class SettingsManagementService {
       _settings.loadUiInteractionSettings();
   Future<String> loadUserNicknameForNode(String accountId) =>
       _settings.loadUserNicknameForNode(accountId);
+  Future<String> loadOrCreateDeviceIdForNode(String accountId) =>
+      _settings.loadOrCreateDeviceIdForNode(accountId);
   Future<String> loadUserUsernameForNode(String accountId) =>
       _settings.loadUserUsernameForNode(accountId);
   Future<Uint8List?> loadUserAvatarForNode(String accountId) =>
@@ -86,6 +88,8 @@ class SettingsManagementService {
   Future<void> upsertNode(NodeConfig node) => _settings.upsertNode(node);
   Future<void> clearPrivateKeyForNode(String accountId) =>
       _settings.clearPrivateKeyForNode(accountId);
+  Future<void> clearDeviceIdForNode(String accountId) =>
+      _settings.clearDeviceIdForNode(accountId);
   Future<void> clearContactEntriesForNode(String accountId) =>
       _settings.clearContactEntriesForNode(accountId);
   Future<void> saveUserNicknameForNode(String accountId, String nickname) =>
@@ -209,6 +213,7 @@ class SettingsManagementService {
     final nickname = await _settings.loadUserNicknameForNode(accountId);
     final username = await _settings.loadUserUsernameForNode(accountId);
     final avatar = await _settings.loadUserAvatarForNode(accountId);
+    final deviceId = await _settings.loadOrCreateDeviceIdForNode(accountId);
     final savedKey = await _settings.loadPrivateKeyForNode(accountId);
 
     Uint8List? privateKeyBytes;
@@ -227,6 +232,7 @@ class SettingsManagementService {
       nickname: nickname,
       username: username,
       avatar: avatar,
+      deviceId: deviceId,
       privateKeyBytes: privateKeyBytes,
       privateKeyName: privateKeyName,
       publicKey: publicKey,
@@ -273,6 +279,7 @@ class SettingsManagementService {
       await _settings.upsertNode(node.copyWith(accountId: ''));
     }
     await _settings.clearPrivateKeyForNode(accountId);
+    await _settings.clearDeviceIdForNode(accountId);
     await _settings.clearContactEntriesForNode(accountId);
     await _settings.clearUserAvatarForNode(accountId);
     await _settings.saveUserNicknameForNode(accountId, '');
@@ -282,11 +289,13 @@ class SettingsManagementService {
 
   Future<void> addEmptyAccount(String accountId) async {
     await _settings.upsertAccountId(accountId);
+    await _settings.loadOrCreateDeviceIdForNode(accountId);
     await _settings.saveUserNicknameForNode(accountId, 'Account');
     await _settings.setLastAccountId(accountId);
   }
 
   Future<String?> registerProfileOnUserDir({
+    required String accountId,
     required NodeConfig node,
     required SgtpServerOptions options,
     required Uint8List privateKeyBytes,
@@ -300,6 +309,7 @@ class SettingsManagementService {
       final normalizedUsername = _normalizeUsername(username);
       final wireUsername =
           normalizedUsername == null ? '' : '@$normalizedUsername';
+      final deviceId = await _settings.loadOrCreateDeviceIdForNode(accountId);
 
       final client = _userDirClientFactory(node, options);
       if (client == null) {
@@ -313,6 +323,7 @@ class SettingsManagementService {
           pubkey: parsed.publicKey,
           avatarBytes: avatarBytes ?? Uint8List(0),
           identityKeyPair: keyPair,
+          deviceId: deviceId,
         );
         if (result.ok) return null;
         final msg = (result.errorMessage ?? '').trim();
@@ -517,6 +528,7 @@ class SettingsManagementService {
 
   SettingsAppliedConfig buildAppliedConfig({
     required String accountId,
+    required String deviceId,
     required Uint8List privateKeyBytes,
     required List<NodeConfig> nodes,
     required String? preferredNodeId,
@@ -545,8 +557,10 @@ class SettingsManagementService {
     return SettingsAppliedConfig(
       accountId: accountId,
       serverAddress: serverAddress,
+      deviceId: deviceId,
       config: SgtpConfig(
         accountId: accountId,
+        deviceId: deviceId,
         serverAddr: serverAddress,
         roomUUID: Uint8List(16),
         identityKeyPair: keyPair,

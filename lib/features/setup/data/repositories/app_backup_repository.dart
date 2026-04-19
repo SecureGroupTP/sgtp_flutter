@@ -31,6 +31,7 @@ class BackupRestoreSummary {
 
 class AppBackupRepository {
   static const int _schemaVersion = 1;
+  static const String _deviceIdKeyPrefix = 'sgtp_device_id_v1';
   static const List<String> _docsRoots = <String>[
     'sgtp',
     'sgtp_accounts',
@@ -44,6 +45,7 @@ class AppBackupRepository {
 
     final prefEntries = <Map<String, dynamic>>[];
     for (final key in prefs.getKeys().toList()..sort()) {
+      if (key.startsWith(_deviceIdKeyPrefix)) continue;
       final value = prefs.get(key);
       final encoded = _encodePrefEntry(key, value);
       if (encoded != null) prefEntries.add(encoded);
@@ -229,6 +231,7 @@ class AppBackupRepository {
     final value = entry['value'];
 
     if (key.isEmpty || type.isEmpty) return false;
+    if (key.startsWith(_deviceIdKeyPrefix)) return false;
 
     if (!merge || !prefs.containsKey(key)) {
       return _setPrefByType(prefs, key, type, value);

@@ -143,6 +143,7 @@ class HomeUserDirCoordinator {
         pubkey: session.config.myPublicKey,
         avatarBytes: session.userAvatar ?? Uint8List(0),
         identityKeyPair: session.config.identityKeyPair,
+        deviceId: session.config.deviceId,
       );
     }
 

@@ -36,6 +36,7 @@ abstract class IUserDirClient {
     required Uint8List pubkey,
     required Uint8List avatarBytes,
     required SimpleKeyPairData identityKeyPair,
+    String? deviceId,
   });
 
   // ── Profile lookup ───────────────────────────────────────────────────────

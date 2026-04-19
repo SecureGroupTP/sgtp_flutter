@@ -16,6 +16,7 @@ export 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_cl
 class UserDirClient implements IUserDirClient {
   final Future<SgtpRpcClient> Function() _rpcProvider;
   final bool _providerManagesConnection;
+  final String? _authDeviceId;
   @override
   final String label;
 
@@ -36,8 +37,10 @@ class UserDirClient implements IUserDirClient {
     required Future<SgtpRpcClient> Function() rpcProvider,
     required this.label,
     bool providerManagesConnection = false,
+    String? authDeviceId,
   })  : _rpcProvider = rpcProvider,
-        _providerManagesConnection = providerManagesConnection;
+        _providerManagesConnection = providerManagesConnection,
+        _authDeviceId = authDeviceId;
 
   // ── IUserDirClient ───────────────────────────────────────────────────────
 
@@ -74,10 +77,15 @@ class UserDirClient implements IUserDirClient {
     required Uint8List pubkey,
     required Uint8List avatarBytes,
     required SimpleKeyPairData identityKeyPair,
+    String? deviceId,
   }) async {
     try {
       final rpc = await _resolveRpcConnected();
-      final authError = await rpc.authenticate(pubkey, identityKeyPair);
+      final authError = await rpc.authenticate(
+        pubkey,
+        identityKeyPair,
+        deviceId: deviceId ?? _authDeviceId ?? 'flutter-client',
+      );
       if (authError != null) return (ok: false, errorMessage: authError);
 
       final req = UpdateProfileRequest(

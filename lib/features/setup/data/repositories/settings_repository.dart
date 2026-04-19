@@ -28,6 +28,7 @@ class SettingsRepository {
   static const _userAvatarB64Key = 'sgtp_user_avatar_b64';
   static const _userNicknameKey = 'sgtp_user_nickname';
   static const _userUsernameKey = 'sgtp_user_username';
+  static const _deviceIdKey = 'sgtp_device_id_v1';
 
   // Per-account scoping / migration
   static const _accountsMigratedV1Key = 'sgtp_accounts_migrated_v1';
@@ -567,6 +568,37 @@ class SettingsRepository {
     final p = await SharedPreferences.getInstance();
     await p.remove(_scopedKey(_privKeyB64Key, nodeId));
     await p.remove(_scopedKey(_privKeyNameKey, nodeId));
+  }
+
+  Future<String?> loadDeviceIdForNode(String accountId) async {
+    final p = await SharedPreferences.getInstance();
+    final value = p.getString(_scopedKey(_deviceIdKey, accountId))?.trim();
+    if (value == null || value.isEmpty) return null;
+    return value;
+  }
+
+  Future<void> saveDeviceIdForNode(String accountId, String deviceId) async {
+    final p = await SharedPreferences.getInstance();
+    final value = deviceId.trim();
+    final key = _scopedKey(_deviceIdKey, accountId);
+    if (value.isEmpty) {
+      await p.remove(key);
+      return;
+    }
+    await p.setString(key, value);
+  }
+
+  Future<String> loadOrCreateDeviceIdForNode(String accountId) async {
+    final existing = await loadDeviceIdForNode(accountId);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final generated = uuidBytesToHex(generateUUIDv7());
+    await saveDeviceIdForNode(accountId, generated);
+    return generated;
+  }
+
+  Future<void> clearDeviceIdForNode(String accountId) async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_scopedKey(_deviceIdKey, accountId));
   }
 
   // ── Contact entries ───────────────────────────────────────────────────────

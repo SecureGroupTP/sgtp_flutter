@@ -134,6 +134,7 @@ class OnboardingCubit extends Cubit<OnboardingViewState> {
       final username = _sanitizeUsername(rawUsername);
 
       await _settings.saveAddress(serverAddress);
+      await _settings.loadOrCreateDeviceIdForNode(accountId);
       await _settings.saveUserNicknameForNode(accountId, nick);
       await _settings.saveUserUsernameForNode(accountId, username);
       if (_avatarBytes != null && _avatarBytes!.isNotEmpty) {
