@@ -354,7 +354,7 @@ class SgtpConnectionService {
           .setImage(resolvedAvatar)
           .setTitle(fallbackName)
           .setSubtitle('Authentication successful')
-          .setDuration(const Duration(seconds: 6))
+          .setDesktopDuration(const Duration(seconds: 6))
           .show();
     } catch (e, st) {
       _log.warning(

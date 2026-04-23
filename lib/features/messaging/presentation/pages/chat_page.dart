@@ -1310,6 +1310,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // was still null.
             _sentReadReceipts.add(msg.id);
             bloc.add(ChatSendMessageRead(msg.id));
+            unawaited(_messageNotifications.dismissMessage(msg.id));
           } else {
             // App in background → show notification so the user can read it.
             final senderLabel = state.peerNicknames[msg.senderUUID] ??

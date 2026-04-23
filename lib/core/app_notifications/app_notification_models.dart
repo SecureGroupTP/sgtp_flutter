@@ -26,14 +26,16 @@ class AppNotificationRequest {
     this.title,
     this.subtitle,
     this.buttons = const <AppNotificationButton>[],
-    required this.duration,
+    this.desktopDuration,
+    this.mobileDuration,
   });
 
   final Uint8List? imageBytes;
   final String? title;
   final String? subtitle;
   final List<AppNotificationButton> buttons;
-  final Duration duration;
+  final Duration? desktopDuration;
+  final Duration? mobileDuration;
 }
 
 enum AppNotificationEventType {

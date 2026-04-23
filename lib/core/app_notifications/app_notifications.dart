@@ -24,7 +24,8 @@ class AppNotificationBuilder {
   Uint8List? _imageBytes;
   String? _title;
   String? _subtitle;
-  Duration _duration = const Duration(seconds: 5);
+  Duration? _desktopDuration;
+  Duration? _mobileDuration;
   final List<AppNotificationButton> _buttons = <AppNotificationButton>[];
 
   AppNotificationBuilder setImage(Uint8List? imageBytes) {
@@ -43,7 +44,18 @@ class AppNotificationBuilder {
   }
 
   AppNotificationBuilder setDuration(Duration duration) {
-    _duration = duration;
+    _desktopDuration = duration;
+    _mobileDuration = duration;
+    return this;
+  }
+
+  AppNotificationBuilder setDesktopDuration(Duration duration) {
+    _desktopDuration = duration;
+    return this;
+  }
+
+  AppNotificationBuilder setMobileDuration(Duration? duration) {
+    _mobileDuration = duration;
     return this;
   }
 
@@ -76,7 +88,8 @@ class AppNotificationBuilder {
         title: _title,
         subtitle: _subtitle,
         buttons: List<AppNotificationButton>.unmodifiable(_buttons),
-        duration: _duration,
+        desktopDuration: _desktopDuration,
+        mobileDuration: _mobileDuration,
       ),
     );
   }

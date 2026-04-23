@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -13,6 +14,9 @@ class MessageNotificationService {
   bool _lifecycleAttached = false;
   bool _appIsInteractive = true;
   String? _suppressedRoomId;
+  final Map<String, AppNotificationHandle> _handlesByMessageId =
+      <String, AppNotificationHandle>{};
+  final Map<String, Set<String>> _messageIdsByRoomId = <String, Set<String>>{};
 
   Future<void> showMessage({
     required String sender,
@@ -28,33 +32,95 @@ class MessageNotificationService {
       avatarBytes: avatarBytes,
       fallbackName: sender,
     );
-    await AppNotifications.instance
+    final handle = await AppNotifications.instance
         .builder()
         .setImage(resolvedAvatar)
         .setTitle(sender)
         .setSubtitle(body)
-        .setDuration(const Duration(seconds: 6))
+        .setDesktopDuration(const Duration(seconds: 6))
         .show();
+    final previousHandle = _handlesByMessageId[messageId];
+    _removeMessageIdFromRooms(messageId);
+    if (previousHandle != null) {
+      await previousHandle.dismiss();
+    }
+    _handlesByMessageId[messageId] = handle;
+    final normalizedRoomId = _normalizeRoomId(roomId);
+    if (normalizedRoomId != null) {
+      _messageIdsByRoomId
+          .putIfAbsent(normalizedRoomId, () => <String>{})
+          .add(messageId);
+    }
   }
 
   void setSuppressedRoomId(String? roomId) {
     _ensureLifecycleObserver();
-    final normalized = roomId?.trim();
-    _suppressedRoomId =
-        normalized == null || normalized.isEmpty ? null : normalized;
+    _suppressedRoomId = _normalizeRoomId(roomId);
+    if (_suppressedRoomId != null &&
+        !kIsWeb &&
+        _appIsInteractive) {
+      unawaited(dismissRoom(_suppressedRoomId!));
+    }
   }
 
-  Future<void> cancelAll() => AppNotifications.instance.dismissAll();
+  Future<void> dismissMessage(String messageId) async {
+    final handle = _handlesByMessageId.remove(messageId);
+    if (handle == null) {
+      return;
+    }
+    _removeMessageIdFromRooms(messageId);
+    await handle.dismiss();
+  }
+
+  Future<void> dismissRoom(String roomId) async {
+    final normalizedRoomId = _normalizeRoomId(roomId);
+    if (normalizedRoomId == null) {
+      return;
+    }
+    final messageIds = _messageIdsByRoomId.remove(normalizedRoomId);
+    if (messageIds == null || messageIds.isEmpty) {
+      return;
+    }
+    for (final messageId in messageIds) {
+      final handle = _handlesByMessageId.remove(messageId);
+      if (handle != null) {
+        await handle.dismiss();
+      }
+    }
+  }
+
+  Future<void> cancelAll() async {
+    _handlesByMessageId.clear();
+    _messageIdsByRoomId.clear();
+    await AppNotifications.instance.dismissAll();
+  }
 
   bool _shouldSuppressForRoom(String? roomId) {
     if (kIsWeb || !_appIsInteractive) {
       return false;
     }
-    final normalized = roomId?.trim();
-    if (normalized == null || normalized.isEmpty) {
+    final normalized = _normalizeRoomId(roomId);
+    if (normalized == null) {
       return false;
     }
     return normalized == _suppressedRoomId;
+  }
+
+  String? _normalizeRoomId(String? roomId) {
+    final normalized = roomId?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
+  }
+
+  void _removeMessageIdFromRooms(String messageId) {
+    for (final entry in _messageIdsByRoomId.entries.toList()) {
+      entry.value.remove(messageId);
+      if (entry.value.isEmpty) {
+        _messageIdsByRoomId.remove(entry.key);
+      }
+    }
   }
 
   void _ensureLifecycleObserver() {

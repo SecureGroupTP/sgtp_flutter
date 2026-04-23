@@ -7,6 +7,8 @@ class WindowsAppNotificationsBackend implements AppNotificationsBackend {
     _channel.setMethodCallHandler(_handleMethodCall);
   }
 
+  static const Duration _defaultDesktopDuration = Duration(seconds: 10);
+
   static const MethodChannel _channel = MethodChannel(
     'com.example.sgtp_flutter/app_notifications',
   );
@@ -23,7 +25,8 @@ class WindowsAppNotificationsBackend implements AppNotificationsBackend {
       'id': id,
       'title': request.title,
       'subtitle': request.subtitle,
-      'durationMs': request.duration.inMilliseconds,
+      'durationMs':
+          (request.desktopDuration ?? _defaultDesktopDuration).inMilliseconds,
       'imageBytes': request.imageBytes,
       'buttons': request.buttons
           .map(
