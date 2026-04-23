@@ -8,6 +8,9 @@ class UnsupportedAppNotificationsBackend implements AppNotificationsBackend {
   const UnsupportedAppNotificationsBackend();
 
   @override
+  void setEventListener(AppNotificationEventListener? listener) {}
+
+  @override
   Future<void> dismiss(String id) async {}
 
   @override

@@ -24,6 +24,7 @@ class AppNotificationManager {
                                   LPARAM lparam);
 
  private:
+  struct NotificationButton;
   struct NotificationItem;
 
   void HandleMethodCall(
@@ -38,10 +39,14 @@ class AppNotificationManager {
   void RenderWindow();
   void UpdateWindowBounds();
   void RemoveExpiredNotifications();
+  void BeginDismiss(NotificationItem* item);
+  void DispatchDismissed(const std::string& id);
+  void DispatchActionInvoked(const std::string& id, int button_index);
   LRESULT HandleWindowMessage(HWND hwnd,
                               UINT message,
                               WPARAM wparam,
                               LPARAM lparam);
+  void HandlePointerUp(POINT point);
 
   HWND window_ = nullptr;
   UINT current_dpi_ = 96;

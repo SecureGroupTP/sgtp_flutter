@@ -15,7 +15,15 @@ class MobileAppNotificationsBackend implements AppNotificationsBackend {
   bool _initialized = false;
 
   @override
+  void setEventListener(AppNotificationEventListener? listener) {}
+
+  @override
   Future<void> show(String id, AppNotificationRequest request) async {
+    if (request.buttons.isNotEmpty) {
+      throw UnsupportedError(
+        'AppNotification buttons are not implemented for Android/iOS backends yet.',
+      );
+    }
     await _ensureInitialized();
     await _plugin.show(
       _notificationIntId(id),
