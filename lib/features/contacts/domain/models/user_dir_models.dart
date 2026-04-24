@@ -1,10 +1,18 @@
 import 'dart:typed_data';
 
 class UserDirFriendStatus {
+  static const int none = 0;
   static const int pendingOutgoing = 1;
   static const int pendingIncoming = 2;
   static const int friend = 3;
   static const int rejected = 4;
+}
+
+class UserDirFriendEventType {
+  static const int requestReceived = 1;
+  static const int requestAccepted = 2;
+  static const int requestDeclined = 3;
+  static const int requestCanceled = 4;
 }
 
 class UserDirFriendState {
@@ -29,20 +37,27 @@ class UserDirFriendState {
 }
 
 class UserDirFriendNotify {
-  final int eventType; // 1=request created, 2=request answered, 3=dm ready
+  final int eventType;
   final int status;
-  final Uint8List actorPubkey;
+  final Uint8List? peerPubkey;
+  final Uint8List? requestId;
   final Uint8List? roomUUID;
 
   const UserDirFriendNotify({
     required this.eventType,
     required this.status,
-    required this.actorPubkey,
+    this.peerPubkey,
+    this.requestId,
     this.roomUUID,
   });
 
-  String get actorPubkeyHex =>
-      actorPubkey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  String? get peerPubkeyHex => peerPubkey == null
+      ? null
+      : peerPubkey!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  String? get requestIdHex => requestId == null
+      ? null
+      : requestId!.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
 /// Lightweight profile metadata.

@@ -9,6 +9,7 @@ import 'package:sgtp_flutter/core/network/rpc_models/profile_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/friend_request_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/rpc_enums.dart';
+import 'package:sgtp_flutter/core/network/rpc_models/rpc_request.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 
 export 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
@@ -30,6 +31,11 @@ class UserDirClient implements IUserDirClient {
 
   /// Cache of pending incoming friend requests: senderPubkeyHex → requestId.
   final Map<String, Uint8List> _incomingRequestIds = {};
+  final Map<String, String> _incomingPeersByRequestId = <String, String>{};
+  final Map<String, Uint8List> _outgoingRequestIds = {};
+  final Map<String, String> _outgoingPeersByRequestId = <String, String>{};
+  void Function()? _removeEventsCallback;
+  SgtpRpcClient? _eventsRpc;
 
   final _log = AppLog('UserDirClient');
 
@@ -38,9 +44,9 @@ class UserDirClient implements IUserDirClient {
     required this.label,
     bool providerManagesConnection = false,
     String? authDeviceId,
-  })  : _rpcProvider = rpcProvider,
-        _providerManagesConnection = providerManagesConnection,
-        _authDeviceId = authDeviceId;
+  }) : _rpcProvider = rpcProvider,
+       _providerManagesConnection = providerManagesConnection,
+       _authDeviceId = authDeviceId;
 
   // ── IUserDirClient ───────────────────────────────────────────────────────
 
@@ -65,6 +71,9 @@ class UserDirClient implements IUserDirClient {
   @override
   void close() {
     _connected = false;
+    _removeEventsCallback?.call();
+    _removeEventsCallback = null;
+    _eventsRpc = null;
     _rpc = null;
   }
 
@@ -94,12 +103,16 @@ class UserDirClient implements IUserDirClient {
       );
       final raw = await rpc.callRpc(req);
       UpdateProfileResponse.fromMap(raw);
-      _log.debug('Profile updated for {pubkey}',
-          parameters: {'pubkey': _hexShort(pubkey)});
+      _log.debug(
+        'Profile updated for {pubkey}',
+        parameters: {'pubkey': _hexShort(pubkey)},
+      );
       return (ok: true, errorMessage: null);
     } catch (e) {
-      _log.error('registerWithResult failed: {error}',
-          parameters: {'error': e});
+      _log.error(
+        'registerWithResult failed: {error}',
+        parameters: {'error': e},
+      );
       return (ok: false, errorMessage: e.toString());
     }
   }
@@ -113,8 +126,10 @@ class UserDirClient implements IUserDirClient {
       final res = GetProfileResponse.fromMap(raw);
       return _profileToMeta(res.profile);
     } catch (e) {
-      _log.warning('getMeta failed for {pubkey}: {error}',
-          parameters: {'pubkey': _hexShort(pubkey), 'error': e});
+      _log.warning(
+        'getMeta failed for {pubkey}: {error}',
+        parameters: {'pubkey': _hexShort(pubkey), 'error': e},
+      );
       return null;
     }
   }
@@ -145,8 +160,10 @@ class UserDirClient implements IUserDirClient {
         avatarBytes: avatarBytes,
       );
     } catch (e) {
-      _log.warning('getProfile failed for {pubkey}: {error}',
-          parameters: {'pubkey': _hexShort(pubkey), 'error': e});
+      _log.warning(
+        'getProfile failed for {pubkey}: {error}',
+        parameters: {'pubkey': _hexShort(pubkey), 'error': e},
+      );
       return null;
     }
   }
@@ -160,8 +177,10 @@ class UserDirClient implements IUserDirClient {
       final res = SearchProfilesResponse.fromMap(raw);
       return res.items.map(_searchItemToMeta).toList();
     } catch (e) {
-      _log.warning('search failed for "{query}": {error}',
-          parameters: {'query': query, 'error': e});
+      _log.warning(
+        'search failed for "{query}": {error}',
+        parameters: {'query': query, 'error': e},
+      );
       return [];
     }
   }
@@ -170,6 +189,7 @@ class UserDirClient implements IUserDirClient {
   Future<bool> subscribe(List<Uint8List> pubkeys) async {
     try {
       final rpc = await _resolveRpcConnected();
+      _ensureEventsCallbackAttached(rpc);
       await rpc.ensureEventsSubscribed(
         requestedAtUs: DateTime.now().microsecondsSinceEpoch,
       );
@@ -191,11 +211,15 @@ class UserDirClient implements IUserDirClient {
     try {
       final rpc = await _resolveRpcConnected();
       final req = SendFriendRequestRequest(receiverPublicKey: peerPubkey);
-      await rpc.callRpc(req);
+      final raw = await rpc.callRpc(req);
+      final response = SendFriendRequestResponse.fromMap(raw);
+      _rememberOutgoingRequest(peerPubkey, response.requestId);
       return true;
     } catch (e) {
-      _log.warning('sendFriendRequest failed: {error}',
-          parameters: {'error': e});
+      _log.warning(
+        'sendFriendRequest failed: {error}',
+        parameters: {'error': e},
+      );
       return false;
     }
   }
@@ -212,8 +236,9 @@ class UserDirClient implements IUserDirClient {
 
     if (requestId == null) {
       _log.warning(
-          'sendFriendResponse: no cached requestId for {requester} — syncing',
-          parameters: {'requester': requesterHex});
+        'sendFriendResponse: no cached requestId for {requester} — syncing',
+        parameters: {'requester': requesterHex},
+      );
       await friendSync(myPubkey: myPubkey, identityKeyPair: identityKeyPair);
       requestId = _incomingRequestIds[requesterHex];
     }
@@ -234,10 +259,13 @@ class UserDirClient implements IUserDirClient {
       } else {
         await rpc.callRpc(DeclineFriendRequestRequest(requestId: requestId));
       }
+      _forgetIncomingRequestById(requestId);
       return true;
     } catch (e) {
-      _log.warning('friendResponse(accept={accept}) failed: {error}',
-          parameters: {'accept': accept, 'error': e});
+      _log.warning(
+        'friendResponse(accept={accept}) failed: {error}',
+        parameters: {'accept': accept, 'error': e},
+      );
       return false;
     }
   }
@@ -254,8 +282,10 @@ class UserDirClient implements IUserDirClient {
       await rpc.callRpc(req);
       return true;
     } catch (e) {
-      _log.warning('sendFriendDelete failed: {error}',
-          parameters: {'error': e});
+      _log.warning(
+        'sendFriendDelete failed: {error}',
+        parameters: {'error': e},
+      );
       return false;
     }
   }
@@ -284,13 +314,16 @@ class UserDirClient implements IUserDirClient {
       final reqRes = ListFriendRequestsResponse.fromMap(reqRaw);
       final myHex = _pubkeyHex(myPubkey);
 
+      _outgoingRequestIds.clear();
+      _incomingPeersByRequestId.clear();
+      _outgoingPeersByRequestId.clear();
       for (final item in reqRes.items) {
         if (item.state != FriendRequestStateEnum.pending) continue;
         final senderHex = _pubkeyHex(item.senderPublicKey);
         final receiverHex = _pubkeyHex(item.receiverPublicKey);
 
         if (receiverHex == myHex) {
-          _incomingRequestIds[senderHex] = item.requestId;
+          _rememberIncomingRequest(item.senderPublicKey, item.requestId);
           states.putIfAbsent(
             senderHex,
             () => UserDirFriendState(
@@ -299,6 +332,7 @@ class UserDirClient implements IUserDirClient {
             ),
           );
         } else if (senderHex == myHex) {
+          _rememberOutgoingRequest(item.receiverPublicKey, item.requestId);
           states.putIfAbsent(
             receiverHex,
             () => UserDirFriendState(
@@ -319,23 +353,22 @@ class UserDirClient implements IUserDirClient {
   // ── Private helpers ──────────────────────────────────────────────────────
 
   static UserDirMeta _profileToMeta(ProfileData p) => UserDirMeta(
-        pubkey: p.publicKey,
-        username: p.username,
-        fullname:
-            (p.displayName?.isNotEmpty == true) ? p.displayName! : p.username,
-        avatarSha256: Uint8List(0),
-        updatedAt: p.lastSeenAtUs ~/ 1000000,
-      );
+    pubkey: p.publicKey,
+    username: p.username,
+    fullname: (p.displayName?.isNotEmpty == true) ? p.displayName! : p.username,
+    avatarSha256: Uint8List(0),
+    updatedAt: p.lastSeenAtUs ~/ 1000000,
+  );
 
   static UserDirMeta _searchItemToMeta(ProfileSearchItem item) => UserDirMeta(
-        pubkey: item.publicKey,
-        username: item.username,
-        fullname: (item.displayName?.isNotEmpty == true)
-            ? item.displayName!
-            : item.username,
-        avatarSha256: Uint8List(0),
-        updatedAt: 0,
-      );
+    pubkey: item.publicKey,
+    username: item.username,
+    fullname: (item.displayName?.isNotEmpty == true)
+        ? item.displayName!
+        : item.username,
+    avatarSha256: Uint8List(0),
+    updatedAt: 0,
+  );
 
   static String _pubkeyHex(Uint8List key) =>
       key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -354,11 +387,218 @@ class UserDirClient implements IUserDirClient {
     final rpc = await _resolveRpc();
     if (!rpc.transport.isConnected) {
       if (_providerManagesConnection) {
+        _removeEventsCallback?.call();
+        _removeEventsCallback = null;
+        _eventsRpc = null;
         _rpc = null;
-        return _resolveRpc();
+        final refreshed = await _resolveRpc();
+        _ensureEventsCallbackAttached(refreshed);
+        return refreshed;
       }
       await rpc.transport.connect();
     }
+    _ensureEventsCallbackAttached(rpc);
     return rpc;
+  }
+
+  void _ensureEventsCallbackAttached(SgtpRpcClient rpc) {
+    if (identical(_eventsRpc, rpc) && _removeEventsCallback != null) {
+      return;
+    }
+    _removeEventsCallback?.call();
+    _removeEventsCallback = rpc.registerEventsCallback(_handleServerEvent);
+    _eventsRpc = rpc;
+  }
+
+  void _handleServerEvent(Map<String, dynamic> event) {
+    final eventType = event['eventType'] as String?;
+    final parameters = event['parameters'];
+    if (eventType == null || parameters is! Map<String, dynamic>) {
+      return;
+    }
+
+    switch (eventType) {
+      case 'profile.updated':
+        final meta = _tryParseProfileUpdate(parameters);
+        if (meta != null) {
+          _notifyCtrl.add(meta);
+        }
+        break;
+      case 'friend.requestReceived':
+        final requestId = _parseUuidBytes(parameters['requestId']);
+        final senderPublicKey = _parseBytes(parameters['senderPublicKey']);
+        if (requestId == null || senderPublicKey == null) {
+          return;
+        }
+        _rememberIncomingRequest(senderPublicKey, requestId);
+        _friendNotifyCtrl.add(
+          UserDirFriendNotify(
+            eventType: UserDirFriendEventType.requestReceived,
+            status: UserDirFriendStatus.pendingIncoming,
+            peerPubkey: senderPublicKey,
+            requestId: requestId,
+          ),
+        );
+        break;
+      case 'friend.requestAccepted':
+        final requestId = _parseUuidBytes(parameters['requestId']);
+        final friendPublicKey = _parseBytes(parameters['friendPublicKey']);
+        if (friendPublicKey == null) {
+          return;
+        }
+        if (requestId != null) {
+          _forgetOutgoingRequestById(requestId);
+        } else {
+          _outgoingRequestIds.remove(_pubkeyHex(friendPublicKey));
+        }
+        _friendNotifyCtrl.add(
+          UserDirFriendNotify(
+            eventType: UserDirFriendEventType.requestAccepted,
+            status: UserDirFriendStatus.friend,
+            peerPubkey: friendPublicKey,
+            requestId: requestId,
+          ),
+        );
+        break;
+      case 'friend.requestDeclined':
+        final requestId = _parseUuidBytes(parameters['requestId']);
+        final peerPubkey = requestId == null
+            ? null
+            : _lookupOutgoingPeerPublicKeyByRequestId(requestId);
+        if (requestId != null) {
+          _forgetOutgoingRequestById(requestId);
+        }
+        _friendNotifyCtrl.add(
+          UserDirFriendNotify(
+            eventType: UserDirFriendEventType.requestDeclined,
+            status: UserDirFriendStatus.rejected,
+            peerPubkey: peerPubkey,
+            requestId: requestId,
+          ),
+        );
+        break;
+      case 'friend.requestCanceled':
+        final requestId = _parseUuidBytes(parameters['requestId']);
+        final peerPubkey = requestId == null
+            ? null
+            : _lookupIncomingPeerPublicKeyByRequestId(requestId);
+        if (requestId != null) {
+          _forgetIncomingRequestById(requestId);
+        }
+        _friendNotifyCtrl.add(
+          UserDirFriendNotify(
+            eventType: UserDirFriendEventType.requestCanceled,
+            status: UserDirFriendStatus.none,
+            peerPubkey: peerPubkey,
+            requestId: requestId,
+          ),
+        );
+        break;
+    }
+  }
+
+  UserDirMeta? _tryParseProfileUpdate(Map<String, dynamic> parameters) {
+    final publicKey = _parseBytes(parameters['userPublicKey']);
+    if (publicKey == null) {
+      return null;
+    }
+    final username = (parameters['username'] as String? ?? '').trim();
+    final displayName = (parameters['displayName'] as String? ?? '').trim();
+    final updatedAt = parseTimestampUs(parameters['updatedAt']) ~/ 1000000;
+    return UserDirMeta(
+      pubkey: publicKey,
+      username: username,
+      fullname: displayName.isNotEmpty
+          ? displayName
+          : (username.isNotEmpty ? username : 'Account'),
+      avatarSha256: Uint8List(0),
+      updatedAt: updatedAt,
+    );
+  }
+
+  void _rememberIncomingRequest(Uint8List peerPubkey, Uint8List requestId) {
+    final peerHex = _pubkeyHex(peerPubkey);
+    final requestHex = _uuidHex(requestId);
+    _incomingRequestIds[peerHex] = Uint8List.fromList(requestId);
+    _incomingPeersByRequestId[requestHex] = peerHex;
+  }
+
+  void _rememberOutgoingRequest(Uint8List peerPubkey, Uint8List requestId) {
+    final peerHex = _pubkeyHex(peerPubkey);
+    final requestHex = _uuidHex(requestId);
+    _outgoingRequestIds[peerHex] = Uint8List.fromList(requestId);
+    _outgoingPeersByRequestId[requestHex] = peerHex;
+  }
+
+  void _forgetIncomingRequestById(Uint8List requestId) {
+    final requestHex = _uuidHex(requestId);
+    final peerHex = _incomingPeersByRequestId.remove(requestHex);
+    if (peerHex != null) {
+      _incomingRequestIds.remove(peerHex);
+    }
+  }
+
+  void _forgetOutgoingRequestById(Uint8List requestId) {
+    final requestHex = _uuidHex(requestId);
+    final peerHex = _outgoingPeersByRequestId.remove(requestHex);
+    if (peerHex != null) {
+      _outgoingRequestIds.remove(peerHex);
+    }
+  }
+
+  Uint8List? _lookupIncomingPeerPublicKeyByRequestId(Uint8List requestId) {
+    final peerHex = _incomingPeersByRequestId[_uuidHex(requestId)];
+    if (peerHex == null) {
+      return null;
+    }
+    return _hexToBytes(peerHex);
+  }
+
+  Uint8List? _lookupOutgoingPeerPublicKeyByRequestId(Uint8List requestId) {
+    final peerHex = _outgoingPeersByRequestId[_uuidHex(requestId)];
+    if (peerHex == null) {
+      return null;
+    }
+    return _hexToBytes(peerHex);
+  }
+
+  static Uint8List? _parseBytes(dynamic value) {
+    if (value is Uint8List) {
+      return Uint8List.fromList(value);
+    }
+    if (value is List<int>) {
+      return Uint8List.fromList(value);
+    }
+    if (value is String) {
+      final normalized = value.trim().replaceAll('-', '');
+      if (normalized.isEmpty || normalized.length.isOdd) {
+        return null;
+      }
+      try {
+        return _hexToBytes(normalized);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  static Uint8List? _parseUuidBytes(dynamic value) {
+    final bytes = _parseBytes(value);
+    if (bytes == null || bytes.length != 16) {
+      return null;
+    }
+    return bytes;
+  }
+
+  static String _uuidHex(Uint8List bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  static Uint8List _hexToBytes(String hex) {
+    final out = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < hex.length; i += 2) {
+      out[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
+    }
+    return out;
   }
 }

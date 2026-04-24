@@ -608,9 +608,9 @@ class HomeUserDirCoordinator {
           (_) => _handleNotify(session, meta, client),
         );
       });
-      _friendDirSub = client.friendNotifyStream.listen((_) {
+      _friendDirSub = client.friendNotifyStream.listen((event) {
         _notifyQueue = _notifyQueue.then(
-          (_) => _syncFriendStates(session, client),
+          (_) => _handleFriendNotify(session, event, client),
         );
       });
       _profileRegisterTimer?.cancel();
@@ -718,6 +718,103 @@ class HomeUserDirCoordinator {
     // contact, upgrade it once profile metadata becomes available.
     await _ensureContactForPeer(session, meta.pubkeyHex);
     _emit();
+  }
+
+  Future<void> _handleFriendNotify(
+    HomeUserDirSession session,
+    UserDirFriendNotify event,
+    IUserDirClient client,
+  ) async {
+    if (!_isCurrentSession(session)) return;
+
+    final peerHex = event.peerPubkeyHex?.toLowerCase();
+    if (peerHex == null || peerHex.isEmpty) {
+      await _syncFriendStates(session, client);
+      return;
+    }
+
+    final previousStates = Map<String, FriendStateRecord>.from(_friendStates);
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final existing = _friendStates[peerHex];
+
+    switch (event.eventType) {
+      case UserDirFriendEventType.requestReceived:
+        await _refreshProfileForPeer(session, peerHex, client);
+        _friendStates = {
+          ..._friendStates,
+          peerHex: FriendStateRecord(
+            peerPubkeyHex: peerHex,
+            status: FriendStatus.pendingIncoming.name,
+            roomUUIDHex: existing?.roomUUIDHex,
+            updatedAt: now,
+          ),
+        };
+        break;
+      case UserDirFriendEventType.requestAccepted:
+        await _refreshProfileForPeer(session, peerHex, client);
+        await _ensureContactForPeer(session, peerHex);
+        _friendStates = {
+          ..._friendStates,
+          peerHex: FriendStateRecord(
+            peerPubkeyHex: peerHex,
+            status: FriendStatus.friend.name,
+            roomUUIDHex: existing?.roomUUIDHex,
+            updatedAt: now,
+          ),
+        };
+        break;
+      case UserDirFriendEventType.requestDeclined:
+        _friendStates = {
+          ..._friendStates,
+          peerHex: FriendStateRecord(
+            peerPubkeyHex: peerHex,
+            status: FriendStatus.rejected.name,
+            roomUUIDHex: existing?.roomUUIDHex,
+            updatedAt: now,
+          ),
+        };
+        break;
+      case UserDirFriendEventType.requestCanceled:
+        final nextStates = Map<String, FriendStateRecord>.from(_friendStates);
+        nextStates.remove(peerHex);
+        _friendStates = nextStates;
+        break;
+      default:
+        await _syncFriendStates(session, client);
+        return;
+    }
+
+    if (!_isCurrentSession(session)) return;
+    await _persistence.saveFriendStates(session.accountId, _friendStates);
+    await _persistence.saveContactEntries(session.accountId, _contacts);
+    await _syncFriendRequestNotifications(session, previousStates);
+    _emit();
+  }
+
+  Future<void> _refreshProfileForPeer(
+    HomeUserDirSession session,
+    String peerHex,
+    IUserDirClient client,
+  ) async {
+    try {
+      final meta = await client.getMeta(_support.hexToBytes32(peerHex));
+      if (meta == null) {
+        return;
+      }
+      final cached = _contactProfiles[peerHex];
+      _contactProfiles[peerHex] = ContactProfile(
+        pubkeyHex: peerHex,
+        username: meta.username,
+        fullname: meta.fullname,
+        avatarBytes: cached?.avatarBytes,
+        avatarSha256Hex: cached?.avatarSha256Hex ?? '',
+        updatedAt: meta.updatedAt,
+      );
+      await _persistence.saveContactProfile(
+        session.accountId,
+        _contactProfiles[peerHex]!,
+      );
+    } catch (_) {}
   }
 
   void _emit() {
