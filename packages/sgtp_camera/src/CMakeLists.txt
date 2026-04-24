@@ -64,6 +64,9 @@ elseif(WIN32)
   # The official GStreamer installer always sets this variable.
   list(APPEND SGTP_CAMERA_SOURCES sgtp_camera.c)
   set(GST_WIN_ROOT "$ENV{GSTREAMER_1_0_ROOT_MSVC_X86_64}")
+  if(GST_WIN_ROOT)
+    file(TO_CMAKE_PATH "${GST_WIN_ROOT}" GST_WIN_ROOT)
+  endif()
   if(NOT GST_WIN_ROOT)
     # Common fallback paths
     foreach(_p
@@ -126,8 +129,16 @@ elseif(WIN32)
   )
 
   list(REMOVE_DUPLICATES SGTP_CAMERA_WINDOWS_BUNDLED_FILES)
+  list(FILTER SGTP_CAMERA_WINDOWS_BUNDLED_FILES INCLUDE REGEX ".+")
+  set(_sgtp_camera_windows_bundled_files_normalized)
+  foreach(_bundled_file IN LISTS SGTP_CAMERA_WINDOWS_BUNDLED_FILES)
+    file(TO_CMAKE_PATH "${_bundled_file}" _bundled_file_normalized)
+    list(APPEND _sgtp_camera_windows_bundled_files_normalized
+      "${_bundled_file_normalized}"
+    )
+  endforeach()
   set(SGTP_CAMERA_WINDOWS_BUNDLED_FILES
-    "${SGTP_CAMERA_WINDOWS_BUNDLED_FILES}"
+    ${_sgtp_camera_windows_bundled_files_normalized}
     PARENT_SCOPE
   )
 

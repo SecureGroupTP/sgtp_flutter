@@ -9,6 +9,11 @@ set(BINARY_NAME "sgtp_flutter")
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
+if(POLICY CMP0175)
+  # Some third-party Flutter plugins still use legacy add_custom_command()
+  # syntax that newer CMake warns about on Windows.
+  cmake_policy(SET CMP0175 OLD)
+endif()
 
 # Define build configuration option.
 get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -31,6 +36,7 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 # Compilation settings that should be applied to most targets.
 #
@@ -81,17 +87,35 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
+set(_plugin_bundled_libraries_normalized)
+foreach(_bundled_library IN LISTS PLUGIN_BUNDLED_LIBRARIES)
+  if(_bundled_library MATCHES "^\\$<")
+    list(APPEND _plugin_bundled_libraries_normalized "${_bundled_library}")
+  else()
+    file(TO_CMAKE_PATH "${_bundled_library}" _bundled_library_normalized)
+    list(APPEND _plugin_bundled_libraries_normalized
+      "${_bundled_library_normalized}"
+    )
+  endif()
+endforeach()
+set(PLUGIN_BUNDLED_LIBRARIES
+  ${_plugin_bundled_libraries_normalized}
+)
+
 if(PLUGIN_BUNDLED_LIBRARIES)
   install(FILES "${PLUGIN_BUNDLED_LIBRARIES}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
-    COMPONENT Runtime)
+    COMPONENT Runtime
+    OPTIONAL)
 endif()
 
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
-install(DIRECTORY "${NATIVE_ASSETS_DIR}"
-   DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
-   COMPONENT Runtime)
+if(EXISTS "${NATIVE_ASSETS_DIR}")
+  install(DIRECTORY "${NATIVE_ASSETS_DIR}"
+     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+     COMPONENT Runtime)
+endif()
 
 # Fully re-copy the assets directory on each build to avoid having stale files
 # from a previous install.
