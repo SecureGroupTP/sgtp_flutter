@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/constants.dart';
+import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
@@ -34,6 +35,7 @@ class SettingsViewState {
     this.preferredNodeId,
     this.preferredAccountId,
     this.standaloneServerAddress = '',
+    this.localEncryptionState = const LocalEncryptionState.disabled(),
   });
 
   final String? privateKeyPath;
@@ -68,10 +70,10 @@ class SettingsViewState {
   final String? preferredNodeId;
   final String? preferredAccountId;
   final String standaloneServerAddress;
+  final LocalEncryptionState localEncryptionState;
 
   String? get activeAccountId {
     final id = (preferredAccountId ?? '').trim();
     return id.isEmpty ? null : id;
   }
 }
-

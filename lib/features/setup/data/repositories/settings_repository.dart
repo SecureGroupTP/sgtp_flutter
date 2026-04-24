@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sgtp_flutter/core/storage/account_storage_paths.dart';
+import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/storage/main_database.dart';
 import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
 import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
@@ -16,19 +17,42 @@ import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 /// Repository for persisting user settings between sessions.
 class SettingsRepository {
-  SettingsRepository({
+  factory SettingsRepository({
     AccountStoragePaths? accountStoragePaths,
     StorageKeyService? storageKeyService,
+    LocalEncryptionService? localEncryptionService,
     MainDatabaseFactory? mainDatabaseFactory,
-  })  : _accountStoragePaths =
-            accountStoragePaths ?? createAccountStoragePaths(),
-        _storageKeyService = storageKeyService ?? StorageKeyService(),
-        _mainDatabaseFactory = mainDatabaseFactory ??
-            MainDatabaseFactory(
-              accountStoragePaths:
-                  accountStoragePaths ?? createAccountStoragePaths(),
-              storageKeyService: storageKeyService ?? StorageKeyService(),
-            );
+  }) {
+    final resolvedAccountStoragePaths =
+        accountStoragePaths ?? createAccountStoragePaths();
+    final resolvedLocalEncryptionService =
+        localEncryptionService ?? LocalEncryptionService();
+    final resolvedStorageKeyService = storageKeyService ??
+        StorageKeyService(
+          localEncryptionService: resolvedLocalEncryptionService,
+        );
+    final resolvedMainDatabaseFactory = mainDatabaseFactory ??
+        MainDatabaseFactory(
+          accountStoragePaths: resolvedAccountStoragePaths,
+          storageKeyService: resolvedStorageKeyService,
+        );
+    return SettingsRepository._(
+      accountStoragePaths: resolvedAccountStoragePaths,
+      localEncryptionService: resolvedLocalEncryptionService,
+      storageKeyService: resolvedStorageKeyService,
+      mainDatabaseFactory: resolvedMainDatabaseFactory,
+    );
+  }
+
+  SettingsRepository._({
+    required AccountStoragePaths accountStoragePaths,
+    required LocalEncryptionService localEncryptionService,
+    required StorageKeyService storageKeyService,
+    required MainDatabaseFactory mainDatabaseFactory,
+  })  : _accountStoragePaths = accountStoragePaths,
+        _localEncryptionService = localEncryptionService,
+        _storageKeyService = storageKeyService,
+        _mainDatabaseFactory = mainDatabaseFactory;
 
   static const _savedAddressesKey = 'sgtp_saved_addresses';
   static const _lastAddressKey = 'sgtp_last_address';
@@ -72,6 +96,7 @@ class SettingsRepository {
   static const int _maxSaved = 10;
 
   final AccountStoragePaths _accountStoragePaths;
+  final LocalEncryptionService _localEncryptionService;
   final StorageKeyService _storageKeyService;
   final MainDatabaseFactory _mainDatabaseFactory;
 
@@ -122,6 +147,7 @@ class SettingsRepository {
   Future<void> deleteAccountStorage(String accountId) async {
     await _mainDatabaseFactory.deleteAccount(accountId);
     await _storageKeyService.deleteAccountKey(accountId);
+    await _localEncryptionService.deleteAccount(accountId);
   }
 
   // ── Shared sgtp directory ──────────────────────────────────────────────────
@@ -155,6 +181,7 @@ class SettingsRepository {
     await _mainDatabaseFactory.clearAll();
     await _accountStoragePaths.clearAll();
     await _storageKeyService.clearAll();
+    await _localEncryptionService.clearAll();
 
     final docsDir = await getApplicationDocumentsDirectory();
     final folders = <Directory>[
@@ -609,6 +636,19 @@ class SettingsRepository {
 
   Future<void> savePrivateKeyForNode(
       String nodeId, Uint8List bytes, String name) async {
+    if (await _localEncryptionService.isEnabled()) {
+      await _localEncryptionService.saveProtectedPrivateKey(nodeId, bytes, name);
+      await _removePlainPrivateKeyForNode(nodeId);
+      return;
+    }
+    await _savePlainPrivateKeyForNode(nodeId, bytes, name);
+  }
+
+  Future<void> _savePlainPrivateKeyForNode(
+    String nodeId,
+    Uint8List bytes,
+    String name,
+  ) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_scopedKey(_privKeyB64Key, nodeId), base64.encode(bytes));
     await p.setString(_scopedKey(_privKeyNameKey, nodeId), name);
@@ -624,6 +664,15 @@ class SettingsRepository {
 
   Future<({Uint8List bytes, String name})?> loadPrivateKeyForNode(
       String nodeId) async {
+    if (await _localEncryptionService.isEnabled()) {
+      return _localEncryptionService.loadProtectedPrivateKey(nodeId);
+    }
+    return _loadPlainPrivateKeyForNode(nodeId);
+  }
+
+  Future<({Uint8List bytes, String name})?> _loadPlainPrivateKeyForNode(
+    String nodeId,
+  ) async {
     final p = await SharedPreferences.getInstance();
     final b64 = p.getString(_scopedKey(_privKeyB64Key, nodeId));
     final name = p.getString(_scopedKey(_privKeyNameKey, nodeId)) ?? 'identity';
@@ -636,6 +685,11 @@ class SettingsRepository {
   }
 
   Future<void> clearPrivateKeyForNode(String nodeId) async {
+    await _removePlainPrivateKeyForNode(nodeId);
+    await _localEncryptionService.deleteProtectedPrivateKey(nodeId);
+  }
+
+  Future<void> _removePlainPrivateKeyForNode(String nodeId) async {
     final p = await SharedPreferences.getInstance();
     await p.remove(_scopedKey(_privKeyB64Key, nodeId));
     await p.remove(_scopedKey(_privKeyNameKey, nodeId));
@@ -648,6 +702,87 @@ class SettingsRepository {
         await file.delete();
       }
     } catch (_) {}
+  }
+
+  Future<LocalEncryptionState> loadLocalEncryptionState() =>
+      _localEncryptionService.loadState();
+
+  Future<void> unlockLocalEncryption(String secret) =>
+      _localEncryptionService.unlock(secret);
+
+  Future<void> lockLocalEncryption() => _localEncryptionService.lock();
+
+  Future<void> enableLocalEncryption({
+    required String? currentAccountId,
+    required String secret,
+    required LocalEncryptionSecretMode mode,
+  }) async {
+    final candidateIds = <String>{
+      ...await loadAccountIds(),
+      if ((currentAccountId ?? '').trim().isNotEmpty) currentAccountId!.trim(),
+      ((await loadLastAccountId()) ?? '').trim(),
+      'default',
+    }..removeWhere((value) => value.trim().isEmpty);
+
+    final storageKeys = <String, Uint8List>{};
+    for (final accountId in candidateIds) {
+      final key = await _storageKeyService.loadPlaintextAccountKey(accountId);
+      if (key != null && key.length == 32) {
+        storageKeys[accountId] = key;
+      }
+    }
+
+    final privateKeys =
+        <String, ({Uint8List bytes, String name})>{};
+    for (final accountId in candidateIds) {
+      final scoped = await _loadPlainPrivateKeyForNode(accountId);
+      if (scoped != null) {
+        privateKeys[accountId] = scoped;
+      }
+    }
+    final normalizedCurrent = (currentAccountId ?? '').trim();
+    if (normalizedCurrent.isNotEmpty && !privateKeys.containsKey(normalizedCurrent)) {
+      final legacy = await loadPrivateKey();
+      if (legacy != null) {
+        privateKeys[normalizedCurrent] = legacy;
+      }
+    }
+
+    await _localEncryptionService.enable(
+      rawSecret: secret,
+      mode: mode,
+      storageKeys: storageKeys,
+      privateKeys: privateKeys,
+    );
+
+    for (final accountId in storageKeys.keys) {
+      await _storageKeyService.deleteAccountKey(accountId);
+    }
+    for (final accountId in privateKeys.keys) {
+      await _removePlainPrivateKeyForNode(accountId);
+    }
+    await clearPrivateKey();
+  }
+
+  Future<void> disableLocalEncryption() async {
+    final protectedAccounts = await _localEncryptionService.loadProtectedAccountIds();
+    for (final accountId in protectedAccounts) {
+      final storageKey =
+          await _localEncryptionService.loadProtectedStorageKey(accountId);
+      if (storageKey != null) {
+        await _storageKeyService.savePlaintextAccountKey(accountId, storageKey);
+      }
+      final privateKey =
+          await _localEncryptionService.loadProtectedPrivateKey(accountId);
+      if (privateKey != null) {
+        await _savePlainPrivateKeyForNode(
+          accountId,
+          privateKey.bytes,
+          privateKey.name,
+        );
+      }
+    }
+    await _localEncryptionService.disable();
   }
 
   Future<String?> loadDeviceIdForNode(String accountId) async {
@@ -1169,4 +1304,3 @@ class QrStyleSettings {
     );
   }
 }
-

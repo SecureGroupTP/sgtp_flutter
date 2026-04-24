@@ -17,6 +17,11 @@ class AppStartupService {
   final SettingsManagementService _settings;
 
   Future<AppStartupResult> resolve() async {
+    final localEncryptionState = await _settings.loadLocalEncryptionState();
+    if (localEncryptionState.enabled && !localEncryptionState.unlocked) {
+      return AppStartupResult.unlockLocalEncryption(localEncryptionState);
+    }
+
     final lastAddr = await _settings.getLastAddress() ?? '';
     var accountId = ((await _settings.loadLastAccountId()) ?? '').trim();
     final preferredNode = await _settings.loadPreferredNode();
@@ -64,7 +69,9 @@ class AppStartupService {
     }
 
     var savedKey = await _settings.loadPrivateKeyForNode(accountId);
-    savedKey ??= await _settings.loadPrivateKey();
+    if (!localEncryptionState.enabled) {
+      savedKey ??= await _settings.loadPrivateKey();
+    }
     if (savedKey == null) {
       try {
         final generated =
@@ -136,4 +143,3 @@ class AppStartupService {
     }
   }
 }
-

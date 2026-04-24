@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/network/sgtp_rpc_client.dart';
 import 'package:sgtp_flutter/core/storage/account_storage_paths.dart';
+import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
 import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
 import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
@@ -77,7 +78,10 @@ class AppDependencies {
 class AppInjector {
   static Future<AppDependencies> build() async {
     final accountStoragePaths = createAccountStoragePaths();
-    final storageKeyService = StorageKeyService();
+    final localEncryptionService = LocalEncryptionService();
+    final storageKeyService = StorageKeyService(
+      localEncryptionService: localEncryptionService,
+    );
     final mainDatabaseFactory = MainDatabaseFactory(
       accountStoragePaths: accountStoragePaths,
       storageKeyService: storageKeyService,
@@ -88,6 +92,7 @@ class AppInjector {
     final messageNotificationService = MessageNotificationService();
     final settingsRepository = SettingsRepository(
       accountStoragePaths: accountStoragePaths,
+      localEncryptionService: localEncryptionService,
       storageKeyService: storageKeyService,
       mainDatabaseFactory: mainDatabaseFactory,
     );

@@ -22,6 +22,7 @@ import 'package:sgtp_flutter/features/messaging/presentation/pages/rooms_page.da
 import 'package:sgtp_flutter/features/settings/presentation/pages/settings_page.dart';
 import 'package:sgtp_flutter/features/shell/application/models/app_startup_result.dart';
 import 'package:sgtp_flutter/features/shell/application/services/app_startup_service.dart';
+import 'package:sgtp_flutter/features/shell/presentation/pages/local_encryption_unlock_page.dart';
 import 'package:sgtp_flutter/features/shell/application/viewmodels/home_cubit.dart';
 import 'package:sgtp_flutter/features/shell/application/viewmodels/home_view_state.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
@@ -340,6 +341,19 @@ class _AppStartScreenState extends State<AppStartScreen> {
           ),
         );
         break;
+      case AppStartupAction.unlockLocalEncryption:
+        final unlocked = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => LocalEncryptionUnlockPage(
+              settings: context.read<SettingsManagementService>(),
+              state: result.localEncryptionState!,
+            ),
+          ),
+        );
+        if (unlocked == true && mounted) {
+          await _resolveStartup();
+        }
+        break;
       case AppStartupAction.retry:
         Future.delayed(const Duration(milliseconds: 500), _resolveStartup);
         break;
@@ -353,4 +367,3 @@ class _AppStartScreenState extends State<AppStartScreen> {
     );
   }
 }
-

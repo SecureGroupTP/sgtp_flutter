@@ -5,6 +5,7 @@ import 'package:cryptography/cryptography.dart';
 
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/crypto/ed25519_utils.dart';
+import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/openssh_parser.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
@@ -135,6 +136,23 @@ class SettingsManagementService {
   Future<void> savePingIntervalSeconds(int seconds) =>
       _settings.savePingIntervalSeconds(seconds);
   Future<void> clearAllLocalData() => _settings.clearAllLocalData();
+  Future<LocalEncryptionState> loadLocalEncryptionState() =>
+      _settings.loadLocalEncryptionState();
+  Future<void> unlockLocalEncryption(String secret) =>
+      _settings.unlockLocalEncryption(secret);
+  Future<void> lockLocalEncryption() => _settings.lockLocalEncryption();
+  Future<void> enableLocalEncryption({
+    required String? currentAccountId,
+    required String secret,
+    required LocalEncryptionSecretMode mode,
+  }) =>
+      _settings.enableLocalEncryption(
+        currentAccountId: currentAccountId,
+        secret: secret,
+        mode: mode,
+      );
+  Future<void> disableLocalEncryption() =>
+      _settings.disableLocalEncryption();
   Future<void> saveAddress(String address) => _settings.saveAddress(address);
   Future<({Uint8List bytes, String name})?> loadPrivateKey() =>
       _settings.loadPrivateKey();
@@ -812,4 +830,3 @@ class SettingsManagementService {
     return Uint8List.fromList(lines.toString().codeUnits);
   }
 }
-

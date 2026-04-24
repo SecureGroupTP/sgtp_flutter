@@ -16,6 +16,7 @@ import 'package:record/record.dart';
 import 'package:sgtp_camera/sgtp_camera.dart';
 
 import 'package:sgtp_flutter/core/app_theme.dart';
+import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/widgets/app_bottom_sheet.dart';
 import 'package:sgtp_flutter/core/qr_data.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
@@ -2928,9 +2929,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildDataCard(SettingsViewState state) {
+    final encryptionState = state.localEncryptionState;
+    final encryptionEnabled = encryptionState.enabled;
+    final encryptionMode = encryptionState.mode;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          encryptionEnabled
+              ? 'Local secrets are encrypted. Migration ID: ${encryptionState.migrationId}.'
+              : 'Local encryption is disabled. Secrets are stored in plaintext like before.',
+          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.bgSurfaceActive,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Text(
+                  encryptionEnabled
+                      ? 'Encrypted • ${encryptionMode == LocalEncryptionSecretMode.passphrase ? 'Passphrase' : 'Password'}'
+                      : 'Not encrypted',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _ActionButton(
+          icon: encryptionEnabled ? Icons.lock_open_outlined : Icons.lock_outline,
+          label: encryptionEnabled
+              ? 'Disable local encryption'
+              : 'Encrypt my local account data',
+          loading: state.isLoading,
+          onPressed: state.isLoading
+              ? null
+              : () {
+                  if (encryptionEnabled) {
+                    unawaited(_disableLocalEncryption());
+                  } else {
+                    unawaited(_showEnableLocalEncryptionDialog());
+                  }
+                },
+        ),
+        const SizedBox(height: 8),
+        Text(
+          encryptionEnabled
+              ? 'This protects the database storage key and Ed25519 private keys. Logs, media cache and temp files stay unencrypted.'
+              : 'When enabled, the app will ask for a password or a code phrase on startup before opening local account data.',
+          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 20),
         const Text(
           'Export your local app data into a backup file.',
           style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
@@ -2971,6 +3028,177 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ],
     );
+  }
+
+  Future<void> _showEnableLocalEncryptionDialog() async {
+    var mode = LocalEncryptionSecretMode.password;
+    final secretCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? errorText;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final isPassphrase = mode == LocalEncryptionSecretMode.passphrase;
+            return AlertDialog(
+              title: const Text('Encrypt local data'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    RadioListTile<LocalEncryptionSecretMode>(
+                      value: LocalEncryptionSecretMode.password,
+                      groupValue: mode,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Password'),
+                      subtitle: const Text(
+                        'Letters, digits and symbols. Spaces are not allowed.',
+                      ),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          mode = value;
+                          errorText = null;
+                        });
+                      },
+                    ),
+                    RadioListTile<LocalEncryptionSecretMode>(
+                      value: LocalEncryptionSecretMode.passphrase,
+                      groupValue: mode,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Code phrase'),
+                      subtitle: const Text(
+                        'Only letters matter. We lowercase and strip spaces, digits and punctuation.',
+                      ),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          mode = value;
+                          errorText = null;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: secretCtrl,
+                      obscureText: !isPassphrase,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        labelText: isPassphrase ? 'Code phrase' : 'Password',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirmCtrl,
+                      obscureText: !isPassphrase,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Repeat',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (errorText != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        errorText!,
+                        style: const TextStyle(color: Colors.redAccent),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final secret = secretCtrl.text;
+                    final confirm = confirmCtrl.text;
+                    if (secret != confirm) {
+                      setDialogState(() {
+                        errorText = 'The values do not match';
+                      });
+                      return;
+                    }
+                    Navigator.of(dialogContext).pop(true);
+                  },
+                  child: const Text('Enable'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      secretCtrl.dispose();
+      confirmCtrl.dispose();
+      return;
+    }
+
+    try {
+      await _cubit.enableLocalEncryption(
+        rawSecret: secretCtrl.text,
+        mode: mode,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Local encryption enabled')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to enable encryption: $e')),
+      );
+    } finally {
+      secretCtrl.dispose();
+      confirmCtrl.dispose();
+    }
+  }
+
+  Future<void> _disableLocalEncryption() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Disable local encryption?'),
+        content: const Text(
+          'The app will write the storage key and private keys back in plaintext storage on this device.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Disable'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await _cubit.disableLocalEncryption();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Local encryption disabled')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to disable encryption: $e')),
+      );
+    }
   }
 
   Future<void> _makeBackup() async {
@@ -4386,4 +4614,3 @@ class _SgtpCameraPreviewState extends State<_SgtpCameraPreview> {
     return RawImage(image: img, fit: BoxFit.cover);
   }
 }
-

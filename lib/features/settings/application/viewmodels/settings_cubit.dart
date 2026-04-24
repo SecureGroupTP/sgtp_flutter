@@ -9,6 +9,7 @@ import 'package:sgtp_flutter/core/app/app_session_controller.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
+import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
@@ -18,7 +19,6 @@ import 'package:sgtp_flutter/features/settings/application/models/settings_model
 import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
-import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 final _log = AppLog('SettingsCubit');
 
@@ -84,6 +84,8 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String? _preferredNodeId;
   String? _preferredAccountId;
   String _standaloneServerAddress = '';
+  LocalEncryptionState _localEncryptionState =
+      const LocalEncryptionState.disabled();
 
   int _accountLoadSeq = 0;
   int _usernameSaveSeq = 0;
@@ -296,6 +298,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   // ── Intent: Load ────────────────────────────────────────────────────────
 
   Future<void> _loadFromDisk() async {
+    _localEncryptionState = await _settings.loadLocalEncryptionState();
     final bootstrap = await _settings.loadBootstrapData();
     final nodes = bootstrap.nodes;
     final accountIds = bootstrap.accountIds;
@@ -711,6 +714,37 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _onAllDataDeleted?.call();
   }
 
+  Future<void> enableLocalEncryption({
+    required String rawSecret,
+    required LocalEncryptionSecretMode mode,
+  }) async {
+    _isLoading = true;
+    _buildState();
+    try {
+      await _settings.enableLocalEncryption(
+        currentAccountId: _activeAccountId(),
+        secret: rawSecret,
+        mode: mode,
+      );
+      _localEncryptionState = await _settings.loadLocalEncryptionState();
+    } finally {
+      _isLoading = false;
+      _buildState();
+    }
+  }
+
+  Future<void> disableLocalEncryption() async {
+    _isLoading = true;
+    _buildState();
+    try {
+      await _settings.disableLocalEncryption();
+      _localEncryptionState = await _settings.loadLocalEncryptionState();
+    } finally {
+      _isLoading = false;
+      _buildState();
+    }
+  }
+
   // ── Intent: Capture device settings ─────────────────────────────────────
 
   Future<void> savePreferredMicrophone(String id) async {
@@ -758,9 +792,9 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       preferredNodeId: _preferredNodeId,
       preferredAccountId: _preferredAccountId,
       standaloneServerAddress: _standaloneServerAddress,
+      localEncryptionState: _localEncryptionState,
     ));
   }
 
   // ── Sync callbacks ──────────────────────────────────────────────────────
 }
-
