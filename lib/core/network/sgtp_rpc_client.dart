@@ -59,6 +59,31 @@ class SgtpRpcClient {
   IProtocolTransport get transport => _transport;
   bool get hasCredentials => _keyPair != null;
 
+  void close({String reason = 'RPC client closed'}) {
+    final error = StateError(reason);
+
+    final pending = _pending.values.toList(growable: false);
+    _pending.clear();
+    for (final item in pending) {
+      if (!item.completer.isCompleted) {
+        item.completer.completeError(error);
+      }
+    }
+
+    final queued = List<_QueuedCall>.from(_queue);
+    _queue.clear();
+    for (final item in queued) {
+      if (!item.completer.isCompleted) {
+        item.completer.completeError(error);
+      }
+    }
+
+    _eventsSubscribed = false;
+    _eventsSubscriptionInFlight = null;
+    _eventCallbacks.clear();
+    _authenticated = false;
+  }
+
   /// Subscribe this RPC session to server events (single-flight).
   ///
   /// Multiple parts of the app may want events (contacts, messaging/MLS, etc.).
@@ -72,13 +97,15 @@ class SgtpRpcClient {
       return;
     }
 
-    final subscription = callRpc(
-      SubscribeToEventsRequest(
-        requestedAtUs: requestedAtUs ?? DateTime.now().microsecondsSinceEpoch,
-      ),
-    ).then<void>((_) {
-      _eventsSubscribed = true;
-    });
+    final subscription =
+        callRpc(
+          SubscribeToEventsRequest(
+            requestedAtUs:
+                requestedAtUs ?? DateTime.now().microsecondsSinceEpoch,
+          ),
+        ).then<void>((_) {
+          _eventsSubscribed = true;
+        });
 
     _eventsSubscriptionInFlight = subscription;
     try {
@@ -117,8 +144,10 @@ class SgtpRpcClient {
         expectedClientNonce: clientNonce,
       );
 
-      final sig =
-          await Ed25519().sign(challengeRes.challengePayload, keyPair: keyPair);
+      final sig = await Ed25519().sign(
+        challengeRes.challengePayload,
+        keyPair: keyPair,
+      );
       final solveReq = SolveAuthChallengeRequest(
         sessionId: challengeRes.sessionId,
         signature: Uint8List.fromList(sig.bytes),
@@ -131,12 +160,18 @@ class SgtpRpcClient {
       _keyPair = keyPair;
       _authenticated = true;
       _flushQueue();
-      _log.debug('Authenticated as {pubkey}',
-          parameters: {'pubkey': _hexShort(publicKey)});
+      _log.debug(
+        'Authenticated as {pubkey}',
+        parameters: {'pubkey': _hexShort(publicKey)},
+      );
       return null;
     } catch (e, st) {
-      _log.error('authenticate failed: {error}',
-          parameters: {'error': e}, error: e, stackTrace: st);
+      _log.error(
+        'authenticate failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
       return 'Authentication failed: $e';
     }
   }
@@ -155,16 +190,16 @@ class SgtpRpcClient {
     final queued = List<_QueuedCall>.from(_queue);
     _queue.clear();
     for (final call in queued) {
-      _sendRpc(call.request).then(
-        call.completer.complete,
-        onError: call.completer.completeError,
-      );
+      _sendRpc(
+        call.request,
+      ).then(call.completer.complete, onError: call.completer.completeError);
     }
   }
 
   /// Register a callback for server-initiated events (not RPC responses).
   void Function() registerEventsCallback(
-      void Function(Map<String, dynamic> event) callback) {
+    void Function(Map<String, dynamic> event) callback,
+  ) {
     final id = _nextEventCallbackId++;
     _eventCallbacks[id] = callback;
     return () {
@@ -182,8 +217,10 @@ class SgtpRpcClient {
     if (request.requiresAuth && !_authenticated) {
       final completer = Completer<Map<String, dynamic>>();
       _queue.add(_QueuedCall(request, completer));
-      _log.debug('queued {method} (waiting for auth)',
-          parameters: {'method': request.method});
+      _log.debug(
+        'queued {method} (waiting for auth)',
+        parameters: {'method': request.method},
+      );
       return completer.future;
     }
     return _sendRpc(request);
@@ -196,8 +233,9 @@ class SgtpRpcClient {
     final payloadMap = CborMap({
       CborString('requestId'): CborBytes(requestId),
       CborString('rpcCall'): CborString(request.method),
-      CborString('timestamp'):
-          CborInt(BigInt.from(DateTime.now().microsecondsSinceEpoch)),
+      CborString('timestamp'): CborInt(
+        BigInt.from(DateTime.now().microsecondsSinceEpoch),
+      ),
       CborString('version'): CborSmallInt(2),
       CborString('parameters'): _toCborValue(request.toMap()),
     });
@@ -220,18 +258,18 @@ class SgtpRpcClient {
     });
     final packetBytes = Uint8List.fromList(cbor.encode(packet));
 
-    final noisyRpcMethods = <String>{
-      'acknowledgeEvent',
-      'subscribeToEvents',
-    };
-    final logCall = noisyRpcMethods.contains(request.method) ? _log.debug : _log.info;
+    final noisyRpcMethods = <String>{'acknowledgeEvent', 'subscribeToEvents'};
+    final logCall = noisyRpcMethods.contains(request.method)
+        ? _log.debug
+        : _log.info;
     logCall(
       'Calling RPC method: {methodName}. RequestId: {requestIdShort}. Parameters: {parameters}',
       parameters: {
         'methodName': request.method,
         'requestIdShort': requestIdHex.substring(0, 8),
-        'parameters':
-            _jsonEncode(_cborToJsonLog(_toCborValue(request.toMap()))),
+        'parameters': _jsonEncode(
+          _cborToJsonLog(_toCborValue(request.toMap())),
+        ),
       },
     );
 
@@ -250,7 +288,9 @@ class SgtpRpcClient {
       onTimeout: () {
         _pending.remove(requestIdHex);
         throw TimeoutException(
-            'RPC timeout: ${request.method}', const Duration(seconds: 30));
+          'RPC timeout: ${request.method}',
+          const Duration(seconds: 30),
+        );
       },
     );
   }
@@ -300,8 +340,9 @@ class SgtpRpcClient {
 
   void _resetCborDecoder() {
     _decodedValues.clear();
-    _cborSink = const CborDecoder()
-        .startChunkedConversion(_CborValueCollector(_decodedValues));
+    _cborSink = const CborDecoder().startChunkedConversion(
+      _CborValueCollector(_decodedValues),
+    );
   }
 
   void _onResponsePacket(CborMap decoded, Uint8List rawBytes) {
@@ -317,17 +358,22 @@ class SgtpRpcClient {
       _ => null,
     };
     if (replyIdBytes == null) {
-      _log.warning('replyToRequestId has unexpected type: {type}',
-          parameters: {'type': replyToIdValue.runtimeType});
+      _log.warning(
+        'replyToRequestId has unexpected type: {type}',
+        parameters: {'type': replyToIdValue.runtimeType},
+      );
       return;
     }
-    final replyIdHex =
-        replyIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final replyIdHex = replyIdBytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
 
     final pending = _pending.remove(replyIdHex);
     if (pending == null) {
-      _log.warning('no pending call for replyId={replyId}',
-          parameters: {'replyId': replyIdHex});
+      _log.warning(
+        'no pending call for replyId={replyId}',
+        parameters: {'replyId': replyIdHex},
+      );
       return;
     }
 
@@ -340,8 +386,8 @@ class SgtpRpcClient {
         final message = error['message'] ?? '';
         final isExpectedIdempotencyConflict =
             pending.method == 'updateChatRoomState' &&
-                message.contains('duplicate key value') &&
-                message.contains('chat_room_states_room_id_epoch_key');
+            message.contains('duplicate key value') &&
+            message.contains('chat_room_states_room_id_epoch_key');
         final logFn = isExpectedIdempotencyConflict ? _log.debug : _log.warning;
         logFn(
           'RPC error response. Method: {methodName}. RequestId: {requestIdShort}. Code: {code}. Message: {message}',
@@ -358,8 +404,9 @@ class SgtpRpcClient {
           'acknowledgeEvent',
           'subscribeToEvents',
         };
-        final logResponse =
-            noisyRpcMethods.contains(pending.method) ? _log.debug : _log.info;
+        final logResponse = noisyRpcMethods.contains(pending.method)
+            ? _log.debug
+            : _log.info;
         logResponse(
           'RPC response received. Method: {methodName}. RequestId: {requestIdShort}. Parameters: {parameters}',
           parameters: {
@@ -386,11 +433,14 @@ class SgtpRpcClient {
     }
     final requestIdBytes = switch (requestIdValue) {
       CborBytes() => Uint8List.fromList(requestIdValue.bytes),
-      CborString() =>
-        Uint8List.fromList(hexToBytes(requestIdValue.toString().replaceAll('-', ''))),
+      CborString() => Uint8List.fromList(
+        hexToBytes(requestIdValue.toString().replaceAll('-', '')),
+      ),
       _ => null,
     };
-    final requestId = requestIdBytes == null ? null : uuidBytesToHex(requestIdBytes);
+    final requestId = requestIdBytes == null
+        ? null
+        : uuidBytesToHex(requestIdBytes);
     if (requestIdBytes == null || requestId == null || requestId.isEmpty) {
       _log.warning(
         'RPC event received without requestId. EventType: {eventType}. Parameters: {parameters}',
@@ -443,13 +493,16 @@ class SgtpRpcClient {
   }) async {
     final eventIdHex = uuidBytesToHex(eventId);
     try {
-      await callRpc(AcknowledgeEventRequest(eventId: eventId, segmentId: segmentId));
+      await callRpc(
+        AcknowledgeEventRequest(eventId: eventId, segmentId: segmentId),
+      );
       _log.debug(
         'RPC event acknowledged. EventType: {eventType}. EventId: {eventIdShort}',
         parameters: {
           'eventType': eventType,
-          'eventIdShort':
-              eventIdHex.length < 8 ? eventIdHex : eventIdHex.substring(0, 8),
+          'eventIdShort': eventIdHex.length < 8
+              ? eventIdHex
+              : eventIdHex.substring(0, 8),
         },
       );
     } catch (e, st) {
@@ -457,8 +510,9 @@ class SgtpRpcClient {
         'RPC event acknowledgment failed. EventType: {eventType}. EventId: {eventIdShort}. Error: {error}',
         parameters: {
           'eventType': eventType,
-          'eventIdShort':
-              eventIdHex.length < 8 ? eventIdHex : eventIdHex.substring(0, 8),
+          'eventIdShort': eventIdHex.length < 8
+              ? eventIdHex
+              : eventIdHex.substring(0, 8),
           'error': e,
         },
         error: e,
@@ -489,11 +543,13 @@ class SgtpRpcClient {
       CborString() => value.toString(),
       CborBytes() => _bytesToLogString(Uint8List.fromList(value.bytes)),
       CborMap() => {
-          for (final e in value.entries)
-            (e.key is CborString
-                ? (e.key as CborString).toString()
-                : e.key.toString()): _cborToJsonLog(e.value),
-        },
+        for (final e in value.entries)
+          (e.key is CborString
+              ? (e.key as CborString).toString()
+              : e.key.toString()): _cborToJsonLog(
+            e.value,
+          ),
+      },
       CborList() => value.map(_cborToJsonLog).toList(),
       _ => value.toString(),
     };

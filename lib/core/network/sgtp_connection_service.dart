@@ -31,26 +31,27 @@ class SgtpConnectionService {
   void Function()? _removeServerEventsCallback;
   Future<SgtpRpcClient>? _connectFuture;
   SgtpConnectionStateChanged _state = const SgtpConnectionStateChanged(
-      status: SgtpConnectionStatus.disconnected);
+    status: SgtpConnectionStatus.disconnected,
+  );
 
   Stream<SgtpConnectionStateChanged> get events => _events.stream;
   Stream<Map<String, dynamic>> get serverEvents => Stream.multi((multi) {
-        final snapshotSeq = _serverEventSeq;
-        for (final env in _serverEventsBuffer) {
-          if (env.seq <= snapshotSeq) {
-            multi.add(env.event);
-          }
-        }
-        final sub = _serverEventsLive.stream.listen(
-          (env) {
-            if (env.seq <= snapshotSeq) return;
-            multi.add(env.event);
-          },
-          onError: multi.addError,
-          onDone: multi.close,
-        );
-        multi.onCancel = sub.cancel;
-      });
+    final snapshotSeq = _serverEventSeq;
+    for (final env in _serverEventsBuffer) {
+      if (env.seq <= snapshotSeq) {
+        multi.add(env.event);
+      }
+    }
+    final sub = _serverEventsLive.stream.listen(
+      (env) {
+        if (env.seq <= snapshotSeq) return;
+        multi.add(env.event);
+      },
+      onError: multi.addError,
+      onDone: multi.close,
+    );
+    multi.onCancel = sub.cancel;
+  });
   SgtpConnectionStatus get status => _state.status;
   String? get lastError => _state.errorMessage;
   bool get isConnected => _transport?.isConnected == true;
@@ -58,13 +59,16 @@ class SgtpConnectionService {
   void _pushServerEvent(Map<String, dynamic> event) {
     final seq = ++_serverEventSeq;
     final receivedAtUs = DateTime.now().microsecondsSinceEpoch;
-    final env = _ServerEventEnvelope(seq: seq, receivedAtUs: receivedAtUs, event: event);
+    final env = _ServerEventEnvelope(
+      seq: seq,
+      receivedAtUs: receivedAtUs,
+      event: event,
+    );
 
     _serverEventsBuffer.add(env);
 
     const maxBuffered = 1500;
-    final cutoffUs =
-        receivedAtUs - const Duration(minutes: 10).inMicroseconds;
+    final cutoffUs = receivedAtUs - const Duration(minutes: 10).inMicroseconds;
     while (_serverEventsBuffer.length > maxBuffered) {
       _serverEventsBuffer.removeFirst();
     }
@@ -78,13 +82,17 @@ class SgtpConnectionService {
 
   Future<void> configure(SgtpConfig config) async {
     if (_config != null && _isSameConnection(_config!, config)) {
-      _log.debug('Reusing configured server connection for {server}',
-          parameters: {'server': config.serverAddr});
+      _log.debug(
+        'Reusing configured server connection for {server} pub={pubkey}',
+        parameters: {'server': config.serverAddr, 'pubkey': _pubShort(config)},
+      );
       _config = config;
       return;
     }
-    _log.info('Configuring server connection for {server}',
-        parameters: {'server': config.serverAddr});
+    _log.info(
+      'Configuring server connection for {server} pub={pubkey}',
+      parameters: {'server': config.serverAddr, 'pubkey': _pubShort(config)},
+    );
     await disconnect();
     _config = config;
   }
@@ -98,9 +106,11 @@ class SgtpConnectionService {
     if (_rpc != null && _transport?.isConnected == true) {
       _log.debug('Reusing active RPC transport');
       if (_state.status != SgtpConnectionStatus.connected) {
-        _emit(const SgtpConnectionStateChanged(
-          status: SgtpConnectionStatus.connected,
-        ));
+        _emit(
+          const SgtpConnectionStateChanged(
+            status: SgtpConnectionStatus.connected,
+          ),
+        );
       }
       return _rpc!;
     }
@@ -129,8 +139,10 @@ class SgtpConnectionService {
   Future<void> disconnect() async {
     _connectFuture = null;
     final transport = _transport;
+    final rpc = _rpc;
     _transport = null;
     _rpc = null;
+    rpc?.close(reason: 'Shared SGTP connection disconnected');
     _removeServerEventsCallback?.call();
     _removeServerEventsCallback = null;
     _serverEventsBuffer.clear();
@@ -140,9 +152,11 @@ class SgtpConnectionService {
         await transport.close();
       } catch (_) {}
     }
-    _emit(const SgtpConnectionStateChanged(
-      status: SgtpConnectionStatus.disconnected,
-    ));
+    _emit(
+      const SgtpConnectionStateChanged(
+        status: SgtpConnectionStatus.disconnected,
+      ),
+    );
   }
 
   Future<SgtpRpcClient> _open() async {
@@ -150,9 +164,9 @@ class SgtpConnectionService {
     if (config == null) {
       throw StateError('SGTP connection is not configured');
     }
-    _emit(const SgtpConnectionStateChanged(
-      status: SgtpConnectionStatus.connecting,
-    ));
+    _emit(
+      const SgtpConnectionStateChanged(status: SgtpConnectionStatus.connecting),
+    );
     IProtocolTransport? openedTransport;
     try {
       final parsed = _parseHostPortOrThrow(config.serverAddr);
@@ -192,9 +206,11 @@ class SgtpConnectionService {
       unawaited(_showAuthenticationTestNotification(config));
       _transport = transport;
       _rpc = rpc;
-      _emit(const SgtpConnectionStateChanged(
-        status: SgtpConnectionStatus.connected,
-      ));
+      _emit(
+        const SgtpConnectionStateChanged(
+          status: SgtpConnectionStatus.connected,
+        ),
+      );
       return rpc;
     } catch (e) {
       _removeServerEventsCallback?.call();
@@ -205,10 +221,12 @@ class SgtpConnectionService {
       try {
         await transport?.close();
       } catch (_) {}
-      _emit(SgtpConnectionStateChanged(
-        status: SgtpConnectionStatus.error,
-        errorMessage: '$e',
-      ));
+      _emit(
+        SgtpConnectionStateChanged(
+          status: SgtpConnectionStatus.error,
+          errorMessage: '$e',
+        ),
+      );
       rethrow;
     }
   }
@@ -230,11 +248,7 @@ class SgtpConnectionService {
         'Selected transport (${family.name}, tls=$tls) not supported by server.',
       );
     }
-    final port = _selectPort(
-      opts: opts,
-      family: family,
-      tls: tls,
-    );
+    final port = _selectPort(opts: opts, family: family, tls: tls);
     return (host: parsed.host, port: port);
   }
 
@@ -268,8 +282,9 @@ class SgtpConnectionService {
       }
       final host = s.substring(1, end);
       final rest = s.substring(end + 1);
-      final port =
-          rest.startsWith(':') ? int.tryParse(rest.substring(1)) : null;
+      final port = rest.startsWith(':')
+          ? int.tryParse(rest.substring(1))
+          : null;
       return (host: host, explicitPort: port);
     }
     final index = s.lastIndexOf(':');
@@ -307,11 +322,7 @@ class SgtpConnectionService {
           fakeSni: fakeSni,
         );
       case SgtpTransportFamily.http:
-        return HttpProtocolTransport(
-          host: host,
-          port: port,
-          useTls: tls,
-        );
+        return HttpProtocolTransport(host: host, port: port, useTls: tls);
     }
   }
 
@@ -325,6 +336,11 @@ class SgtpConnectionService {
 
   String _pubHex(SgtpConfig config) =>
       config.myPublicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  String _pubShort(SgtpConfig config) {
+    final hex = _pubHex(config);
+    return hex.length < 8 ? hex : hex.substring(0, 8);
+  }
 
   void _emit(SgtpConnectionStateChanged event) {
     _state = event;
@@ -343,8 +359,7 @@ class SgtpConnectionService {
       return;
     }
     try {
-      final fallbackName =
-          (title == null || title.isEmpty) ? 'Account' : title;
+      final fallbackName = (title == null || title.isEmpty) ? 'Account' : title;
       final resolvedAvatar = await NotificationAvatarImage.resolve(
         avatarBytes: config.userAvatarBytes,
         fallbackName: fallbackName,
