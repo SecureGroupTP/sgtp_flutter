@@ -68,5 +68,7 @@ whitelist/
 .claude/
 docs/
 docs_v2/
+.worktrees/
+worktrees/
 
 thresholds_new.pnm
