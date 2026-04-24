@@ -22,6 +22,7 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
 // Internal event — triggers a rebuild when any ChatBloc status changes.
 class _RoomsRefresh extends RoomsEvent {
@@ -66,17 +67,17 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     required String serverAddress,
     required SgtpSessionFactory sessionFactory,
     Uint8List? userAvatar,
-  })  : _baseConfig = baseConfig,
-        _accountId = accountId,
-        _nicknames = nicknames,
-        _settings = settingsRepository,
-        _chatStorage = chatStorage,
-        _connectionService = connectionService,
-        _mediaStorageService = mediaStorageService,
-        _messageNotificationService = messageNotificationService,
-        _sessionFactory = sessionFactory,
-        _userAvatar = userAvatar,
-        super(RoomsState(serverAddress: serverAddress)) {
+  }) : _baseConfig = baseConfig,
+       _accountId = accountId,
+       _nicknames = nicknames,
+       _settings = settingsRepository,
+       _chatStorage = chatStorage,
+       _connectionService = connectionService,
+       _mediaStorageService = mediaStorageService,
+       _messageNotificationService = messageNotificationService,
+       _sessionFactory = sessionFactory,
+       _userAvatar = userAvatar,
+       super(RoomsState(serverAddress: serverAddress)) {
     _chatMetadataRepo = chatStorage.metadataForAccount(accountId);
     on<RoomsCreateRoom>(_onCreate);
     on<RoomsJoinRoom>(_onJoin);
@@ -101,7 +102,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   // ── Event handlers ────────────────────────────────────────────────────────
 
   Future<void> _onCreate(
-      RoomsCreateRoom event, Emitter<RoomsState> emit) async {
+    RoomsCreateRoom event,
+    Emitter<RoomsState> emit,
+  ) async {
     final roomUUID = generateUUIDv7();
     final configOverride = await _configOverrideForTarget(
       serverAddress: event.serverAddress,
@@ -149,8 +152,13 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     bool? useTls,
   }) async {
     final addr = serverAddress?.trim();
+    final matchedNode = await _resolveNodeForServerAddress(addr);
     int? discoveryPort;
-    if ((transport == null || useTls == null) &&
+    if ((transport == null || useTls == null) && matchedNode != null) {
+      transport ??= matchedNode.transport;
+      useTls ??= matchedNode.useTls;
+      discoveryPort ??= matchedNode.effectiveDiscoveryPort;
+    } else if ((transport == null || useTls == null) &&
         addr != null &&
         addr.isNotEmpty) {
       final resolved = await _resolveServerTransport(addr);
@@ -164,7 +172,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
 
     var cfg = _baseConfig;
-    if (addr != null && addr.isNotEmpty) {
+    if (matchedNode != null) {
+      cfg = cfg.copyWith(serverAddr: matchedNode.chatAddress);
+    } else if (addr != null && addr.isNotEmpty) {
       cfg = cfg.copyWith(serverAddr: addr);
     }
     if (discoveryPort != null) {
@@ -179,18 +189,39 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     return cfg;
   }
 
-  Future<(SgtpTransportFamily, bool, int?)?> _resolveServerTransport(
-      String serverAddress) async {
-    final target = _normalizeAddress(serverAddress);
+  Future<NodeConfig?> _resolveNodeForServerAddress(
+    String? serverAddress,
+  ) async {
+    final target = _normalizeAddress(serverAddress ?? '');
     if (target.isEmpty) return null;
     final nodes = await _settings.loadNodes();
     for (final node in nodes) {
       if (_normalizeAddress(node.chatAddress) == target ||
           _normalizeAddress(node.discoveryAddress) == target) {
-        return (node.transport, node.useTls, node.effectiveDiscoveryPort);
+        return node;
       }
     }
     return null;
+  }
+
+  Future<(SgtpTransportFamily, bool, int?)?> _resolveServerTransport(
+    String serverAddress,
+  ) async {
+    final node = await _resolveNodeForServerAddress(serverAddress);
+    if (node == null) return null;
+    return (node.transport, node.useTls, node.effectiveDiscoveryPort);
+  }
+
+  Future<SgtpConfig?> _serverSyncConfig() async {
+    final override = await _configOverrideForTarget(
+      serverAddress: state.serverAddress,
+    );
+    if (override != null) {
+      return override.copyWith(accountId: _accountId);
+    }
+    final targetServer = state.serverAddress.trim();
+    if (targetServer.isEmpty) return null;
+    return _baseConfig.copyWith(accountId: _accountId);
   }
 
   String _normalizeAddress(String raw) {
@@ -204,9 +235,10 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   String _roomKey(String roomUUID, String serverAddress) =>
       '${roomUUID.trim().toLowerCase()}@${_normalizeAddress(serverAddress)}';
 
-
   void _onUpdateNicknames(
-      RoomsUpdateNicknames event, Emitter<RoomsState> emit) {
+    RoomsUpdateNicknames event,
+    Emitter<RoomsState> emit,
+  ) {
     // Store locally so new rooms created later get the latest nicknames.
     _nicknames
       ..clear()
@@ -218,7 +250,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   void _onUpdateContactAvatars(
-      RoomsUpdateContactAvatars event, Emitter<RoomsState> emit) {
+    RoomsUpdateContactAvatars event,
+    Emitter<RoomsState> emit,
+  ) {
     _contactAvatarsByPub = Map<String, Uint8List>.from(event.avatarsByPubkey);
     for (final room in state.rooms) {
       room.chatBloc.add(ChatUpdateContactAvatars(event.avatarsByPubkey));
@@ -228,20 +262,24 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   // ── Stored chats ────────────────────────────────────────────────────────
 
   Future<void> _onLoadStoredChats(
-      RoomsLoadStoredChats event, Emitter<RoomsState> emit) async {
+    RoomsLoadStoredChats event,
+    Emitter<RoomsState> emit,
+  ) async {
     await _syncServerRoomsIntoMetadata();
     final allMetadata = await _chatMetadataRepo.loadAllChats();
     final targetServer = _normalizeAddress(state.serverAddress);
-    final filtered = allMetadata
-        .where((m) => _normalizeAddress(m.serverAddress) == targetServer)
-        .toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    final filtered =
+        allMetadata
+            .where((m) => _normalizeAddress(m.serverAddress) == targetServer)
+            .toList()
+          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
     // Chats should be online by default. Re-hydrate active rooms from stored
     // chat metadata on startup / server switch.
     if (targetServer.isNotEmpty && filtered.isNotEmpty) {
-      final configOverride =
-          await _configOverrideForTarget(serverAddress: state.serverAddress);
+      final configOverride = await _configOverrideForTarget(
+        serverAddress: state.serverAddress,
+      );
       for (final chat in filtered) {
         try {
           _addRoom(
@@ -258,7 +296,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   Future<void> _onSyncStoredChats(
-      RoomsSyncStoredChats event, Emitter<RoomsState> emit) async {
+    RoomsSyncStoredChats event,
+    Emitter<RoomsState> emit,
+  ) async {
     var changed = false;
     for (final room in state.rooms) {
       final chatState = room.chatBloc.state;
@@ -268,10 +308,12 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       );
       final nextName = chatState.chatName.trim();
       final shouldSaveName = nextName.isNotEmpty && nextName != 'Chat';
-      final hasAvatar = chatState.chatAvatarBytes != null &&
+      final hasAvatar =
+          chatState.chatAvatarBytes != null &&
           chatState.chatAvatarBytes!.isNotEmpty;
 
-      final needsSave = existing == null ||
+      final needsSave =
+          existing == null ||
           (shouldSaveName && existing.name != nextName) ||
           (hasAvatar &&
               (existing.avatarBytes == null ||
@@ -281,20 +323,24 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       if (!needsSave) continue;
 
       final now = DateTime.now();
-      await _chatMetadataRepo.saveChat(ChatMetadata(
-        uuid: room.roomUUID,
-        serverAddress: room.serverAddress,
-        remoteRoomId: existing?.remoteRoomId,
-        name:
-            shouldSaveName ? nextName : (existing?.name ?? chatState.chatName),
-        avatarBytes:
-            hasAvatar ? chatState.chatAvatarBytes : existing?.avatarBytes,
-        isDirectMessage: existing?.isDirectMessage ?? chatState.isDirectChat,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: existing?.updatedAt ?? now,
-        windowWidth: existing?.windowWidth,
-        windowHeight: existing?.windowHeight,
-      ));
+      await _chatMetadataRepo.saveChat(
+        ChatMetadata(
+          uuid: room.roomUUID,
+          serverAddress: room.serverAddress,
+          remoteRoomId: existing?.remoteRoomId,
+          name: shouldSaveName
+              ? nextName
+              : (existing?.name ?? chatState.chatName),
+          avatarBytes: hasAvatar
+              ? chatState.chatAvatarBytes
+              : existing?.avatarBytes,
+          isDirectMessage: existing?.isDirectMessage ?? chatState.isDirectChat,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: existing?.updatedAt ?? now,
+          windowWidth: existing?.windowWidth,
+          windowHeight: existing?.windowHeight,
+        ),
+      );
       changed = true;
     }
 
@@ -304,7 +350,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   Future<void> _onDeleteStoredChat(
-      RoomsDeleteStoredChat event, Emitter<RoomsState> emit) async {
+    RoomsDeleteStoredChat event,
+    Emitter<RoomsState> emit,
+  ) async {
     await _chatStorage
         .historyForChat(
           accountId: _accountId,
@@ -320,26 +368,32 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   Future<void> _onUpsertChat(
-      RoomsUpsertChat event, Emitter<RoomsState> emit) async {
+    RoomsUpsertChat event,
+    Emitter<RoomsState> emit,
+  ) async {
     final server = (event.serverAddress ?? '').trim();
     if (server.isEmpty) return;
-    final existing =
-        await _chatMetadataRepo.loadChat(event.uuid, serverAddress: server);
-    final now = DateTime.now();
-    await _chatMetadataRepo.saveChat(ChatMetadata(
-      uuid: event.uuid,
-      name: (event.name != null && event.name!.isNotEmpty)
-          ? event.name!
-          : (existing?.name ?? 'Chat'),
+    final existing = await _chatMetadataRepo.loadChat(
+      event.uuid,
       serverAddress: server,
-      remoteRoomId: existing?.remoteRoomId,
-      avatarBytes: event.avatarBytes ?? existing?.avatarBytes,
-      isDirectMessage: existing?.isDirectMessage ?? false,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      windowWidth: existing?.windowWidth,
-      windowHeight: existing?.windowHeight,
-    ));
+    );
+    final now = DateTime.now();
+    await _chatMetadataRepo.saveChat(
+      ChatMetadata(
+        uuid: event.uuid,
+        name: (event.name != null && event.name!.isNotEmpty)
+            ? event.name!
+            : (existing?.name ?? 'Chat'),
+        serverAddress: server,
+        remoteRoomId: existing?.remoteRoomId,
+        avatarBytes: event.avatarBytes ?? existing?.avatarBytes,
+        isDirectMessage: existing?.isDirectMessage ?? false,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        windowWidth: existing?.windowWidth,
+        windowHeight: existing?.windowHeight,
+      ),
+    );
     add(const RoomsLoadStoredChats());
   }
 
@@ -353,9 +407,10 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       return true;
     }
 
-    final config = _baseConfig
-        .copyWith(accountId: _accountId)
-        .copyWith(serverAddr: targetServer);
+    final config = await _serverSyncConfig();
+    if (config == null) {
+      return false;
+    }
     final client = ServerV2MlsClient(
       rpcProvider: () => _connectionService.acquireRpc(config),
       sharedServerEvents: _connectionService.serverEvents,
@@ -386,14 +441,17 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           final existingName = (existing?.name ?? '').trim();
           final isDirect = existing?.isDirectMessage ?? false;
           final serverNameLower = serverName.toLowerCase();
-          final isAutoPeerTitle =
-              RegExp(r'^peer[_\s][0-9a-f]{8}$').hasMatch(serverNameLower);
+          final isAutoPeerTitle = RegExp(
+            r'^peer[_\s][0-9a-f]{8}$',
+          ).hasMatch(serverNameLower);
           final inferredDirect = isDirect || isAutoPeerTitle;
           final sanitizedServerName = isAutoPeerTitle ? '' : serverName;
           final existingNameLower = existingName.toLowerCase();
-          final isAutoPeerExisting =
-              RegExp(r'^peer[_\s][0-9a-f]{8}$').hasMatch(existingNameLower);
-          final sanitizedExistingName = existingName.isNotEmpty &&
+          final isAutoPeerExisting = RegExp(
+            r'^peer[_\s][0-9a-f]{8}$',
+          ).hasMatch(existingNameLower);
+          final sanitizedExistingName =
+              existingName.isNotEmpty &&
                   existingName != 'Chat' &&
                   !(inferredDirect && isAutoPeerExisting)
               ? existingName
@@ -401,29 +459,33 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           final effectiveName = sanitizedExistingName.isNotEmpty
               ? sanitizedExistingName
               : (sanitizedServerName.isNotEmpty
-                  ? sanitizedServerName
-                  : (inferredDirect ? 'Direct chat' : 'Chat'));
-          await _chatMetadataRepo.saveChat(ChatMetadata(
-            uuid: localRoomUUID,
-            name: effectiveName,
-            serverAddress: targetServer,
-            remoteRoomId: room.room.roomId,
-            avatarBytes: existing?.avatarBytes,
-            isDirectMessage: inferredDirect,
-            createdAt: existing?.createdAt ?? updatedAt,
-            updatedAt: updatedAt.isAfter(existing?.updatedAt ?? DateTime(0))
-                ? updatedAt
-                : (existing?.updatedAt ?? updatedAt),
-            windowWidth: existing?.windowWidth,
-            windowHeight: existing?.windowHeight,
-          ));
+                    ? sanitizedServerName
+                    : (inferredDirect ? 'Direct chat' : 'Chat'));
+          await _chatMetadataRepo.saveChat(
+            ChatMetadata(
+              uuid: localRoomUUID,
+              name: effectiveName,
+              serverAddress: targetServer,
+              remoteRoomId: room.room.roomId,
+              avatarBytes: existing?.avatarBytes,
+              isDirectMessage: inferredDirect,
+              createdAt: existing?.createdAt ?? updatedAt,
+              updatedAt: updatedAt.isAfter(existing?.updatedAt ?? DateTime(0))
+                  ? updatedAt
+                  : (existing?.updatedAt ?? updatedAt),
+              windowWidth: existing?.windowWidth,
+              windowHeight: existing?.windowHeight,
+            ),
+          );
           synced++;
         }
         cursor = page.nextCursor;
       } while (cursor != null && cursor.isNotEmpty);
       if (synced > 0) {
-        _log.info('Synced {count} server rooms into local metadata',
-            parameters: {'count': synced});
+        _log.info(
+          'Synced {count} server rooms into local metadata',
+          parameters: {'count': synced},
+        );
       }
       _lastServerRoomSyncAt = DateTime.now();
       return true;
@@ -452,12 +514,15 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
 
   // ── Room management ─────────────────────────────────────────────────────
 
-  void _addRoom(Uint8List roomUUID, Emitter<RoomsState> emit,
-      {SgtpConfig? configOverride,
-      bool isDirectMessage = false,
-      bool bootstrapDirectRoom = false,
-      String? directPeerPublicKeyHex,
-      bool highPriorityConnect = false}) {
+  void _addRoom(
+    Uint8List roomUUID,
+    Emitter<RoomsState> emit, {
+    SgtpConfig? configOverride,
+    bool isDirectMessage = false,
+    bool bootstrapDirectRoom = false,
+    String? directPeerPublicKeyHex,
+    bool highPriorityConnect = false,
+  }) {
     final hexUUID = uuidBytesToHex(roomUUID);
     final config = (configOverride ?? _baseConfig)
         .copyWith(accountId: _accountId)
@@ -494,8 +559,9 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     }
 
     final key = _roomKey(hexUUID, config.serverAddr);
-    _knownMessageIdsByRoomKey[key] =
-        chatBloc.state.messages.map((m) => m.id).toSet();
+    _knownMessageIdsByRoomKey[key] = chatBloc.state.messages
+        .map((m) => m.id)
+        .toSet();
     _chatSubs[key] = chatBloc.stream.listen((chatState) {
       // Release a connect slot once the room leaves connecting/handshaking.
       if (_connectInFlightKeys.contains(key) &&
@@ -514,10 +580,7 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
       serverAddress: config.serverAddr,
       chatBloc: chatBloc,
     );
-    emit(state.copyWith(
-      rooms: [...state.rooms, entry],
-      clearError: true,
-    ));
+    emit(state.copyWith(rooms: [...state.rooms, entry], clearError: true));
 
     final connectEvent = ChatConnect(config, nicknames: _nicknames);
     if (highPriorityConnect) {
@@ -540,29 +603,38 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
   }
 
   Future<void> _onRemove(
-      RoomsRemoveRoom event, Emitter<RoomsState> emit) async {
+    RoomsRemoveRoom event,
+    Emitter<RoomsState> emit,
+  ) async {
     final roomKey = _roomKey(event.roomUUID, event.serverAddress);
     await _chatSubs[roomKey]?.cancel();
     _chatSubs.remove(roomKey);
     _knownMessageIdsByRoomKey.remove(roomKey);
     final room = state.rooms
-        .where((r) =>
-            r.roomUUID == event.roomUUID &&
-            _normalizeAddress(r.serverAddress) ==
-                _normalizeAddress(event.serverAddress))
+        .where(
+          (r) =>
+              r.roomUUID == event.roomUUID &&
+              _normalizeAddress(r.serverAddress) ==
+                  _normalizeAddress(event.serverAddress),
+        )
         .firstOrNull;
     if (room != null) {
       room.chatBloc.add(const ChatDisconnect());
       await room.chatBloc.close();
     }
-    emit(state.copyWith(
-      rooms: state.rooms
-          .where((r) => !(r.roomUUID == event.roomUUID &&
-              _normalizeAddress(r.serverAddress) ==
-                  _normalizeAddress(event.serverAddress)))
-          .toList(),
-      clearError: true,
-    ));
+    emit(
+      state.copyWith(
+        rooms: state.rooms
+            .where(
+              (r) =>
+                  !(r.roomUUID == event.roomUUID &&
+                      _normalizeAddress(r.serverAddress) ==
+                          _normalizeAddress(event.serverAddress)),
+            )
+            .toList(),
+        clearError: true,
+      ),
+    );
   }
 
   void _onRefresh(_RoomsRefresh event, Emitter<RoomsState> emit) {
@@ -582,7 +654,8 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
     if (newMessages.isEmpty) return;
 
     for (final msg in newMessages) {
-      final shouldNotify = !msg.isFromMe &&
+      final shouldNotify =
+          !msg.isFromMe &&
           !msg.isFromHistory &&
           msg.type != MessageType.system &&
           msg.type != MessageType.messageRead &&
@@ -590,13 +663,15 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           msg.type != MessageType.viewed;
       if (!shouldNotify) continue;
 
-      final senderLabel = chatState.peerNicknames[msg.senderUUID] ??
+      final senderLabel =
+          chatState.peerNicknames[msg.senderUUID] ??
           chatState.peerNicknamesHistory[msg.senderUUID] ??
           (msg.senderUUID.length >= 8
               ? msg.senderUUID.substring(0, 8)
               : msg.senderUUID);
-      final body =
-          msg.type == MessageType.text ? msg.content : '[${msg.type.name}]';
+      final body = msg.type == MessageType.text
+          ? msg.content
+          : '[${msg.type.name}]';
       final avatar =
           chatState.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
       unawaited(
