@@ -3,7 +3,8 @@ import 'dart:typed_data';
 import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_stub.dart'
-    if (dart.library.io) 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_io.dart';
+    if (dart.library.io) 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_io.dart'
+    if (dart.library.html) 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_web.dart';
 
 class AppNotificationHandle {
   AppNotificationHandle._(this.id, this._owner);

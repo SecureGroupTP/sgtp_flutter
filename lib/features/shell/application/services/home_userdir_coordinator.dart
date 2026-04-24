@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
-import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
-import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
+import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_persistence_service.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_userdir_support_service.dart';
@@ -18,6 +17,7 @@ class HomeUserDirCoordinator {
   HomeUserDirCoordinator({
     required HomePersistenceService persistenceService,
     required HomeUserDirSupportService supportService,
+    required MessageNotificationService messageNotificationService,
     required IUserDirClient userDirClient,
     required Future<void> Function(
       String roomUUIDHex,
@@ -29,12 +29,14 @@ class HomeUserDirCoordinator {
     required void Function(HomeUserDirState state) onStateChanged,
   }) : _persistence = persistenceService,
        _support = supportService,
+       _messageNotificationService = messageNotificationService,
        _userDirClient = userDirClient,
        _onDirectMessageReady = onDirectMessageReady,
        _onStateChanged = onStateChanged;
 
   final HomePersistenceService _persistence;
   final HomeUserDirSupportService _support;
+  final MessageNotificationService _messageNotificationService;
   final IUserDirClient _userDirClient;
   final Future<void> Function(
     String roomUUIDHex,
@@ -67,9 +69,6 @@ class HomeUserDirCoordinator {
   Set<String> _suppressedContacts = {};
   List<ContactEntry> _contacts = const [];
   Map<String, String> _nicknames = const {};
-  final Map<String, AppNotificationHandle> _friendRequestNotifications =
-      <String, AppNotificationHandle>{};
-
   HomeUserDirState get currentState => HomeUserDirState(
     contactProfiles: Map<String, ContactProfile>.from(_contactProfiles),
     friendStates: Map<String, FriendStateRecord>.from(_friendStates),
@@ -277,10 +276,6 @@ class HomeUserDirCoordinator {
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
     _profileRegisterTimer?.cancel();
-    for (final handle in _friendRequestNotifications.values) {
-      unawaited(handle.dismiss());
-    }
-    _friendRequestNotifications.clear();
     _initFuture = null;
     _client = null;
     _activeAccountId = '';
@@ -885,17 +880,18 @@ class HomeUserDirCoordinator {
         .map((entry) => entry.key)
         .toSet();
 
-    final obsoletePeers = _friendRequestNotifications.keys
-        .where((peerHex) => !incomingPeers.contains(peerHex))
+    final obsoletePeers = previousStates.keys
+        .where(
+          (peerHex) =>
+              previousStates[peerHex]?.statusEnum == FriendStatus.pendingIncoming &&
+              !incomingPeers.contains(peerHex),
+        )
         .toList(growable: false);
     for (final peerHex in obsoletePeers) {
       await _dismissFriendRequestNotification(peerHex);
     }
 
     for (final peerHex in incomingPeers) {
-      if (_friendRequestNotifications.containsKey(peerHex)) {
-        continue;
-      }
       final previousStatus = previousStates[peerHex]?.statusEnum;
       if (previousStatus == FriendStatus.pendingIncoming) {
         continue;
@@ -908,47 +904,37 @@ class HomeUserDirCoordinator {
     HomeUserDirSession session,
     String peerHex,
   ) async {
-    if (kIsWeb) {
-      return;
-    }
-
     final profile = _contactProfiles[peerHex];
     final displayName = _displayNameForPeer(peerHex);
-    final avatar = await NotificationAvatarImage.resolve(
-      avatarBytes: profile?.avatarBytes,
-      fallbackName: displayName,
-    );
-
+    final requestVersion = _friendStates[peerHex]?.updatedAt ?? 0;
     try {
-      final handle = await AppNotifications.instance
-          .builder()
-          .setImage(avatar)
-          .setTitle(displayName)
-          .setSubtitle('Sent you a friend request')
-          .setDesktopDuration(const Duration(minutes: 5))
-          .addButton(
+      await _messageNotificationService.showFriendRequestEvent(
+        accountId: session.accountId,
+        eventId: 'friend_request:$peerHex:$requestVersion',
+        segmentId: peerHex,
+        peerId: peerHex,
+        displayName: displayName,
+        avatarBytes: profile?.avatarBytes,
+        actions: <NotificationAction>[
+          NotificationAction(
             label: 'Accept',
-            onPressed: () => respondToFriend(
+            onInvoked: () => respondToFriend(
               session: session,
               peerHex: peerHex,
               accept: true,
             ),
-          )
-          .addButton(
+          ),
+          NotificationAction(
             label: 'Decline',
             color: AppNotificationButtonColor.red,
-            onPressed: () => respondToFriend(
+            onInvoked: () => respondToFriend(
               session: session,
               peerHex: peerHex,
               accept: false,
             ),
-          )
-          .show();
-      final previousHandle = _friendRequestNotifications[peerHex];
-      _friendRequestNotifications[peerHex] = handle;
-      if (previousHandle != null) {
-        await previousHandle.dismiss();
-      }
+          ),
+        ],
+      );
     } catch (e, st) {
       _log.warning(
         'Failed to show friend request notification: {error}',
@@ -960,13 +946,10 @@ class HomeUserDirCoordinator {
   }
 
   Future<void> _dismissFriendRequestNotification(String peerHex) async {
-    final handle = _friendRequestNotifications.remove(peerHex.toLowerCase());
-    if (handle == null) {
-      return;
-    }
-    try {
-      await handle.dismiss();
-    } catch (_) {}
+    await _messageNotificationService.dismissFriendRequest(
+      _activeAccountId,
+      peerHex.toLowerCase(),
+    );
   }
 
   String _displayNameForPeer(String peerHex) {

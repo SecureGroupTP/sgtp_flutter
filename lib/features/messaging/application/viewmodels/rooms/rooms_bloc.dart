@@ -17,7 +17,6 @@ import 'package:sgtp_flutter/features/messaging/application/viewmodels/chat/chat
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_mls_client.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_event.dart';
 import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/rooms_state.dart';
-import 'package:sgtp_flutter/features/messaging/domain/entities/message.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -669,18 +668,18 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           (msg.senderUUID.length >= 8
               ? msg.senderUUID.substring(0, 8)
               : msg.senderUUID);
-      final body = msg.type == MessageType.text
-          ? msg.content
-          : '[${msg.type.name}]';
       final avatar =
           chatState.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
       unawaited(
-        _messageNotificationService.showMessage(
-          sender: senderLabel,
-          body: body,
-          messageId: msg.id,
+        _messageNotificationService.showMessageEvent(
+          accountId: _accountId,
+          eventId: msg.id,
+          segmentId: chatState.roomUUID,
           roomId: chatState.roomUUID,
+          senderId: msg.senderUUID,
+          senderName: senderLabel,
           avatarBytes: avatar,
+          messageCount: 1,
         ),
       );
     }

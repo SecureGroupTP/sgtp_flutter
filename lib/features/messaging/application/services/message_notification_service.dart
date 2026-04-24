@@ -1,101 +1,104 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
-import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/notification_dispatcher.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
 
 class MessageNotificationService {
-  MessageNotificationService() {
+  MessageNotificationService({
+    required NotificationDispatcher notificationDispatcher,
+  }) : _notificationDispatcher = notificationDispatcher {
     _ensureLifecycleObserver();
   }
 
+  final NotificationDispatcher _notificationDispatcher;
   bool _lifecycleAttached = false;
   bool _appIsInteractive = true;
   String? _suppressedRoomId;
-  final Map<String, AppNotificationHandle> _handlesByMessageId =
-      <String, AppNotificationHandle>{};
-  final Map<String, Set<String>> _messageIdsByRoomId = <String, Set<String>>{};
+  String? _suppressedAccountId;
 
-  Future<void> showMessage({
-    required String sender,
-    required String body,
-    required String messageId,
-    String? roomId,
+  Future<void> showMessageEvent({
+    required String accountId,
+    required String eventId,
+    required String? segmentId,
+    required String roomId,
+    required String senderId,
+    required String senderName,
     Uint8List? avatarBytes,
+    int messageCount = 1,
   }) async {
-    if (_shouldSuppressForRoom(roomId)) {
-      return;
-    }
-    final resolvedAvatar = await NotificationAvatarImage.resolve(
-      avatarBytes: avatarBytes,
-      fallbackName: sender,
+    await _notificationDispatcher.dispatch(
+      NotificationEvent.message(
+        eventId: eventId,
+        segmentId: segmentId,
+        accountId: accountId,
+        threadId: roomId,
+        senderId: senderId,
+        senderName: senderName,
+        senderAvatarBytes: avatarBytes,
+        messageCount: messageCount,
+      ),
+      suppressPresentation: _shouldSuppressForRoom(accountId, roomId),
     );
-    final handle = await AppNotifications.instance
-        .builder()
-        .setImage(resolvedAvatar)
-        .setTitle(sender)
-        .setSubtitle(body)
-        .setDesktopDuration(const Duration(seconds: 6))
-        .show();
-    final previousHandle = _handlesByMessageId[messageId];
-    _removeMessageIdFromRooms(messageId);
-    if (previousHandle != null) {
-      await previousHandle.dismiss();
-    }
-    _handlesByMessageId[messageId] = handle;
-    final normalizedRoomId = _normalizeRoomId(roomId);
-    if (normalizedRoomId != null) {
-      _messageIdsByRoomId
-          .putIfAbsent(normalizedRoomId, () => <String>{})
-          .add(messageId);
-    }
   }
 
-  void setSuppressedRoomId(String? roomId) {
-    _ensureLifecycleObserver();
-    _suppressedRoomId = _normalizeRoomId(roomId);
-    if (_suppressedRoomId != null &&
-        !kIsWeb &&
-        _appIsInteractive) {
-      unawaited(dismissRoom(_suppressedRoomId!));
-    }
+  Future<void> showFriendRequestEvent({
+    required String accountId,
+    required String eventId,
+    required String? segmentId,
+    required String peerId,
+    required String displayName,
+    Uint8List? avatarBytes,
+    List<NotificationAction> actions = const <NotificationAction>[],
+  }) async {
+    await _notificationDispatcher.dispatch(
+      NotificationEvent.friendRequest(
+        eventId: eventId,
+        segmentId: segmentId,
+        accountId: accountId,
+        peerId: peerId,
+        displayName: displayName,
+        senderAvatarBytes: avatarBytes,
+        actions: actions,
+      ),
+    );
   }
 
-  Future<void> dismissMessage(String messageId) async {
-    final handle = _handlesByMessageId.remove(messageId);
-    if (handle == null) {
-      return;
-    }
-    _removeMessageIdFromRooms(messageId);
-    await handle.dismiss();
+  Future<void> dismissFriendRequest(
+    String accountId,
+    String peerId,
+  ) async {
+    await _notificationDispatcher.dismissCollapseKey(
+      '$accountId:friendRequest:${peerId.trim().toLowerCase()}',
+    );
   }
 
-  Future<void> dismissRoom(String roomId) async {
+  Future<void> dismissRoom(String accountId, String roomId) async {
     final normalizedRoomId = _normalizeRoomId(roomId);
     if (normalizedRoomId == null) {
       return;
     }
-    final messageIds = _messageIdsByRoomId.remove(normalizedRoomId);
-    if (messageIds == null || messageIds.isEmpty) {
-      return;
-    }
-    for (final messageId in messageIds) {
-      final handle = _handlesByMessageId.remove(messageId);
-      if (handle != null) {
-        await handle.dismiss();
-      }
+    await _notificationDispatcher.dismissCollapseKey(
+      '$accountId:message:$normalizedRoomId',
+    );
+  }
+
+  void setSuppressedRoomId(String? accountId, String? roomId) {
+    _ensureLifecycleObserver();
+    _suppressedAccountId = accountId?.trim();
+    _suppressedRoomId = _normalizeRoomId(roomId);
+    if (_suppressedRoomId != null && _suppressedAccountId != null && !kIsWeb && _appIsInteractive) {
+      unawaited(dismissRoom(_suppressedAccountId!, _suppressedRoomId!));
     }
   }
 
   Future<void> cancelAll() async {
-    _handlesByMessageId.clear();
-    _messageIdsByRoomId.clear();
-    await AppNotifications.instance.dismissAll();
+    await _notificationDispatcher.dismissAllActive();
   }
 
-  bool _shouldSuppressForRoom(String? roomId) {
+  bool _shouldSuppressForRoom(String accountId, String? roomId) {
     if (kIsWeb || !_appIsInteractive) {
       return false;
     }
@@ -103,24 +106,8 @@ class MessageNotificationService {
     if (normalized == null) {
       return false;
     }
-    return normalized == _suppressedRoomId;
-  }
-
-  String? _normalizeRoomId(String? roomId) {
-    final normalized = roomId?.trim();
-    if (normalized == null || normalized.isEmpty) {
-      return null;
-    }
-    return normalized;
-  }
-
-  void _removeMessageIdFromRooms(String messageId) {
-    for (final entry in _messageIdsByRoomId.entries.toList()) {
-      entry.value.remove(messageId);
-      if (entry.value.isEmpty) {
-        _messageIdsByRoomId.remove(entry.key);
-      }
-    }
+    return normalized == _suppressedRoomId &&
+        accountId.trim() == (_suppressedAccountId ?? '');
   }
 
   void _ensureLifecycleObserver() {
@@ -133,6 +120,14 @@ class MessageNotificationService {
 
   late final WidgetsBindingObserver _lifecycleObserver =
       _MessageNotificationLifecycleObserver(this);
+
+  String? _normalizeRoomId(String? roomId) {
+    final normalized = roomId?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
+  }
 }
 
 class _MessageNotificationLifecycleObserver with WidgetsBindingObserver {

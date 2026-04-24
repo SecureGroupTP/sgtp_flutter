@@ -11,6 +11,7 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_bind
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/notification_host_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -77,6 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
       keyPackagePublisher: context.read<KeyPackagePublisher>(),
       mediaStorageService: context.read<MessagingMediaStorageService>(),
       messageNotificationService: context.read<MessageNotificationService>(),
+      notificationHostService: context.read<NotificationHostService>(),
       sessionFactory: context.read<SgtpSessionFactory>(),
       homePersistenceService: context.read<HomePersistenceService>(),
       homeUserDirSupportService: context.read<HomeUserDirSupportService>(),

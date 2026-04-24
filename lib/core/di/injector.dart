@@ -16,6 +16,13 @@ import 'package:sgtp_flutter/features/messaging/data/repositories/chat_storage_g
 import 'package:sgtp_flutter/features/messaging/data/repositories/shared_direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/notification_dispatcher.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/notification_host_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/notification_projection_service.dart';
+import 'package:sgtp_flutter/features/notifications/data/repositories/notification_inbox_store_impl.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/notification_host_platform_adapter_factory.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/app_notification_presenter.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/settings_notification_account_context_resolver.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/openmls_runtime.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/shared_key_package_publisher.dart';
@@ -48,6 +55,7 @@ class AppDependencies {
     required this.keyPackagePublisher,
     required this.mediaStorageService,
     required this.messageNotificationService,
+    required this.notificationHostService,
     required this.sgtpSessionFactory,
     required this.homeUserDirCoordinatorFactory,
   });
@@ -63,6 +71,7 @@ class AppDependencies {
   final KeyPackagePublisher keyPackagePublisher;
   final MessagingMediaStorageService mediaStorageService;
   final MessageNotificationService messageNotificationService;
+  final NotificationHostService notificationHostService;
   final SgtpSessionFactory sgtpSessionFactory;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
@@ -89,7 +98,6 @@ class AppInjector {
     final mediaStorageService = createMessagingMediaStorageService(
       accountStoragePaths: accountStoragePaths,
     );
-    final messageNotificationService = MessageNotificationService();
     final settingsRepository = SettingsRepository(
       accountStoragePaths: accountStoragePaths,
       localEncryptionService: localEncryptionService,
@@ -136,6 +144,23 @@ class AppInjector {
       settingsRepository: settingsRepository,
       appBackupRepository: appBackupRepository,
       userDirClientFactory: userDirClientFactory,
+    );
+    final notificationInboxStore = NotificationInboxStoreImpl(
+      accountStoragePaths: accountStoragePaths,
+      storageKeyService: storageKeyService,
+    );
+    final messageNotificationService = MessageNotificationService(
+      notificationDispatcher: NotificationDispatcher(
+        projectionService: const NotificationProjectionService(),
+        inboxStore: notificationInboxStore,
+        presenter: AppNotificationPresenter(),
+        accountContextResolver: SettingsNotificationAccountContextResolver(
+          settingsManagementService: settingsManagementService,
+        ),
+      ),
+    );
+    final notificationHostService = NotificationHostService(
+      platformAdapter: createNotificationHostPlatformAdapter(),
     );
     final chatStorageGateway = DefaultChatStorageGateway(
       mainDatabaseFactory: mainDatabaseFactory,
@@ -190,6 +215,7 @@ class AppInjector {
       keyPackagePublisher: keyPackagePublisher,
       mediaStorageService: mediaStorageService,
       messageNotificationService: messageNotificationService,
+      notificationHostService: notificationHostService,
       sgtpSessionFactory: sgtpSessionFactory,
       homeUserDirCoordinatorFactory: ({
         required onDirectMessageReady,
@@ -198,6 +224,7 @@ class AppInjector {
           HomeUserDirCoordinator(
         persistenceService: homePersistenceService,
         supportService: homeUserDirSupportService,
+        messageNotificationService: messageNotificationService,
         userDirClient: sharedUserDirClient,
         onDirectMessageReady: onDirectMessageReady,
         onStateChanged: onStateChanged,

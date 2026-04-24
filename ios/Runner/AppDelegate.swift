@@ -1,9 +1,13 @@
 import Flutter
 import UIKit
 import AVFoundation
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
+  private let notificationHostChannelName = "com.example.sgtp_flutter/notification_host_ios"
+  private var notificationHostRunning = false
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -40,7 +44,114 @@ import AVFoundation
       }
     }
 
+    UNUserNotificationCenter.current().delegate = self
+    FlutterMethodChannel(
+      name: notificationHostChannelName,
+      binaryMessenger: controller.binaryMessenger
+    ).setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(FlutterError(code: "DEALLOCATED", message: "AppDelegate unavailable", details: nil))
+        return
+      }
+      switch call.method {
+      case "initialize":
+        self.initializeNotificationHost(application: application, result: result)
+      case "start":
+        let args = call.arguments as? [String: Any]
+        let accountId = (args?["accountId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if accountId.isEmpty {
+          result(FlutterError(code: "INVALID_ACCOUNT", message: "accountId missing", details: nil))
+          return
+        }
+        self.notificationHostRunning = true
+        application.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalMinimum)
+        application.registerForRemoteNotifications()
+        result(nil)
+      case "stop":
+        self.notificationHostRunning = false
+        application.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalNever)
+        result(nil)
+      case "stopForAccount":
+        self.notificationHostRunning = false
+        application.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalNever)
+        result(nil)
+      case "isRunning":
+        result(self.notificationHostRunning)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func initializeNotificationHost(
+    application: UIApplication,
+    result: @escaping FlutterResult
+  ) {
+    UNUserNotificationCenter.current().getNotificationSettings { settings in
+      switch settings.authorizationStatus {
+      case .authorized, .provisional, .ephemeral:
+        DispatchQueue.main.async {
+          application.registerForRemoteNotifications()
+          result("supported")
+        }
+      case .notDetermined:
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) {
+          granted, _ in
+          DispatchQueue.main.async {
+            if granted {
+              application.registerForRemoteNotifications()
+              result("supported")
+            } else {
+              result("permissionDenied")
+            }
+          }
+        }
+      default:
+        DispatchQueue.main.async {
+          result("permissionDenied")
+        }
+      }
+    }
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable : Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    completionHandler(.noData)
+  }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    completionHandler([.banner, .list, .sound])
+  }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    completionHandler()
   }
 
   private func mergeVideoAudio(

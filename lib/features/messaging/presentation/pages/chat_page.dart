@@ -132,7 +132,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       final has = _messageCtrl.text.trim().isNotEmpty;
       if (has != _hasText) setState(() => _hasText = has);
     });
-    _messageNotifications.setSuppressedRoomId(_chatBloc?.state.roomUUID);
+    _messageNotifications.setSuppressedRoomId(
+      widget.accountId,
+      _chatBloc?.state.roomUUID,
+    );
   }
 
   @override
@@ -140,7 +143,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
     _saveScrollPosition();
     _chatBloc?.add(const ChatSetVisibility(false));
     WidgetsBinding.instance.removeObserver(this);
-    _messageNotifications.setSuppressedRoomId(null);
+    _messageNotifications.setSuppressedRoomId(null, null);
     _messageCtrl.dispose();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
@@ -155,7 +158,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         setState(() => _isPageVisible = true);
         _chatBloc?.add(const ChatSetVisibility(true));
-        _messageNotifications.setSuppressedRoomId(_chatBloc?.state.roomUUID);
+        _messageNotifications.setSuppressedRoomId(
+          widget.accountId,
+          _chatBloc?.state.roomUUID,
+        );
         unawaited(_loadCaptureCapabilities());
         unawaited(_messageNotifications.cancelAll());
 
@@ -205,7 +211,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
         _wentToBackground ??= DateTime.now();
         setState(() => _isPageVisible = false);
         _chatBloc?.add(const ChatSetVisibility(false));
-        _messageNotifications.setSuppressedRoomId(null);
+        _messageNotifications.setSuppressedRoomId(null, null);
         break;
 
       case AppLifecycleState.detached:
@@ -1270,6 +1276,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
               _lastScrollRoomUUID = roomUUID;
             }
             _messageNotifications.setSuppressedRoomId(
+              widget.accountId,
               _isPageVisible ? roomUUID : null,
             );
             _tryRestoreScrollPosition(roomUUID);
@@ -1288,6 +1295,7 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             }
           }
           _messageNotifications.setSuppressedRoomId(
+            widget.accountId,
             _isPageVisible ? state.roomUUID : null,
           );
           _lastMessageCount = newCount;
@@ -1310,21 +1318,10 @@ class _ChatPageState extends State<ChatPage> with WidgetsBindingObserver {
             // was still null.
             _sentReadReceipts.add(msg.id);
             bloc.add(ChatSendMessageRead(msg.id));
-            unawaited(_messageNotifications.dismissMessage(msg.id));
+            unawaited(
+              _messageNotifications.dismissRoom(widget.accountId, state.roomUUID),
+            );
           } else {
-            // App in background → show notification so the user can read it.
-            final senderLabel = state.peerNicknames[msg.senderUUID] ??
-                state.peerNicknamesHistory[msg.senderUUID] ??
-                (msg.senderUUID.length >= 8
-                    ? msg.senderUUID.substring(0, 8)
-                    : msg.senderUUID);
-            final body = msg.type == MessageType.text
-                ? msg.content
-                : '[${msg.type.name}]';
-            // Pass sender avatar if available — shown as icon on Android
-            // and as attachment thumbnail on iOS/macOS.
-            final avatar =
-                state.peerAvatars[msg.senderUUID] ?? msg.senderAvatarBytes;
             // Notifications are dispatched globally from RoomsBloc.
           }
         }

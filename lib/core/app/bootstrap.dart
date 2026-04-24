@@ -30,5 +30,7 @@ Future<AppDependencies> bootstrapApp() async {
 
   await Openmls.init();
 
-  return AppInjector.build();
+  final dependencies = await AppInjector.build();
+  await dependencies.notificationHostService.ensureInitialized();
+  return dependencies;
 }

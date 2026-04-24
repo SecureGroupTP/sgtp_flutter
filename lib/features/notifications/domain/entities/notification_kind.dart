@@ -1,0 +1,4 @@
+enum NotificationKind {
+  message,
+  friendRequest,
+}

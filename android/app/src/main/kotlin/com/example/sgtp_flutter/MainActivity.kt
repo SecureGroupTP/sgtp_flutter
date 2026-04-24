@@ -18,6 +18,7 @@ class MainActivity : FlutterActivity() {
 
     private val videoMergerChannel = "com.example.sgtp_flutter/video_merger"
     private val keyboardContentChannel = "com.example.sgtp_flutter/keyboard_content"
+    private val notificationHostChannel = "com.example.sgtp_flutter/notification_host_android"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -66,6 +67,46 @@ class MainActivity : FlutterActivity() {
                     }
                 } else {
                     result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, notificationHostChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "initialize" -> {
+                        NotificationHostService.ensureChannel(this)
+                        val status = if (NotificationHostService.areNotificationsEnabled(this)) {
+                            "supported"
+                        } else {
+                            "permissionDenied"
+                        }
+                        result.success(status)
+                    }
+                    "start" -> {
+                        val accountId = call.argument<String>("accountId")?.trim().orEmpty()
+                        if (accountId.isEmpty()) {
+                            result.error("INVALID_ACCOUNT", "accountId missing", null)
+                            return@setMethodCallHandler
+                        }
+                        if (!NotificationHostService.areNotificationsEnabled(this)) {
+                            result.error("PERMISSION_DENIED", "Notifications are disabled", null)
+                            return@setMethodCallHandler
+                        }
+                        NotificationHostService.start(this, accountId)
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        NotificationHostService.stop(this)
+                        result.success(null)
+                    }
+                    "stopForAccount" -> {
+                        val accountId = call.argument<String>("accountId")?.trim().orEmpty()
+                        NotificationHostService.stopForAccount(this, accountId)
+                        result.success(null)
+                    }
+                    "isRunning" -> {
+                        result.success(NotificationHostService.isRunning)
+                    }
+                    else -> result.notImplemented()
                 }
             }
     }

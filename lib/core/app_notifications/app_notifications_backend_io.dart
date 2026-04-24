@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend.dart';
-import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_mobile.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_stub.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend_windows.dart';
