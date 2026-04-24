@@ -13,6 +13,7 @@ import 'package:sgtp_flutter/core/window_size_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_host_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/push_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -27,10 +28,7 @@ bool get _isDesktop =>
     !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
 class SgtpApp extends StatefulWidget {
-  const SgtpApp({
-    super.key,
-    required this.dependencies,
-  });
+  const SgtpApp({super.key, required this.dependencies});
 
   final AppDependencies dependencies;
 
@@ -63,10 +61,8 @@ class _SgtpAppState extends State<SgtpApp> with WindowListener {
   Widget build(BuildContext context) {
     return MultiRepositoryProvider(
       providers: [
-        RepositoryProvider<AppDependencies>(
-          create: (_) => widget.dependencies,
-        ),
-RepositoryProvider<ChatStorageGateway>(
+        RepositoryProvider<AppDependencies>(create: (_) => widget.dependencies),
+        RepositoryProvider<ChatStorageGateway>(
           create: (_) => widget.dependencies.chatStorageGateway,
         ),
         RepositoryProvider<AppStartupService>(
@@ -102,6 +98,9 @@ RepositoryProvider<ChatStorageGateway>(
         RepositoryProvider<NotificationHostService>(
           create: (_) => widget.dependencies.notificationHostService,
         ),
+        RepositoryProvider<PushNotificationService>(
+          create: (_) => widget.dependencies.pushNotificationService,
+        ),
         RepositoryProvider<SgtpSessionFactory>(
           create: (_) => widget.dependencies.sgtpSessionFactory,
         ),
@@ -113,9 +112,7 @@ RepositoryProvider<ChatStorageGateway>(
         darkTheme: AppTheme.dark(),
         themeMode: ThemeMode.dark,
         initialRoute: '/',
-        routes: {
-          '/': (_) => const AppShell(),
-        },
+        routes: {'/': (_) => const AppShell()},
       ),
     );
   }

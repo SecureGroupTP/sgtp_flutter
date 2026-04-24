@@ -12,6 +12,7 @@ import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_host_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/push_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/direct_room_gateway.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/i_sgtp_session.dart';
@@ -79,6 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
       mediaStorageService: context.read<MessagingMediaStorageService>(),
       messageNotificationService: context.read<MessageNotificationService>(),
       notificationHostService: context.read<NotificationHostService>(),
+      pushNotificationService: context.read<PushNotificationService>(),
       sessionFactory: context.read<SgtpSessionFactory>(),
       homePersistenceService: context.read<HomePersistenceService>(),
       homeUserDirSupportService: context.read<HomeUserDirSupportService>(),
@@ -198,8 +200,8 @@ class _HomeAppSessionController implements AppSessionController {
   _HomeAppSessionController({
     required HomeCubit homeCubit,
     required GlobalKey<RoomsPageState> roomsPageKey,
-  })  : _homeCubit = homeCubit,
-        _roomsPageKey = roomsPageKey;
+  }) : _homeCubit = homeCubit,
+       _roomsPageKey = roomsPageKey;
 
   final HomeCubit _homeCubit;
   final GlobalKey<RoomsPageState> _roomsPageKey;
@@ -321,9 +323,9 @@ class _AppStartScreenState extends State<AppStartScreen> {
 
     switch (result.action) {
       case AppStartupAction.showOnboarding:
-        final completed = await Navigator.of(context).push<bool>(
-          MaterialPageRoute(builder: (_) => const OnboardingPage()),
-        );
+        final completed = await Navigator.of(
+          context,
+        ).push<bool>(MaterialPageRoute(builder: (_) => const OnboardingPage()));
         if (completed == true && mounted) {
           await _resolveStartup();
         }
@@ -364,8 +366,6 @@ class _AppStartScreenState extends State<AppStartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
-    );
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }

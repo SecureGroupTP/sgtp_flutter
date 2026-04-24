@@ -19,10 +19,17 @@ import 'package:sgtp_flutter/features/messaging/application/services/message_not
 import 'package:sgtp_flutter/features/notifications/application/services/notification_dispatcher.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_host_service.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_projection_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/push_message_payload_parser.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/push_message_processor.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/push_notification_service.dart';
 import 'package:sgtp_flutter/features/notifications/data/repositories/notification_inbox_store_impl.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/notification_host_platform_adapter_factory.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/app_notification_presenter.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/message_notification_sink.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/push_messaging_client.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/settings_notification_account_context_resolver.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/settings_push_device_registry.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/sgtp_push_token_registrar.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/openmls_runtime.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/server_v2_chat_session.dart';
 import 'package:sgtp_flutter/features/messaging/data/services/shared_key_package_publisher.dart';
@@ -56,6 +63,7 @@ class AppDependencies {
     required this.mediaStorageService,
     required this.messageNotificationService,
     required this.notificationHostService,
+    required this.pushNotificationService,
     required this.sgtpSessionFactory,
     required this.homeUserDirCoordinatorFactory,
   });
@@ -72,6 +80,7 @@ class AppDependencies {
   final MessagingMediaStorageService mediaStorageService;
   final MessageNotificationService messageNotificationService;
   final NotificationHostService notificationHostService;
+  final PushNotificationService pushNotificationService;
   final SgtpSessionFactory sgtpSessionFactory;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
@@ -79,9 +88,11 @@ class AppDependencies {
       String peerHex,
       String displayName,
       Uint8List? avatarBytes,
-    ) onDirectMessageReady,
+    )
+    onDirectMessageReady,
     required void Function(HomeUserDirState state) onStateChanged,
-  }) homeUserDirCoordinatorFactory;
+  })
+  homeUserDirCoordinatorFactory;
 }
 
 class AppInjector {
@@ -107,37 +118,36 @@ class AppInjector {
     final appBackupRepository = AppBackupRepository();
 
     UserDirClient? userDirClientFactory(
-        NodeConfig node, SgtpServerOptions opts) {
+      NodeConfig node,
+      SgtpServerOptions opts,
+    ) {
       if (!opts.supports(node.transport, tls: node.useTls)) return null;
       final port = opts.portFor(node.transport, tls: node.useTls);
       if (port <= 0) return null;
       final fakeSni = node.fakeSni.trim().isEmpty ? null : node.fakeSni.trim();
       final transport = switch (node.transport) {
         SgtpTransportFamily.tcp => TcpSgtpTransport(
-            host: node.host,
-            port: port,
-            useTls: node.useTls,
-            fakeSni: fakeSni,
-          ),
+          host: node.host,
+          port: port,
+          useTls: node.useTls,
+          fakeSni: fakeSni,
+        ),
         SgtpTransportFamily.websocket => WebSocketSgtpTransport(
-            host: node.host,
-            port: port,
-            useTls: node.useTls,
-            fakeSni: fakeSni,
-          ),
+          host: node.host,
+          port: port,
+          useTls: node.useTls,
+          fakeSni: fakeSni,
+        ),
         SgtpTransportFamily.http => HttpProtocolTransport(
-            host: node.host,
-            port: port,
-            useTls: node.useTls,
-          ),
+          host: node.host,
+          port: port,
+          useTls: node.useTls,
+        ),
       };
       final label =
           '${node.transport.name}${node.useTls ? '+tls' : ''}://${node.host}:$port';
       final rpc = SgtpRpcClient(transport);
-      return UserDirClient(
-        rpcProvider: () async => rpc,
-        label: label,
-      );
+      return UserDirClient(rpcProvider: () async => rpc, label: label);
     }
 
     final settingsManagementService = SettingsManagementService(
@@ -162,10 +172,28 @@ class AppInjector {
     final notificationHostService = NotificationHostService(
       platformAdapter: createNotificationHostPlatformAdapter(),
     );
+    final sgtpConnectionService = SgtpConnectionService();
+    final pushDeviceRegistry = SettingsPushDeviceRegistry(
+      settingsManagementService: settingsManagementService,
+    );
+    final pushNotificationService = PushNotificationService(
+      messagingClient: FirebasePushMessagingClient(),
+      deviceRegistry: pushDeviceRegistry,
+      tokenRegistrar: SgtpPushTokenRegistrar(
+        connectionService: sgtpConnectionService,
+      ),
+      messageProcessor: PushMessageProcessor(
+        payloadParser: const PushMessagePayloadParser(),
+        deviceRegistry: pushDeviceRegistry,
+        notificationSink: MessageNotificationSink(
+          messageNotificationService: messageNotificationService,
+        ),
+      ),
+      platformCode: 2,
+    );
     final chatStorageGateway = DefaultChatStorageGateway(
       mainDatabaseFactory: mainDatabaseFactory,
     );
-    final sgtpConnectionService = SgtpConnectionService();
     final sharedUserDirClient = UserDirClient(
       rpcProvider: sgtpConnectionService.ensureConnected,
       label: 'shared-sgtp',
@@ -192,11 +220,11 @@ class AppInjector {
     // implementation. `SgtpClient` remains only as a deprecated compatibility
     // alias and is intentionally not wired here.
     ISgtpSession sgtpSessionFactory(SgtpConfig config) => ServerV2ChatSession(
-          config,
-          connectionService: sgtpConnectionService,
-          openMlsRuntimeFactory: openMlsRuntimeFactory,
-          mainDatabaseFactory: mainDatabaseFactory,
-        );
+      config,
+      connectionService: sgtpConnectionService,
+      openMlsRuntimeFactory: openMlsRuntimeFactory,
+      mainDatabaseFactory: mainDatabaseFactory,
+    );
 
     final contactsDirectoryService = ContactsDirectoryService(
       settingsManagementService: settingsManagementService,
@@ -216,19 +244,18 @@ class AppInjector {
       mediaStorageService: mediaStorageService,
       messageNotificationService: messageNotificationService,
       notificationHostService: notificationHostService,
+      pushNotificationService: pushNotificationService,
       sgtpSessionFactory: sgtpSessionFactory,
-      homeUserDirCoordinatorFactory: ({
-        required onDirectMessageReady,
-        required onStateChanged,
-      }) =>
-          HomeUserDirCoordinator(
-        persistenceService: homePersistenceService,
-        supportService: homeUserDirSupportService,
-        messageNotificationService: messageNotificationService,
-        userDirClient: sharedUserDirClient,
-        onDirectMessageReady: onDirectMessageReady,
-        onStateChanged: onStateChanged,
-      ),
+      homeUserDirCoordinatorFactory:
+          ({required onDirectMessageReady, required onStateChanged}) =>
+              HomeUserDirCoordinator(
+                persistenceService: homePersistenceService,
+                supportService: homeUserDirSupportService,
+                messageNotificationService: messageNotificationService,
+                userDirClient: sharedUserDirClient,
+                onDirectMessageReady: onDirectMessageReady,
+                onStateChanged: onStateChanged,
+              ),
     );
   }
 }

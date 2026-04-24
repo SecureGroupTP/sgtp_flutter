@@ -75,4 +75,21 @@ class NotificationEvent {
   final Uint8List? senderAvatarBytes;
   final int messageCount;
   final List<NotificationAction> actions;
+
+  NotificationEvent withAccountId(String accountId) {
+    return NotificationEvent._(
+      eventId: eventId,
+      segmentId: segmentId,
+      accountId: accountId,
+      kind: kind,
+      threadId: threadId,
+      peerId: peerId,
+      senderId: senderId,
+      senderName: senderName,
+      displayName: displayName,
+      senderAvatarBytes: senderAvatarBytes,
+      messageCount: messageCount,
+      actions: actions,
+    );
+  }
 }

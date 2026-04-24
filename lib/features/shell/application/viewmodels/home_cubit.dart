@@ -10,6 +10,7 @@ import 'package:sgtp_flutter/features/messaging/application/viewmodels/rooms/roo
 import 'package:sgtp_flutter/features/messaging/application/services/media_storage_service.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_host_service.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/push_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/direct_room_binding.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
@@ -42,6 +43,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     required MessagingMediaStorageService mediaStorageService,
     required MessageNotificationService messageNotificationService,
     required NotificationHostService notificationHostService,
+    required PushNotificationService pushNotificationService,
     required SgtpSessionFactory sessionFactory,
     required HomePersistenceService homePersistenceService,
     required HomeUserDirSupportService homeUserDirSupportService,
@@ -51,36 +53,41 @@ class HomeCubit extends Cubit<HomeViewState> {
         String peerHex,
         String displayName,
         Uint8List? avatarBytes,
-      ) onDirectMessageReady,
+      )
+      onDirectMessageReady,
       required void Function(HomeUserDirState state) onStateChanged,
-    }) homeUserDirCoordinatorFactory,
-  })  : _settingsManagementService = settingsManagementService,
-        _chatStorageGateway = chatStorageGateway,
-        _sgtpConnection = sgtpConnectionService,
-        _directRoomGateway = directRoomGateway,
-        _keyPackagePublisher = keyPackagePublisher,
-        _mediaStorageService = mediaStorageService,
-        _messageNotificationService = messageNotificationService,
-        _notificationHostService = notificationHostService,
-        _sessionFactory = sessionFactory,
-        _homePersistence = homePersistenceService,
-        _userDirSupport = homeUserDirSupportService,
-        _accountId = accountId,
-        _config = initialConfig,
-        _nicknames = Map.from(nicknames),
-        _serverAddress = serverAddress,
-        _userAvatar = userAvatar,
-        _contacts = List.from(initialContacts),
-        super(HomeViewState(
-          accountId: accountId,
-          config: initialConfig,
-          nicknames: nicknames,
-          serverAddress: serverAddress,
-          userAvatar: userAvatar,
-          contacts: initialContacts,
-          connectionStatus: sgtpConnectionService.status,
-          connectionError: sgtpConnectionService.lastError,
-        )) {
+    })
+    homeUserDirCoordinatorFactory,
+  }) : _settingsManagementService = settingsManagementService,
+       _chatStorageGateway = chatStorageGateway,
+       _sgtpConnection = sgtpConnectionService,
+       _directRoomGateway = directRoomGateway,
+       _keyPackagePublisher = keyPackagePublisher,
+       _mediaStorageService = mediaStorageService,
+       _messageNotificationService = messageNotificationService,
+       _notificationHostService = notificationHostService,
+       _pushNotificationService = pushNotificationService,
+       _sessionFactory = sessionFactory,
+       _homePersistence = homePersistenceService,
+       _userDirSupport = homeUserDirSupportService,
+       _accountId = accountId,
+       _config = initialConfig,
+       _nicknames = Map.from(nicknames),
+       _serverAddress = serverAddress,
+       _userAvatar = userAvatar,
+       _contacts = List.from(initialContacts),
+       super(
+         HomeViewState(
+           accountId: accountId,
+           config: initialConfig,
+           nicknames: nicknames,
+           serverAddress: serverAddress,
+           userAvatar: userAvatar,
+           contacts: initialContacts,
+           connectionStatus: sgtpConnectionService.status,
+           connectionError: sgtpConnectionService.lastError,
+         ),
+       ) {
     _connectionStatus = _sgtpConnection.status;
     _connectionError = _sgtpConnection.lastError;
     _connectionSub = _sgtpConnection.events.listen(_onConnectionEvent);
@@ -103,6 +110,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     );
     unawaited(_loadNicknameAndInitUserDir());
     unawaited(_notificationHostService.activateAccount(accountId));
+    unawaited(_pushNotificationService.activateAccount(accountId));
   }
 
   final SettingsManagementService _settingsManagementService;
@@ -113,6 +121,7 @@ class HomeCubit extends Cubit<HomeViewState> {
   final MessagingMediaStorageService _mediaStorageService;
   final MessageNotificationService _messageNotificationService;
   final NotificationHostService _notificationHostService;
+  final PushNotificationService _pushNotificationService;
   final SgtpSessionFactory _sessionFactory;
   final HomePersistenceService _homePersistence;
   final HomeUserDirSupportService _userDirSupport;
@@ -173,6 +182,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     _friendStates = {};
     _connectionError = null;
     unawaited(_notificationHostService.activateAccount(accountId));
+    unawaited(_pushNotificationService.activateAccount(accountId));
 
     unawaited(_sgtpConnection.configure(newConfig));
     unawaited(_userDirCoordinator.dispose());
@@ -235,9 +245,9 @@ class HomeCubit extends Cubit<HomeViewState> {
     final old = List<ContactEntry>.from(_contacts);
     _contacts = entries;
     _nicknames = {for (final e in entries) e.hexKey: e.name};
-    _roomsBloc.add(RoomsUpdateNicknames(
-      {for (final e in entries) e.hexKey: e.name},
-    ));
+    _roomsBloc.add(
+      RoomsUpdateNicknames({for (final e in entries) e.hexKey: e.name}),
+    );
     _pushContactAvatarsToRooms();
     _buildState();
     unawaited(_syncContactsWithUserDir(old, entries));
@@ -306,21 +316,23 @@ class HomeCubit extends Cubit<HomeViewState> {
   // ── Private ─────────────────────────────────────────────────────────────
 
   void _buildState() {
-    emit(HomeViewState(
-      accountId: _accountId,
-      config: _config,
-      nicknames: Map.unmodifiable(_nicknames),
-      serverAddress: _serverAddress,
-      userAvatar: _userAvatar,
-      contacts: List.unmodifiable(_contacts),
-      contactProfiles: Map.unmodifiable(_contactProfiles),
-      friendStates: Map.unmodifiable(_friendStates),
-      nickname: _nickname,
-      username: _username,
-      connectionStatus: _connectionStatus,
-      connectionError: _connectionError,
-      currentTabIndex: _currentTabIndex,
-    ));
+    emit(
+      HomeViewState(
+        accountId: _accountId,
+        config: _config,
+        nicknames: Map.unmodifiable(_nicknames),
+        serverAddress: _serverAddress,
+        userAvatar: _userAvatar,
+        contacts: List.unmodifiable(_contacts),
+        contactProfiles: Map.unmodifiable(_contactProfiles),
+        friendStates: Map.unmodifiable(_friendStates),
+        nickname: _nickname,
+        username: _username,
+        connectionStatus: _connectionStatus,
+        connectionError: _connectionError,
+        currentTabIndex: _currentTabIndex,
+      ),
+    );
   }
 
   Future<void> _loadNicknameAndInitUserDir() async {
@@ -384,14 +396,16 @@ class HomeCubit extends Cubit<HomeViewState> {
   (String, Uint8List?) _resolveDirectMessageDisplay(String peerHex) {
     final profile = _contactProfiles[peerHex];
     final fullName = (profile?.fullname ?? '').trim();
-    final username =
-        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+    final username = (profile?.username ?? '').trim().replaceFirst(
+      RegExp(r'^@+'),
+      '',
+    );
     final fallback = (_nicknames[peerHex] ?? '').trim();
     final displayName = fullName.isNotEmpty
         ? fullName
         : (username.isNotEmpty
-            ? username
-            : (fallback.isNotEmpty ? fallback : 'Friend'));
+              ? username
+              : (fallback.isNotEmpty ? fallback : 'Friend'));
     return (displayName, profile?.avatarBytes);
   }
 
@@ -411,10 +425,12 @@ class HomeCubit extends Cubit<HomeViewState> {
 
   void _applyCoordinatorState(HomeUserDirState coordState) {
     if (isClosed) return;
-    _contactProfiles =
-        Map<String, ContactProfile>.from(coordState.contactProfiles);
-    _friendStates =
-        Map<String, FriendStateRecord>.from(coordState.friendStates);
+    _contactProfiles = Map<String, ContactProfile>.from(
+      coordState.contactProfiles,
+    );
+    _friendStates = Map<String, FriendStateRecord>.from(
+      coordState.friendStates,
+    );
     _contacts = List<ContactEntry>.from(coordState.contacts);
     _nicknames = Map<String, String>.from(coordState.nicknames);
     _roomsBloc.add(RoomsUpdateNicknames(_nicknames));
@@ -458,6 +474,7 @@ class HomeCubit extends Cubit<HomeViewState> {
     try {
       await _sgtpConnection.configure(_config);
       await _sgtpConnection.ensureConnected();
+      await _pushNotificationService.syncRegistration();
     } catch (e) {
       _connectionError = '$e';
       _buildState();
@@ -485,6 +502,7 @@ class HomeCubit extends Cubit<HomeViewState> {
   Future<void> close() async {
     await _connectionSub?.cancel();
     await _notificationHostService.deactivateAccount(_accountId);
+    await _pushNotificationService.deactivateAccount(_accountId);
     unawaited(_userDirCoordinator.dispose());
     _roomsBloc.close();
     unawaited(_sgtpConnection.disconnect());
