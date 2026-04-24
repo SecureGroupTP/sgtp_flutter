@@ -1,7 +1,11 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
+import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/shell/application/models/home_userdir_models.dart';
 import 'package:sgtp_flutter/features/shell/application/services/home_persistence_service.dart';
@@ -20,13 +24,14 @@ class HomeUserDirCoordinator {
       String peerHex,
       String displayName,
       Uint8List? avatarBytes,
-    ) onDirectMessageReady,
+    )
+    onDirectMessageReady,
     required void Function(HomeUserDirState state) onStateChanged,
-  })  : _persistence = persistenceService,
-        _support = supportService,
-        _userDirClient = userDirClient,
-        _onDirectMessageReady = onDirectMessageReady,
-        _onStateChanged = onStateChanged;
+  }) : _persistence = persistenceService,
+       _support = supportService,
+       _userDirClient = userDirClient,
+       _onDirectMessageReady = onDirectMessageReady,
+       _onStateChanged = onStateChanged;
 
   final HomePersistenceService _persistence;
   final HomeUserDirSupportService _support;
@@ -36,7 +41,8 @@ class HomeUserDirCoordinator {
     String peerHex,
     String displayName,
     Uint8List? avatarBytes,
-  ) _onDirectMessageReady;
+  )
+  _onDirectMessageReady;
   final void Function(HomeUserDirState state) _onStateChanged;
 
   IUserDirClient? _client;
@@ -61,14 +67,16 @@ class HomeUserDirCoordinator {
   Set<String> _suppressedContacts = {};
   List<ContactEntry> _contacts = const [];
   Map<String, String> _nicknames = const {};
+  final Map<String, AppNotificationHandle> _friendRequestNotifications =
+      <String, AppNotificationHandle>{};
 
   HomeUserDirState get currentState => HomeUserDirState(
-        contactProfiles: Map<String, ContactProfile>.from(_contactProfiles),
-        friendStates: Map<String, FriendStateRecord>.from(_friendStates),
-        suppressedContacts: Set<String>.from(_suppressedContacts),
-        contacts: List<ContactEntry>.from(_contacts),
-        nicknames: Map<String, String>.from(_nicknames),
-      );
+    contactProfiles: Map<String, ContactProfile>.from(_contactProfiles),
+    friendStates: Map<String, FriendStateRecord>.from(_friendStates),
+    suppressedContacts: Set<String>.from(_suppressedContacts),
+    contacts: List<ContactEntry>.from(_contacts),
+    nicknames: Map<String, String>.from(_nicknames),
+  );
 
   Future<HomeUserDirState> start(HomeUserDirSession session) async {
     _activeAccountId = session.accountId.trim();
@@ -82,13 +90,15 @@ class HomeUserDirCoordinator {
       userAvatar: session.userAvatar,
     );
     final accountState = await _persistence.loadAccountState(session.accountId);
-    final storedProfiles =
-        await _persistence.loadAllContactProfiles(session.accountId);
+    final storedProfiles = await _persistence.loadAllContactProfiles(
+      session.accountId,
+    );
     _contactProfiles = {
       for (final e in storedProfiles.entries) e.key.toLowerCase(): e.value,
     };
-    _friendStates =
-        Map<String, FriendStateRecord>.from(accountState.friendStates);
+    _friendStates = Map<String, FriendStateRecord>.from(
+      accountState.friendStates,
+    );
     _suppressedContacts = Set<String>.from(accountState.suppressedContacts);
     _contacts = _sanitizeContacts(session, session.contacts);
     _nicknames = {for (final e in _contacts) e.hexKey.toLowerCase(): e.name};
@@ -173,7 +183,8 @@ class HomeUserDirCoordinator {
 
     final msg = (result.errorMessage ?? '').trim();
     final lower = msg.toLowerCase();
-    final isTaken = lower.contains('taken') ||
+    final isTaken =
+        lower.contains('taken') ||
         lower.contains('exists') ||
         lower.contains('occupied') ||
         lower.contains('already');
@@ -194,10 +205,12 @@ class HomeUserDirCoordinator {
 
     final oldSet = previousContacts.map((e) => e.hexKey.toLowerCase()).toSet();
     final nextSet = _contacts.map((e) => e.hexKey.toLowerCase()).toSet();
-    final removed = previousContacts
-        .where((e) => !nextSet.contains(e.hexKey.toLowerCase()));
-    final added =
-        nextContacts.where((e) => !oldSet.contains(e.hexKey.toLowerCase()));
+    final removed = previousContacts.where(
+      (e) => !nextSet.contains(e.hexKey.toLowerCase()),
+    );
+    final added = nextContacts.where(
+      (e) => !oldSet.contains(e.hexKey.toLowerCase()),
+    );
 
     if (removed.isNotEmpty) {
       for (final entry in removed) {
@@ -243,6 +256,9 @@ class HomeUserDirCoordinator {
       accept: accept,
       identityKeyPair: session.config.identityKeyPair,
     );
+    if (ok) {
+      await _dismissFriendRequestNotification(peerHex);
+    }
     if (ok && accept) {
       _suppressedContacts.remove(peerHex.toLowerCase());
       await _persistence.saveSuppressedContacts(
@@ -261,6 +277,10 @@ class HomeUserDirCoordinator {
     await _userDirSub?.cancel();
     await _friendDirSub?.cancel();
     _profileRegisterTimer?.cancel();
+    for (final handle in _friendRequestNotifications.values) {
+      unawaited(handle.dismiss());
+    }
+    _friendRequestNotifications.clear();
     _initFuture = null;
     _client = null;
     _activeAccountId = '';
@@ -286,10 +306,13 @@ class HomeUserDirCoordinator {
         peerPubkey: _support.hexToBytes32(peerHex),
         identityKeyPair: session.config.identityKeyPair,
       );
-      _log.info('FRIEND_DELETE {status} peer={peer}', parameters: {
-        'status': ok ? 'sent' : 'failed',
-        'peer': peerHex.substring(0, 8)
-      });
+      _log.info(
+        'FRIEND_DELETE {status} peer={peer}',
+        parameters: {
+          'status': ok ? 'sent' : 'failed',
+          'peer': peerHex.substring(0, 8),
+        },
+      );
       if (ok) {
         await _syncFriendStates(session, client);
       }
@@ -321,10 +344,13 @@ class HomeUserDirCoordinator {
         peerPubkey: entry.bytes,
         identityKeyPair: session.config.identityKeyPair,
       );
-      _log.info('FRIEND_REQUEST {status} peer={peer}', parameters: {
-        'status': ok ? 'sent' : 'failed',
-        'peer': hex.substring(0, 8)
-      });
+      _log.info(
+        'FRIEND_REQUEST {status} peer={peer}',
+        parameters: {
+          'status': ok ? 'sent' : 'failed',
+          'peer': hex.substring(0, 8),
+        },
+      );
       await _syncFriendStates(session, client);
     } catch (_) {}
   }
@@ -337,9 +363,14 @@ class HomeUserDirCoordinator {
     final lower = peerHex.toLowerCase();
     if (_isSelfHex(session, lower)) return;
     if (_suppressedContacts.contains(lower)) return;
-    final existingIdx = _contacts.indexWhere((e) => e.hexKey.toLowerCase() == lower);
-    final existingName = existingIdx >= 0 ? _contacts[existingIdx].name.trim() : '';
-    final canUpgradeExisting = existingIdx >= 0 && _isAutoPeerFallbackName(existingName);
+    final existingIdx = _contacts.indexWhere(
+      (e) => e.hexKey.toLowerCase() == lower,
+    );
+    final existingName = existingIdx >= 0
+        ? _contacts[existingIdx].name.trim()
+        : '';
+    final canUpgradeExisting =
+        existingIdx >= 0 && _isAutoPeerFallbackName(existingName);
 
     ContactProfile? profile = _contactProfiles[lower];
     final client = _client;
@@ -362,12 +393,16 @@ class HomeUserDirCoordinator {
     }
 
     final fullName = (profile?.fullname ?? '').trim();
-    final username =
-        (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+    final username = (profile?.username ?? '').trim().replaceFirst(
+      RegExp(r'^@+'),
+      '',
+    );
     final autoName = _bestContactName(
       fullName: fullName,
       username: username,
-      fallback: existingName.isNotEmpty ? existingName : 'peer_${lower.substring(0, 8)}',
+      fallback: existingName.isNotEmpty
+          ? existingName
+          : 'peer_${lower.substring(0, 8)}',
     );
 
     if (existingIdx >= 0) {
@@ -376,7 +411,10 @@ class HomeUserDirCoordinator {
       if (nextName.isEmpty || nextName == existingName) return;
       final updated = List<ContactEntry>.from(_contacts);
       final existing = updated[existingIdx];
-      updated[existingIdx] = ContactEntry(bytes: existing.bytes, name: nextName);
+      updated[existingIdx] = ContactEntry(
+        bytes: existing.bytes,
+        name: nextName,
+      );
       _contacts = updated;
       _nicknames = {..._nicknames, lower: nextName};
       await _persistence.saveContactEntries(session.accountId, _contacts);
@@ -399,6 +437,7 @@ class HomeUserDirCoordinator {
     IUserDirClient client,
   ) async {
     if (!_isCurrentSession(session)) return;
+    final previousStates = Map<String, FriendStateRecord>.from(_friendStates);
     final snapshot = await client.friendSync(
       myPubkey: session.config.myPublicKey,
       identityKeyPair: session.config.identityKeyPair,
@@ -481,8 +520,10 @@ class HomeUserDirCoordinator {
         final nickname = (_nicknames[peerHex] ?? '').trim();
         final nicknameIsAuto = _isAutoPeerFallbackName(nickname);
         final fullName = profile?.fullname?.trim() ?? '';
-        final username =
-            (profile?.username ?? '').trim().replaceFirst(RegExp(r'^@+'), '');
+        final username = (profile?.username ?? '').trim().replaceFirst(
+          RegExp(r'^@+'),
+          '',
+        );
         final fallback = (!nicknameIsAuto && nickname.isNotEmpty)
             ? nickname
             : 'peer_${peerHex.substring(0, 8)}';
@@ -501,13 +542,14 @@ class HomeUserDirCoordinator {
     }
 
     _friendStates = _stabilizeFriendStates(
-      previous: _friendStates,
+      previous: previousStates,
       next: next,
       nowSec: now,
     );
     if (!_isCurrentSession(session)) return;
     await _persistence.saveFriendStates(session.accountId, _friendStates);
     await _persistence.saveContactEntries(session.accountId, _contacts);
+    await _syncFriendRequestNotifications(session, previousStates);
     _emit();
   }
 
@@ -544,8 +586,10 @@ class HomeUserDirCoordinator {
     final client = _userDirClient;
     _client = client;
 
-    _log.info('RPC connecting via {label}',
-        parameters: {'label': client.label});
+    _log.info(
+      'RPC connecting via {label}',
+      parameters: {'label': client.label},
+    );
     try {
       await client.connect();
       await registerSelf(session, force: false);
@@ -560,12 +604,14 @@ class HomeUserDirCoordinator {
       ];
       await client.subscribe(keys);
       _userDirSub = client.notifyStream.listen((meta) {
-        _notifyQueue =
-            _notifyQueue.then((_) => _handleNotify(session, meta, client));
+        _notifyQueue = _notifyQueue.then(
+          (_) => _handleNotify(session, meta, client),
+        );
       });
       _friendDirSub = client.friendNotifyStream.listen((_) {
-        _notifyQueue =
-            _notifyQueue.then((_) => _syncFriendStates(session, client));
+        _notifyQueue = _notifyQueue.then(
+          (_) => _syncFriendStates(session, client),
+        );
       });
       _profileRegisterTimer?.cancel();
       _profileRegisterTimer = Timer.periodic(const Duration(seconds: 10), (_) {
@@ -576,8 +622,12 @@ class HomeUserDirCoordinator {
       // Requests are sent explicitly when the user adds a contact
       // (see applyContactChanges -> _sendFriendRequestFor).
     } catch (e, st) {
-      _log.error('RPC init failed: {error}',
-          parameters: {'error': e}, error: e, stackTrace: st);
+      _log.error(
+        'RPC init failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -675,12 +725,12 @@ class HomeUserDirCoordinator {
   }
 
   int _friendStatusPriority(FriendStatus status) => switch (status) {
-        FriendStatus.none => 0,
-        FriendStatus.rejected => 1,
-        FriendStatus.pendingOutgoing => 2,
-        FriendStatus.pendingIncoming => 3,
-        FriendStatus.friend => 4,
-      };
+    FriendStatus.none => 0,
+    FriendStatus.rejected => 1,
+    FriendStatus.pendingOutgoing => 2,
+    FriendStatus.pendingIncoming => 3,
+    FriendStatus.friend => 4,
+  };
 
   List<ContactEntry> _sanitizeContacts(
     HomeUserDirSession session,
@@ -727,6 +777,121 @@ class HomeUserDirCoordinator {
   String _pubkeyHex(Uint8List key) =>
       key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
+  Future<void> _syncFriendRequestNotifications(
+    HomeUserDirSession session,
+    Map<String, FriendStateRecord> previousStates,
+  ) async {
+    final incomingPeers = _friendStates.entries
+        .where(
+          (entry) => entry.value.statusEnum == FriendStatus.pendingIncoming,
+        )
+        .map((entry) => entry.key)
+        .toSet();
+
+    final obsoletePeers = _friendRequestNotifications.keys
+        .where((peerHex) => !incomingPeers.contains(peerHex))
+        .toList(growable: false);
+    for (final peerHex in obsoletePeers) {
+      await _dismissFriendRequestNotification(peerHex);
+    }
+
+    for (final peerHex in incomingPeers) {
+      if (_friendRequestNotifications.containsKey(peerHex)) {
+        continue;
+      }
+      final previousStatus = previousStates[peerHex]?.statusEnum;
+      if (previousStatus == FriendStatus.pendingIncoming) {
+        continue;
+      }
+      await _showFriendRequestNotification(session, peerHex);
+    }
+  }
+
+  Future<void> _showFriendRequestNotification(
+    HomeUserDirSession session,
+    String peerHex,
+  ) async {
+    if (kIsWeb) {
+      return;
+    }
+
+    final profile = _contactProfiles[peerHex];
+    final displayName = _displayNameForPeer(peerHex);
+    final avatar = await NotificationAvatarImage.resolve(
+      avatarBytes: profile?.avatarBytes,
+      fallbackName: displayName,
+    );
+
+    try {
+      final handle = await AppNotifications.instance
+          .builder()
+          .setImage(avatar)
+          .setTitle(displayName)
+          .setSubtitle('Sent you a friend request')
+          .setDesktopDuration(const Duration(minutes: 5))
+          .addButton(
+            label: 'Accept',
+            onPressed: () => respondToFriend(
+              session: session,
+              peerHex: peerHex,
+              accept: true,
+            ),
+          )
+          .addButton(
+            label: 'Decline',
+            color: AppNotificationButtonColor.red,
+            onPressed: () => respondToFriend(
+              session: session,
+              peerHex: peerHex,
+              accept: false,
+            ),
+          )
+          .show();
+      final previousHandle = _friendRequestNotifications[peerHex];
+      _friendRequestNotifications[peerHex] = handle;
+      if (previousHandle != null) {
+        await previousHandle.dismiss();
+      }
+    } catch (e, st) {
+      _log.warning(
+        'Failed to show friend request notification: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
+  Future<void> _dismissFriendRequestNotification(String peerHex) async {
+    final handle = _friendRequestNotifications.remove(peerHex.toLowerCase());
+    if (handle == null) {
+      return;
+    }
+    try {
+      await handle.dismiss();
+    } catch (_) {}
+  }
+
+  String _displayNameForPeer(String peerHex) {
+    final lower = peerHex.toLowerCase();
+    final profile = _contactProfiles[lower];
+    final nickname = (_nicknames[lower] ?? '').trim();
+    final nicknameIsAuto = _isAutoPeerFallbackName(nickname);
+    final fullName = profile?.fullname?.trim() ?? '';
+    final username = (profile?.username ?? '').trim().replaceFirst(
+      RegExp(r'^@+'),
+      '',
+    );
+    final fallback = (!nicknameIsAuto && nickname.isNotEmpty)
+        ? nickname
+        : 'peer_${lower.substring(0, 8)}';
+    return _bestContactName(
+      fullName: fullName,
+      username: username,
+      fallback: fallback,
+    );
+  }
+
   Map<String, FriendStateRecord> _stabilizeFriendStates({
     required Map<String, FriendStateRecord> previous,
     required Map<String, FriendStateRecord> next,
@@ -749,4 +914,3 @@ class HomeUserDirCoordinator {
     return merged;
   }
 }
-
