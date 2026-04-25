@@ -3,8 +3,6 @@ import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 
-import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
-import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/network/events/connection_events.dart';
 import 'package:sgtp_flutter/core/network/i_protocol_transport.dart';
@@ -16,9 +14,16 @@ import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/sgtp_transport.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/notifications/application/services/notification_dispatcher.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
 
 class SgtpConnectionService {
+  SgtpConnectionService({
+    NotificationDispatcher? notificationDispatcher,
+  }) : _notificationDispatcher = notificationDispatcher;
+
   final _log = AppLog('SgtpConnectionService');
+  final NotificationDispatcher? _notificationDispatcher;
   final _events = StreamController<SgtpConnectionStateChanged>.broadcast();
   final _serverEventsLive = StreamController<_ServerEventEnvelope>.broadcast();
   final Queue<_ServerEventEnvelope> _serverEventsBuffer =
@@ -354,23 +359,20 @@ class SgtpConnectionService {
       return;
     }
     final title = config.userUsername?.trim();
-    if ((title == null || title.isEmpty) &&
-        (config.userAvatarBytes == null || config.userAvatarBytes!.isEmpty)) {
+    final accountId = (config.accountId ?? '').trim();
+    if (accountId.isEmpty || (title == null || title.isEmpty)) {
       return;
     }
     try {
-      final fallbackName = (title == null || title.isEmpty) ? 'Account' : title;
-      final resolvedAvatar = await NotificationAvatarImage.resolve(
-        avatarBytes: config.userAvatarBytes,
-        fallbackName: fallbackName,
+      await _notificationDispatcher?.dispatch(
+        NotificationEvent.service(
+          eventId: 'auth-success-${DateTime.now().millisecondsSinceEpoch}',
+          accountId: accountId,
+          title: title,
+          body: 'Authentication successful',
+          avatarBytes: config.userAvatarBytes,
+        ),
       );
-      await AppNotifications.instance
-          .builder()
-          .setImage(resolvedAvatar)
-          .setTitle(fallbackName)
-          .setSubtitle('Authentication successful')
-          .setDesktopDuration(const Duration(seconds: 6))
-          .show();
     } catch (e, st) {
       _log.warning(
         'Failed to show authentication test notification: {error}',

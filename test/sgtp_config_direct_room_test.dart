@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 
 void main() {
-  SgtpConfig buildConfig({required Set<String> whitelist}) {
+  SgtpConfig buildConfig() {
     return SgtpConfig(
+      accountId: 'acc-1',
+      deviceId: 'device-1',
       serverAddr: 'localhost:9000',
       roomUUID: Uint8List(16),
       identityKeyPair: SimpleKeyPairData(
@@ -15,46 +17,44 @@ void main() {
         type: KeyPairType.ed25519,
       ),
       myPublicKey: Uint8List(32),
-      whitelist: whitelist,
     );
   }
 
-  test('copyWithDirectRoom narrows whitelist to direct peer', () {
-    final cfg = buildConfig(whitelist: {
-      'a' * 64,
-      'b' * 64,
-    });
+  test('copyWithDirectRoom enables direct-message mode', () {
+    final cfg = buildConfig();
 
     final next = cfg.copyWithDirectRoom(
       isDirectMessage: true,
       directPeerPublicKeyHex: ('C' * 64),
+      bootstrapDirectRoom: true,
     );
 
     expect(next.isDirectMessage, isTrue);
-    expect(next.whitelist, {('c' * 64)});
+    expect(next.directPeerPublicKeyHex, 'C' * 64);
+    expect(next.bootstrapDirectRoom, isTrue);
   });
 
-  test('copyWithDirectRoom keeps whitelist for non-direct rooms', () {
-    final cfg = buildConfig(whitelist: {
-      'a' * 64,
-      'b' * 64,
-    });
-
-    final next = cfg.copyWithDirectRoom(isDirectMessage: false);
-
-    expect(next.isDirectMessage, isFalse);
-    expect(next.whitelist, cfg.whitelist);
-  });
-
-  test('copyWithDirectRoom uses empty whitelist when peer is missing', () {
-    final cfg = buildConfig(whitelist: {
-      'a' * 64,
-      'b' * 64,
-    });
+  test('copyWithDirectRoom keeps existing direct peer when omitted', () {
+    final cfg = buildConfig().copyWithDirectRoom(
+      isDirectMessage: true,
+      directPeerPublicKeyHex: 'a' * 64,
+    );
 
     final next = cfg.copyWithDirectRoom(isDirectMessage: true);
 
     expect(next.isDirectMessage, isTrue);
-    expect(next.whitelist, isEmpty);
+    expect(next.directPeerPublicKeyHex, 'a' * 64);
+  });
+
+  test('copyWithDirectRoom can disable direct-message mode', () {
+    final cfg = buildConfig().copyWithDirectRoom(
+      isDirectMessage: true,
+      directPeerPublicKeyHex: 'b' * 64,
+    );
+
+    final next = cfg.copyWithDirectRoom(isDirectMessage: true);
+
+    expect(next.isDirectMessage, isTrue);
+    expect(next.directPeerPublicKeyHex, 'b' * 64);
   });
 }

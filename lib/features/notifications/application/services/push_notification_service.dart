@@ -36,10 +36,12 @@ class PushNotificationService {
     }
     await _messagingClient.initialize();
     await _messagingClient.requestPermission();
+
     _tokenRefreshSub = _messagingClient.onTokenRefresh.listen((token) {
       if (!_registrationEnabled) return;
       unawaited(_registerToken(token));
     });
+
     final processor = _messageProcessor;
     if (processor != null) {
       _foregroundMessagesSub = _messagingClient.onForegroundMessage.listen((
@@ -48,6 +50,7 @@ class PushNotificationService {
         unawaited(processor.process(data));
       });
     }
+
     _initialized = true;
   }
 
@@ -70,10 +73,12 @@ class PushNotificationService {
   Future<void> syncRegistration() async {
     _registrationEnabled = true;
     await ensureInitialized();
+
     final token = await _messagingClient.getToken();
     if (token == null || token.trim().isEmpty) {
       return;
     }
+
     await _registerToken(token);
   }
 
@@ -87,10 +92,13 @@ class PushNotificationService {
   Future<void> _registerToken(String rawToken) async {
     final accountId = _activeAccountId;
     final token = rawToken.trim();
+
     if (accountId == null || accountId.isEmpty || token.isEmpty) {
       return;
     }
+
     final deviceId = await _deviceRegistry.loadDeviceId(accountId);
+
     try {
       await _tokenRegistrar.registerToken(
         accountId: accountId,

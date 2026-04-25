@@ -10,7 +10,7 @@ void main() {
   group('NotificationProjectionService', () {
     final service = NotificationProjectionService();
 
-    test('builds metadata-only message notification without message text', () {
+    test('builds message notification with preview body', () {
       final projection = service.project(
         NotificationEvent.message(
           eventId: 'evt-1',
@@ -20,6 +20,7 @@ void main() {
           senderId: 'peer-1',
           senderName: 'Alice',
           senderAvatarBytes: Uint8List.fromList(<int>[1, 2, 3]),
+          body: 'hello there',
           messageCount: 2,
         ),
         const NotificationAccountContext(
@@ -31,7 +32,7 @@ void main() {
       expect(projection.shouldShow, isTrue);
       expect(projection.kind, NotificationKind.message);
       expect(projection.safePayload.title, 'Alice');
-      expect(projection.safePayload.subtitle, '2 new messages');
+      expect(projection.safePayload.body, 'hello there');
       expect(projection.safePayload.avatarBytes, isNotNull);
       expect(projection.safePayload.title, isNot(contains('hello')));
     });
@@ -55,7 +56,7 @@ void main() {
 
       expect(projection.shouldShow, isTrue);
       expect(projection.safePayload.title, 'New message');
-      expect(projection.safePayload.subtitle, isNull);
+      expect(projection.safePayload.body, isNull);
       expect(projection.safePayload.avatarBytes, isNull);
     });
 
@@ -77,7 +78,7 @@ void main() {
       expect(projection.shouldShow, isTrue);
       expect(projection.kind, NotificationKind.friendRequest);
       expect(projection.safePayload.title, 'Bob');
-      expect(projection.safePayload.subtitle, 'Sent you a friend request');
+      expect(projection.safePayload.body, 'Sent you a friend request');
     });
   });
 }

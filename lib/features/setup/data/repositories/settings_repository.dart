@@ -12,6 +12,7 @@ import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
 import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/core/uuid_v7.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
@@ -88,6 +89,18 @@ class SettingsRepository {
   static const _doubleTapDesktopKey = 'iprefs_doubletap_desktop';
   static const _swipeToReplyKey = 'iprefs_swipe_to_reply';
   static const _longPressMenuKey = 'iprefs_longpress_menu';
+  static const _linuxNotificationsEnabledKey = 'linux_notifications_enabled_v1';
+  static const _linuxNotificationModeKey = 'linux_notification_mode_v1';
+  static const _linuxNotificationDurationKey =
+      'linux_notification_duration_seconds_v1';
+  static const _linuxNotificationPositionKey =
+      'linux_notification_position_v1';
+  static const _linuxNotificationMaxVisibleKey =
+      'linux_notification_max_visible_v1';
+  static const _linuxNotificationShowPreviewKey =
+      'linux_notification_show_preview_v1';
+  static const _linuxNotificationShowAvatarsKey =
+      'linux_notification_show_avatars_v1';
   static const _nodeServerOptionsKeyPrefix = 'sgtp_node_server_options_v1_';
   static const _nodeServerOptionsSavedAtKeyPrefix =
       'sgtp_node_server_options_saved_at_v1_';
@@ -1031,6 +1044,53 @@ class SettingsRepository {
     await p.setString(_doubleTapDesktopKey, settings.doubleTapDesktop);
     await p.setBool(_swipeToReplyKey, settings.swipeToReply);
     await p.setBool(_longPressMenuKey, settings.longPressMenu);
+  }
+
+  Future<LinuxNotificationSettings> loadLinuxNotificationSettings() async {
+    final p = await SharedPreferences.getInstance();
+    final modeValue = p.getString(_linuxNotificationModeKey) ?? 'native';
+    final positionValue =
+        p.getString(_linuxNotificationPositionKey) ?? 'topRight';
+    return LinuxNotificationSettings(
+      enabled: p.getBool(_linuxNotificationsEnabledKey) ?? true,
+      mode: modeValue == 'custom'
+          ? LinuxNotificationMode.custom
+          : LinuxNotificationMode.native,
+      customDurationSeconds:
+          p.getInt(_linuxNotificationDurationKey)?.clamp(2, 30) ?? 6,
+      position: switch (positionValue) {
+        'topLeft' => LinuxCustomNotificationPosition.topLeft,
+        'bottomRight' => LinuxCustomNotificationPosition.bottomRight,
+        'bottomLeft' => LinuxCustomNotificationPosition.bottomLeft,
+        _ => LinuxCustomNotificationPosition.topRight,
+      },
+      maxVisibleCustomNotifications:
+          p.getInt(_linuxNotificationMaxVisibleKey)?.clamp(1, 6) ?? 3,
+      showMessagePreview: p.getBool(_linuxNotificationShowPreviewKey) ?? true,
+      showAvatars: p.getBool(_linuxNotificationShowAvatarsKey) ?? true,
+    );
+  }
+
+  Future<void> saveLinuxNotificationSettings(
+    LinuxNotificationSettings settings,
+  ) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_linuxNotificationsEnabledKey, settings.enabled);
+    await p.setString(_linuxNotificationModeKey, settings.mode.name);
+    await p.setInt(
+      _linuxNotificationDurationKey,
+      settings.customDurationSeconds.clamp(2, 30),
+    );
+    await p.setString(_linuxNotificationPositionKey, settings.position.name);
+    await p.setInt(
+      _linuxNotificationMaxVisibleKey,
+      settings.maxVisibleCustomNotifications.clamp(1, 6),
+    );
+    await p.setBool(
+      _linuxNotificationShowPreviewKey,
+      settings.showMessagePreview,
+    );
+    await p.setBool(_linuxNotificationShowAvatarsKey, settings.showAvatars);
   }
 
   // ── Capture devices ──────────────────────────────────────────────────────

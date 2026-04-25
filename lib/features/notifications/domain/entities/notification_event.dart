@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_kind.dart';
 
+typedef NotificationTapCallback = Future<void> Function();
+
 class NotificationEvent {
   const NotificationEvent._({
     required this.eventId,
@@ -15,7 +17,9 @@ class NotificationEvent {
     this.senderName,
     this.displayName,
     this.senderAvatarBytes,
+    this.body,
     this.messageCount = 0,
+    this.onTap,
     this.actions = const <NotificationAction>[],
   });
 
@@ -27,7 +31,9 @@ class NotificationEvent {
     required String senderId,
     required String senderName,
     Uint8List? senderAvatarBytes,
+    String? body,
     int messageCount = 1,
+    NotificationTapCallback? onTap,
   }) {
     return NotificationEvent._(
       eventId: eventId,
@@ -38,7 +44,9 @@ class NotificationEvent {
       senderId: senderId,
       senderName: senderName,
       senderAvatarBytes: senderAvatarBytes,
+      body: body,
       messageCount: messageCount,
+      onTap: onTap,
     );
   }
 
@@ -63,6 +71,24 @@ class NotificationEvent {
     );
   }
 
+  factory NotificationEvent.service({
+    required String eventId,
+    required String accountId,
+    required String title,
+    String? body,
+    Uint8List? avatarBytes,
+  }) {
+    return NotificationEvent._(
+      eventId: eventId,
+      segmentId: eventId,
+      accountId: accountId,
+      kind: NotificationKind.service,
+      displayName: title,
+      senderAvatarBytes: avatarBytes,
+      body: body,
+    );
+  }
+
   final String eventId;
   final String? segmentId;
   final String accountId;
@@ -73,7 +99,9 @@ class NotificationEvent {
   final String? senderName;
   final String? displayName;
   final Uint8List? senderAvatarBytes;
+  final String? body;
   final int messageCount;
+  final NotificationTapCallback? onTap;
   final List<NotificationAction> actions;
 
   NotificationEvent withAccountId(String accountId) {
@@ -88,7 +116,9 @@ class NotificationEvent {
       senderName: senderName,
       displayName: displayName,
       senderAvatarBytes: senderAvatarBytes,
+      body: body,
       messageCount: messageCount,
+      onTap: onTap,
       actions: actions,
     );
   }

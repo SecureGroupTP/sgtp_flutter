@@ -143,7 +143,7 @@ class _WebNotificationInboxDatabase implements NotificationInboxDatabase {
       collapseKey: value['collapseKey'] as String? ?? '',
       safePayload: NotificationSafePayload(
         title: payload['title'] as String? ?? 'New activity',
-        subtitle: payload['subtitle'] as String?,
+        body: payload['body'] as String? ?? payload['subtitle'] as String?,
         avatarBytes: avatarBytes,
       ),
     );

@@ -678,7 +678,18 @@ class RoomsBloc extends Bloc<RoomsEvent, RoomsState> {
           roomId: chatState.roomUUID,
           senderId: msg.senderUUID,
           senderName: senderLabel,
+          senderPublicKeyHex: msg.senderPublicKeyHex,
           avatarBytes: avatar,
+          body: switch (msg.type) {
+            MessageType.text =>
+              msg.content.trim().isEmpty ? 'Message' : msg.content.trim(),
+            MessageType.image => 'Photo',
+            MessageType.gif => 'GIF',
+            MessageType.video => 'Video',
+            MessageType.voice => 'Voice message',
+            MessageType.videoNote => 'Video note',
+            _ => 'Message',
+          },
           messageCount: 1,
         ),
       );

@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/constants.dart';
 import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 import 'package:sgtp_flutter/features/setup/domain/entities/node.dart';
 
@@ -29,6 +30,14 @@ class SettingsViewState {
     this.doubleTapDesktop = 'react',
     this.swipeToReply = true,
     this.longPressMenu = true,
+    this.linuxNotificationsEnabled = true,
+    this.linuxNotificationMode = LinuxNotificationMode.native,
+    this.linuxCustomNotificationDurationSeconds = 6,
+    this.linuxCustomNotificationPosition =
+        LinuxCustomNotificationPosition.topRight,
+    this.linuxMaxVisibleCustomNotifications = 3,
+    this.linuxShowMessagePreview = true,
+    this.linuxShowAvatars = true,
     this.nodes = const [],
     this.accountIdsList = const [],
     this.nodesLoading = true,
@@ -63,6 +72,13 @@ class SettingsViewState {
   final String doubleTapDesktop;
   final bool swipeToReply;
   final bool longPressMenu;
+  final bool linuxNotificationsEnabled;
+  final LinuxNotificationMode linuxNotificationMode;
+  final int linuxCustomNotificationDurationSeconds;
+  final LinuxCustomNotificationPosition linuxCustomNotificationPosition;
+  final int linuxMaxVisibleCustomNotifications;
+  final bool linuxShowMessagePreview;
+  final bool linuxShowAvatars;
 
   final List<NodeConfig> nodes;
   final List<String> accountIdsList;

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:sgtp_flutter/core/app/notification_interaction_service.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_dispatcher.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
@@ -9,11 +10,14 @@ import 'package:sgtp_flutter/features/notifications/domain/entities/notification
 class MessageNotificationService {
   MessageNotificationService({
     required NotificationDispatcher notificationDispatcher,
-  }) : _notificationDispatcher = notificationDispatcher {
+    required NotificationInteractionService interactionService,
+  })  : _notificationDispatcher = notificationDispatcher,
+        _interactionService = interactionService {
     _ensureLifecycleObserver();
   }
 
   final NotificationDispatcher _notificationDispatcher;
+  final NotificationInteractionService _interactionService;
   bool _lifecycleAttached = false;
   bool _appIsInteractive = true;
   String? _suppressedRoomId;
@@ -26,7 +30,9 @@ class MessageNotificationService {
     required String roomId,
     required String senderId,
     required String senderName,
+    String? senderPublicKeyHex,
     Uint8List? avatarBytes,
+    String? body,
     int messageCount = 1,
   }) async {
     await _notificationDispatcher.dispatch(
@@ -38,7 +44,9 @@ class MessageNotificationService {
         senderId: senderId,
         senderName: senderName,
         senderAvatarBytes: avatarBytes,
+        body: body,
         messageCount: messageCount,
+        onTap: _messageTapCallback(senderPublicKeyHex),
       ),
       suppressPresentation: _shouldSuppressForRoom(accountId, roomId),
     );
@@ -98,6 +106,24 @@ class MessageNotificationService {
     await _notificationDispatcher.dismissAllActive();
   }
 
+  Future<void> showServiceEvent({
+    required String accountId,
+    required String eventId,
+    required String title,
+    String? body,
+    Uint8List? avatarBytes,
+  }) async {
+    await _notificationDispatcher.dispatch(
+      NotificationEvent.service(
+        eventId: eventId,
+        accountId: accountId,
+        title: title,
+        body: body,
+        avatarBytes: avatarBytes,
+      ),
+    );
+  }
+
   bool _shouldSuppressForRoom(String accountId, String? roomId) {
     if (kIsWeb || !_appIsInteractive) {
       return false;
@@ -127,6 +153,14 @@ class MessageNotificationService {
       return null;
     }
     return normalized;
+  }
+
+  NotificationTapCallback? _messageTapCallback(String? senderPublicKeyHex) {
+    final normalized = senderPublicKeyHex?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return () => _interactionService.openDirectMessage(normalized);
   }
 }
 
