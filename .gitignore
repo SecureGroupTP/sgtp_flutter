@@ -43,6 +43,8 @@ $RECYCLE.BIN/
 **/ios/.symlinks/
 **/macos/Pods/
 **/macos/.symlinks/
+**/ios/Runner/GoogleService-Info.plist
+**/macos/Runner/GoogleService-Info.plist
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 
@@ -55,11 +57,28 @@ $RECYCLE.BIN/
 # ── Ключи и секреты — НИКОГДА не коммитить ───────────────────────────────────
 *.pem
 *.key
+*.p8
+*.p12
+*service-account*.json
+*firebase-adminsdk*.json
+*google-application-credentials*.json
+*credentials*.json
+.env
+.env.*
+!.env.example
+!.env.*.example
 id_ed25519
 id_ed25519.pub
 id_rsa
 id_rsa.pub
 whitelist/
+
+# ── Firebase local/generated config ───────────────────────────────────────────
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+lib/firebase_options.dart
 
 # ── Логи ──────────────────────────────────────────────────────────────────────
 *.log
