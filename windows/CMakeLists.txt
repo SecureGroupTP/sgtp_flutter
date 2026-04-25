@@ -1,6 +1,6 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-project(sgtp_flutter LANGUAGES CXX)
+project(sgtp_flutter LANGUAGES C CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
@@ -13,7 +13,13 @@ if(POLICY CMP0175)
   # Some third-party Flutter plugins still use legacy add_custom_command()
   # syntax that newer CMake warns about on Windows.
   cmake_policy(SET CMP0175 OLD)
+  set(CMAKE_POLICY_DEFAULT_CMP0175 OLD)
 endif()
+
+# Firebase C++ SDK 12.7.0 still declares compatibility with CMake versions
+# older than 3.5. CMake 4.x rejects that unless the minimum policy version is
+# raised before firebase_core adds the extracted SDK as a subdirectory.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 # Define build configuration option.
 get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)

@@ -35,6 +35,25 @@ void main() {
         expect(registrar.calls.last.token, 'token-2');
       },
     );
+
+    test('defers push registration when server requires profile', () async {
+      final messagingClient = _FakeMessagingClient(initialToken: 'token-1');
+      final registrar = _FakeRegistrar(
+        error: StateError(
+          'profile_required: profile must be completed before using this RPC',
+        ),
+      );
+      final service = PushNotificationService(
+        messagingClient: messagingClient,
+        deviceRegistry: _FakeRegistry(deviceId: 'device-1'),
+        tokenRegistrar: registrar,
+        platformCode: 1,
+      );
+
+      await service.activateAccount('acc-1');
+
+      expect(registrar.calls, hasLength(1));
+    });
   });
 }
 
@@ -87,6 +106,9 @@ class _FakeMessagingClient implements PushMessagingClient {
 }
 
 class _FakeRegistrar implements PushTokenRegistrar {
+  _FakeRegistrar({this.error});
+
+  final Object? error;
   final List<_RegisterCall> calls = <_RegisterCall>[];
 
   @override
@@ -106,6 +128,8 @@ class _FakeRegistrar implements PushTokenRegistrar {
         isEnabled: isEnabled,
       ),
     );
+    final error = this.error;
+    if (error != null) throw error;
   }
 }
 
