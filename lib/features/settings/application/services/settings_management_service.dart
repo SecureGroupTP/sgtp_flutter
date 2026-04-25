@@ -14,6 +14,7 @@ import 'package:sgtp_flutter/core/uuid_v7.dart';
 import 'package:sgtp_flutter/features/contacts/domain/repositories/i_user_dir_client.dart';
 import 'package:sgtp_flutter/features/messaging/data/transport/server_discovery.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/setup/data/repositories/app_backup_repository.dart';
 import 'package:sgtp_flutter/features/setup/data/repositories/settings_repository.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_management_models.dart';
@@ -46,6 +47,8 @@ class SettingsManagementService {
       _settings.loadMediaTransferSettings();
   Future<UiInteractionSettings> loadUiInteractionSettings() =>
       _settings.loadUiInteractionSettings();
+  Future<LinuxNotificationSettings> loadLinuxNotificationSettings() =>
+      _settings.loadLinuxNotificationSettings();
   Future<String> loadUserNicknameForNode(String accountId) =>
       _settings.loadUserNicknameForNode(accountId);
   Future<String> loadOrCreateDeviceIdForNode(String accountId) =>
@@ -135,6 +138,10 @@ class SettingsManagementService {
       _settings.saveMediaTransferSettings(settings);
   Future<void> savePingIntervalSeconds(int seconds) =>
       _settings.savePingIntervalSeconds(seconds);
+  Future<void> saveLinuxNotificationSettings(
+    LinuxNotificationSettings settings,
+  ) =>
+      _settings.saveLinuxNotificationSettings(settings);
   Future<void> clearAllLocalData() => _settings.clearAllLocalData();
   Future<LocalEncryptionState> loadLocalEncryptionState() =>
       _settings.loadLocalEncryptionState();
@@ -228,6 +235,7 @@ class SettingsManagementService {
       lastAddress: await _settings.getLastAddress(),
       mediaSettings: await _settings.loadMediaTransferSettings(),
       uiSettings: await _settings.loadUiInteractionSettings(),
+      linuxNotificationSettings: await _settings.loadLinuxNotificationSettings(),
     );
   }
 

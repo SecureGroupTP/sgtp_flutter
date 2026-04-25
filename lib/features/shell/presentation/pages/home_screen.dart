@@ -127,6 +127,19 @@ class _HomeScreenViewState extends State<_HomeScreenView> {
       homeCubit: _cubit,
       roomsPageKey: _roomsPageKey,
     );
+    context
+        .read<AppDependencies>()
+        .notificationInteractionService
+        .attach(_appSessionController);
+  }
+
+  @override
+  void dispose() {
+    context
+        .read<AppDependencies>()
+        .notificationInteractionService
+        .detach(_appSessionController);
+    super.dispose();
   }
 
   void _showAddSheet() {

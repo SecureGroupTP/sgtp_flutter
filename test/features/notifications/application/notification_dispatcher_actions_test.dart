@@ -7,7 +7,6 @@ import 'package:sgtp_flutter/features/notifications/domain/entities/notification
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_inbox_record.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_projection.dart';
-import 'package:sgtp_flutter/features/notifications/domain/entities/notification_safe_payload.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/notification_account_context_resolver.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/notification_inbox_store.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/notification_presenter.dart';

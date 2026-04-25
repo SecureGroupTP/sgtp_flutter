@@ -16,6 +16,7 @@ class NotificationProjectionService {
       NotificationKind.message => event.threadId ?? event.segmentId ?? event.eventId,
       NotificationKind.friendRequest =>
         event.peerId ?? event.segmentId ?? event.eventId,
+      NotificationKind.service => event.segmentId ?? event.eventId,
     };
     final collapseKey =
         '${event.accountId}:${event.kind.name}:$collapseTarget';
@@ -30,9 +31,11 @@ class NotificationProjectionService {
           title: switch (event.kind) {
             NotificationKind.message => 'New message',
             NotificationKind.friendRequest => 'New activity',
+            NotificationKind.service => 'Service notification',
           },
         ),
         actions: event.actions,
+        onTap: event.onTap,
       );
     }
 
@@ -46,14 +49,20 @@ class NotificationProjectionService {
           NotificationKind.message => _normalizeLabel(event.senderName, fallback: 'New message'),
           NotificationKind.friendRequest =>
             _normalizeLabel(event.displayName, fallback: 'New activity'),
+          NotificationKind.service =>
+            _normalizeLabel(event.displayName, fallback: 'Service notification'),
         },
-        subtitle: switch (event.kind) {
-          NotificationKind.message => _messageSubtitle(event.messageCount),
+        body: switch (event.kind) {
+          NotificationKind.message =>
+            _normalizeLabel(event.body, fallback: _messageSubtitle(event.messageCount)),
           NotificationKind.friendRequest => 'Sent you a friend request',
+          NotificationKind.service =>
+            _normalizeLabel(event.body, fallback: 'New service update'),
         },
         avatarBytes: event.senderAvatarBytes,
       ),
       actions: event.actions,
+      onTap: event.onTap,
     );
   }
 

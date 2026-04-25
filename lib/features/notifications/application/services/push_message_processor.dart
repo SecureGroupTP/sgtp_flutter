@@ -38,6 +38,8 @@ class PushMessageProcessor {
       case NotificationKind.friendRequest:
         await _notificationSink.showFriendRequest(event);
         return true;
+      case NotificationKind.service:
+        return false;
     }
   }
 }

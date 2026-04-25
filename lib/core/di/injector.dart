@@ -6,6 +6,9 @@ import 'package:sgtp_flutter/core/storage/account_storage_paths.dart';
 import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/storage/main_database_factory.dart';
 import 'package:sgtp_flutter/core/storage/storage_key_service.dart';
+import 'package:sgtp_flutter/core/app/notification_interaction_service.dart';
+import 'package:sgtp_flutter/core/app_notifications/custom_app_notifications_controller.dart';
+import 'package:sgtp_flutter/core/app_notifications/linux_native_notifications_adapter.dart';
 import 'package:sgtp_flutter/core/network/transport/http_protocol_transport.dart';
 import 'package:sgtp_flutter/core/network/transport/tcp_sgtp_transport.dart';
 import 'package:sgtp_flutter/core/network/transport/websocket_sgtp_transport.dart';
@@ -65,6 +68,8 @@ class AppDependencies {
     required this.notificationHostService,
     required this.pushNotificationService,
     required this.sgtpSessionFactory,
+    required this.customAppNotificationsController,
+    required this.notificationInteractionService,
     required this.homeUserDirCoordinatorFactory,
   });
 
@@ -82,6 +87,8 @@ class AppDependencies {
   final NotificationHostService notificationHostService;
   final PushNotificationService pushNotificationService;
   final SgtpSessionFactory sgtpSessionFactory;
+  final CustomAppNotificationsController customAppNotificationsController;
+  final NotificationInteractionService notificationInteractionService;
   final HomeUserDirCoordinator Function({
     required Future<void> Function(
       String roomUUIDHex,
@@ -155,24 +162,34 @@ class AppInjector {
       appBackupRepository: appBackupRepository,
       userDirClientFactory: userDirClientFactory,
     );
+    final customAppNotificationsController = CustomAppNotificationsController();
+    final notificationInteractionService = NotificationInteractionService();
     final notificationInboxStore = NotificationInboxStoreImpl(
       accountStoragePaths: accountStoragePaths,
       storageKeyService: storageKeyService,
     );
-    final messageNotificationService = MessageNotificationService(
-      notificationDispatcher: NotificationDispatcher(
-        projectionService: const NotificationProjectionService(),
-        inboxStore: notificationInboxStore,
-        presenter: AppNotificationPresenter(),
-        accountContextResolver: SettingsNotificationAccountContextResolver(
-          settingsManagementService: settingsManagementService,
-        ),
+    final notificationDispatcher = NotificationDispatcher(
+      projectionService: const NotificationProjectionService(),
+      inboxStore: notificationInboxStore,
+      presenter: AppNotificationPresenter(
+        settingsManagementService: settingsManagementService,
+        customController: customAppNotificationsController,
+        linuxNativeAdapter: createLinuxNativeNotificationsAdapter(),
       ),
+      accountContextResolver: SettingsNotificationAccountContextResolver(
+        settingsManagementService: settingsManagementService,
+      ),
+    );
+    final messageNotificationService = MessageNotificationService(
+      notificationDispatcher: notificationDispatcher,
+      interactionService: notificationInteractionService,
     );
     final notificationHostService = NotificationHostService(
       platformAdapter: createNotificationHostPlatformAdapter(),
     );
-    final sgtpConnectionService = SgtpConnectionService();
+    final sgtpConnectionService = SgtpConnectionService(
+      notificationDispatcher: notificationDispatcher,
+    );
     final pushDeviceRegistry = SettingsPushDeviceRegistry(
       settingsManagementService: settingsManagementService,
     );
@@ -246,6 +263,8 @@ class AppInjector {
       notificationHostService: notificationHostService,
       pushNotificationService: pushNotificationService,
       sgtpSessionFactory: sgtpSessionFactory,
+      customAppNotificationsController: customAppNotificationsController,
+      notificationInteractionService: notificationInteractionService,
       homeUserDirCoordinatorFactory:
           ({required onDirectMessageReady, required onStateChanged}) =>
               HomeUserDirCoordinator(

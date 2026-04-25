@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'package:sgtp_flutter/core/app_notifications/custom_app_notifications_host.dart';
 import 'package:sgtp_flutter/core/app_theme.dart';
 import 'package:sgtp_flutter/core/app/app_shell.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
@@ -113,6 +114,18 @@ class _SgtpAppState extends State<SgtpApp> with WindowListener {
         themeMode: ThemeMode.dark,
         initialRoute: '/',
         routes: {'/': (_) => const AppShell()},
+        builder: (context, child) {
+          return Stack(
+            children: [
+              child ?? const SizedBox.shrink(),
+              if (!kIsWeb && Platform.isLinux)
+                CustomAppNotificationsHost(
+                  controller:
+                      widget.dependencies.customAppNotificationsController,
+                ),
+            ],
+          );
+        },
       ),
     );
   }

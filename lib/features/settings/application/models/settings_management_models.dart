@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:sgtp_flutter/core/sgtp_server_options.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
-import 'package:sgtp_flutter/features/setup/domain/entities/contact_directory_models.dart';
 
 class SettingsBootstrapData {
   const SettingsBootstrapData({
@@ -14,6 +14,7 @@ class SettingsBootstrapData {
     required this.lastAddress,
     required this.mediaSettings,
     required this.uiSettings,
+    required this.linuxNotificationSettings,
   });
 
   final List<NodeConfig> nodes;
@@ -23,6 +24,7 @@ class SettingsBootstrapData {
   final String? lastAddress;
   final MediaTransferSettings mediaSettings;
   final UiInteractionSettings uiSettings;
+  final LinuxNotificationSettings linuxNotificationSettings;
 }
 
 class SettingsAccountSnapshot {

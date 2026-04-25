@@ -36,6 +36,7 @@ import 'package:sgtp_flutter/features/settings/application/models/usage_stats_mo
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_cubit.dart';
 import 'package:sgtp_flutter/features/settings/application/viewmodels/settings_view_state.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/messaging/domain/repositories/chat_storage_gateway.dart';
 
 enum _SettingsSection {
@@ -2697,6 +2698,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
         const SizedBox(height: 16),
+        if (!kIsWeb && Platform.isLinux) ...[
+          _buildLinuxNotificationsCard(state),
+          const SizedBox(height: 16),
+        ],
         // ── Ping interval ───────────────────────────────────────────────
         const Padding(
           padding: EdgeInsets.only(bottom: 8),
@@ -2744,6 +2749,259 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: AppColors.textPrimary,
                 fontWeight: FontWeight.w700,
               ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLinuxNotificationsCard(SettingsViewState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Linux desktop notifications',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 10),
+        _SwitchRow(
+          label: 'Enable notifications',
+          value: state.linuxNotificationsEnabled,
+          onChanged: (value) {
+            unawaited(
+              _cubit.saveLinuxNotificationSettings(
+                LinuxNotificationSettings(
+                  enabled: value,
+                  mode: state.linuxNotificationMode,
+                  customDurationSeconds:
+                      state.linuxCustomNotificationDurationSeconds,
+                  position: state.linuxCustomNotificationPosition,
+                  maxVisibleCustomNotifications:
+                      state.linuxMaxVisibleCustomNotifications,
+                  showMessagePreview: state.linuxShowMessagePreview,
+                  showAvatars: state.linuxShowAvatars,
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _ChoiceChip(
+              label: 'Native',
+              selected: state.linuxNotificationMode == LinuxNotificationMode.native,
+              onTap: () {
+                unawaited(
+                  _cubit.saveLinuxNotificationSettings(
+                    LinuxNotificationSettings(
+                      enabled: state.linuxNotificationsEnabled,
+                      mode: LinuxNotificationMode.native,
+                      customDurationSeconds:
+                          state.linuxCustomNotificationDurationSeconds,
+                      position: state.linuxCustomNotificationPosition,
+                      maxVisibleCustomNotifications:
+                          state.linuxMaxVisibleCustomNotifications,
+                      showMessagePreview: state.linuxShowMessagePreview,
+                      showAvatars: state.linuxShowAvatars,
+                    ),
+                  ),
+                );
+              },
+            ),
+            _ChoiceChip(
+              label: 'Custom',
+              selected: state.linuxNotificationMode == LinuxNotificationMode.custom,
+              onTap: () {
+                unawaited(
+                  _cubit.saveLinuxNotificationSettings(
+                    LinuxNotificationSettings(
+                      enabled: state.linuxNotificationsEnabled,
+                      mode: LinuxNotificationMode.custom,
+                      customDurationSeconds:
+                          state.linuxCustomNotificationDurationSeconds,
+                      position: state.linuxCustomNotificationPosition,
+                      maxVisibleCustomNotifications:
+                          state.linuxMaxVisibleCustomNotifications,
+                      showMessagePreview: state.linuxShowMessagePreview,
+                      showAvatars: state.linuxShowAvatars,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _SwitchRow(
+          label: 'Show message preview',
+          value: state.linuxShowMessagePreview,
+          onChanged: (value) {
+            unawaited(
+              _cubit.saveLinuxNotificationSettings(
+                LinuxNotificationSettings(
+                  enabled: state.linuxNotificationsEnabled,
+                  mode: state.linuxNotificationMode,
+                  customDurationSeconds:
+                      state.linuxCustomNotificationDurationSeconds,
+                  position: state.linuxCustomNotificationPosition,
+                  maxVisibleCustomNotifications:
+                      state.linuxMaxVisibleCustomNotifications,
+                  showMessagePreview: value,
+                  showAvatars: state.linuxShowAvatars,
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        _SwitchRow(
+          label: 'Show avatars',
+          value: state.linuxShowAvatars,
+          onChanged: (value) {
+            unawaited(
+              _cubit.saveLinuxNotificationSettings(
+                LinuxNotificationSettings(
+                  enabled: state.linuxNotificationsEnabled,
+                  mode: state.linuxNotificationMode,
+                  customDurationSeconds:
+                      state.linuxCustomNotificationDurationSeconds,
+                  position: state.linuxCustomNotificationPosition,
+                  maxVisibleCustomNotifications:
+                      state.linuxMaxVisibleCustomNotifications,
+                  showMessagePreview: state.linuxShowMessagePreview,
+                  showAvatars: value,
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Custom notification position',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final position in LinuxCustomNotificationPosition.values)
+              _ChoiceChip(
+                label: position.name,
+                selected: state.linuxCustomNotificationPosition == position,
+                onTap: () {
+                  unawaited(
+                    _cubit.saveLinuxNotificationSettings(
+                      LinuxNotificationSettings(
+                        enabled: state.linuxNotificationsEnabled,
+                        mode: state.linuxNotificationMode,
+                        customDurationSeconds:
+                            state.linuxCustomNotificationDurationSeconds,
+                        position: position,
+                        maxVisibleCustomNotifications:
+                            state.linuxMaxVisibleCustomNotifications,
+                        showMessagePreview: state.linuxShowMessagePreview,
+                        showAvatars: state.linuxShowAvatars,
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Custom duration',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        Slider(
+          value: state.linuxCustomNotificationDurationSeconds.toDouble(),
+          min: 2,
+          max: 15,
+          divisions: 13,
+          onChanged: (value) {
+            unawaited(
+              _cubit.saveLinuxNotificationSettings(
+                LinuxNotificationSettings(
+                  enabled: state.linuxNotificationsEnabled,
+                  mode: state.linuxNotificationMode,
+                  customDurationSeconds: value.round(),
+                  position: state.linuxCustomNotificationPosition,
+                  maxVisibleCustomNotifications:
+                      state.linuxMaxVisibleCustomNotifications,
+                  showMessagePreview: state.linuxShowMessagePreview,
+                  showAvatars: state.linuxShowAvatars,
+                ),
+              ),
+            );
+          },
+        ),
+        Text(
+          '${state.linuxCustomNotificationDurationSeconds}s',
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Max visible custom notifications',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        Slider(
+          value: state.linuxMaxVisibleCustomNotifications.toDouble(),
+          min: 1,
+          max: 5,
+          divisions: 4,
+          onChanged: (value) {
+            unawaited(
+              _cubit.saveLinuxNotificationSettings(
+                LinuxNotificationSettings(
+                  enabled: state.linuxNotificationsEnabled,
+                  mode: state.linuxNotificationMode,
+                  customDurationSeconds:
+                      state.linuxCustomNotificationDurationSeconds,
+                  position: state.linuxCustomNotificationPosition,
+                  maxVisibleCustomNotifications: value.round(),
+                  showMessagePreview: state.linuxShowMessagePreview,
+                  showAvatars: state.linuxShowAvatars,
+                ),
+              ),
+            );
+          },
+        ),
+        Text(
+          '${state.linuxMaxVisibleCustomNotifications}',
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _SecondaryActionButton(
+              label: 'Test message',
+              onPressed: () => unawaited(_cubit.sendTestMessageNotification()),
+            ),
+            _SecondaryActionButton(
+              label: 'Test friend request',
+              onPressed: () =>
+                  unawaited(_cubit.sendTestFriendRequestNotification()),
+            ),
+            _SecondaryActionButton(
+              label: 'Test auth success',
+              onPressed: () => unawaited(_cubit.sendTestAuthNotification()),
             ),
           ],
         ),
@@ -4537,6 +4795,30 @@ class _ChoiceChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SecondaryActionButton extends StatelessWidget {
+  const _SecondaryActionButton({
+    required this.label,
+    required this.onPressed,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        side: BorderSide(color: Colors.white.withAlpha(38)),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Text(label),
     );
   }
 }

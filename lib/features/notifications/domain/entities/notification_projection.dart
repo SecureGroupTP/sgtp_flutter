@@ -1,6 +1,7 @@
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_kind.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_safe_payload.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
 
 class NotificationProjection {
   const NotificationProjection({
@@ -10,6 +11,7 @@ class NotificationProjection {
     required this.collapseKey,
     required this.safePayload,
     this.actions = const <NotificationAction>[],
+    this.onTap,
   });
 
   final bool shouldShow;
@@ -18,4 +20,5 @@ class NotificationProjection {
   final String collapseKey;
   final NotificationSafePayload safePayload;
   final List<NotificationAction> actions;
+  final NotificationTapCallback? onTap;
 }

@@ -12,8 +12,11 @@ import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
+import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/settings/application/models/app_storage_models.dart';
 import 'package:sgtp_flutter/features/settings/application/models/settings_models.dart';
 import 'package:sgtp_flutter/features/settings/application/models/usage_stats_models.dart';
@@ -77,6 +80,8 @@ class SettingsCubit extends Cubit<SettingsViewState> {
   String _doubleTapDesktop = 'react';
   bool _swipeToReply = true;
   bool _longPressMenu = true;
+  LinuxNotificationSettings _linuxNotificationSettings =
+      const LinuxNotificationSettings();
 
   List<NodeConfig> _nodes = const [];
   List<String> _accountIdsList = const [];
@@ -331,6 +336,7 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
     final mediaSettings = bootstrap.mediaSettings;
     final uiSettings = bootstrap.uiSettings;
+    _linuxNotificationSettings = bootstrap.linuxNotificationSettings;
     _pingIntervalSeconds = uiSettings.pingIntervalSeconds;
     _compressFiles = mediaSettings.compressFiles;
     _compressPhotos = mediaSettings.compressPhotos;
@@ -681,6 +687,68 @@ class SettingsCubit extends Cubit<SettingsViewState> {
     _buildState();
   }
 
+  Future<void> saveLinuxNotificationSettings(
+    LinuxNotificationSettings settings,
+  ) async {
+    _linuxNotificationSettings = settings;
+    _buildState();
+    await _settings.saveLinuxNotificationSettings(settings);
+  }
+
+  Future<void> sendTestMessageNotification() {
+    final accountId = _activeAccountId();
+    if (accountId == null) {
+      return Future<void>.value();
+    }
+    return _messageNotifications.showMessageEvent(
+      accountId: accountId,
+      eventId: 'debug-message-${DateTime.now().millisecondsSinceEpoch}',
+      segmentId: 'debug-room',
+      roomId: 'debug-room',
+      senderId: 'debug-sender',
+      senderName: 'Debug sender',
+      body: 'Test message preview from Linux desktop notifications.',
+      messageCount: 1,
+    );
+  }
+
+  Future<void> sendTestFriendRequestNotification() {
+    final accountId = _activeAccountId();
+    if (accountId == null) {
+      return Future<void>.value();
+    }
+    return _messageNotifications.showFriendRequestEvent(
+      accountId: accountId,
+      eventId: 'debug-friend-${DateTime.now().millisecondsSinceEpoch}',
+      segmentId: 'debug-peer',
+      peerId: 'debug-peer',
+      displayName: 'Debug friend',
+      actions: const [
+        NotificationAction(label: 'Accept', onInvoked: _noopNotificationAction),
+        NotificationAction(
+          label: 'Decline',
+          color: AppNotificationButtonColor.red,
+          onInvoked: _noopNotificationAction,
+        ),
+      ],
+    );
+  }
+
+  Future<void> sendTestAuthNotification() {
+    final accountId = _activeAccountId();
+    if (accountId == null) {
+      return Future<void>.value();
+    }
+    final title = _username.trim().isEmpty ? 'Account' : _username.trim();
+    return _messageNotifications.showServiceEvent(
+      accountId: accountId,
+      eventId: 'debug-auth-${DateTime.now().millisecondsSinceEpoch}',
+      title: title,
+      body: 'Authentication successful',
+      avatarBytes: _userAvatar,
+    );
+  }
+
   // ── Intent: Backup/restore ──────────────────────────────────────────────
 
   Future<BackupExportData> createBackup() async {
@@ -786,6 +854,15 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       doubleTapDesktop: _doubleTapDesktop,
       swipeToReply: _swipeToReply,
       longPressMenu: _longPressMenu,
+      linuxNotificationsEnabled: _linuxNotificationSettings.enabled,
+      linuxNotificationMode: _linuxNotificationSettings.mode,
+      linuxCustomNotificationDurationSeconds:
+          _linuxNotificationSettings.customDurationSeconds,
+      linuxCustomNotificationPosition: _linuxNotificationSettings.position,
+      linuxMaxVisibleCustomNotifications:
+          _linuxNotificationSettings.maxVisibleCustomNotifications,
+      linuxShowMessagePreview: _linuxNotificationSettings.showMessagePreview,
+      linuxShowAvatars: _linuxNotificationSettings.showAvatars,
       nodes: List.unmodifiable(_nodes),
       accountIdsList: List.unmodifiable(_accountIdsList),
       nodesLoading: _nodesLoading,
@@ -798,3 +875,5 @@ class SettingsCubit extends Cubit<SettingsViewState> {
 
   // ── Sync callbacks ──────────────────────────────────────────────────────
 }
+
+Future<void> _noopNotificationAction() async {}

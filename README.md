@@ -212,6 +212,39 @@ In-app packet logs are available in **Settings → Logs** (all inbound/outbound 
 
 ---
 
+## Linux desktop notifications
+
+Linux desktop notifications support two modes:
+
+- `Native`: uses freedesktop / DBus notifications through the Linux backend of `flutter_local_notifications`.
+- `Custom`: uses an in-app stacked overlay with Telegram-like dark toast cards.
+
+Settings are available in **Settings → Interaction → Linux desktop notifications**:
+
+- enable/disable notifications;
+- choose `Native` or `Custom`;
+- custom notification duration;
+- custom position (`topRight`, `bottomRight`, `topLeft`, `bottomLeft`);
+- max visible custom notifications;
+- show/hide message preview;
+- show/hide avatars.
+
+If native Linux notifications are unavailable, or if the notification daemon does not support required actions, SGTP falls back to the custom overlay.
+
+Manual test flow on Linux:
+
+```bash
+flutter run -d linux
+```
+
+Then open **Settings → Interaction → Linux desktop notifications** and trigger:
+
+- `Test message`
+- `Test friend request`
+- `Test auth success`
+
+---
+
 ## Protocol overview
 
 SGTP (Secure Group Transfer Protocol) is a custom encrypted messaging protocol:

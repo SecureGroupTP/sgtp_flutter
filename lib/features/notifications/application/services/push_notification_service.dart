@@ -86,12 +86,24 @@ class PushNotificationService {
       return;
     }
     final deviceId = await _deviceRegistry.loadDeviceId(accountId);
-    await _tokenRegistrar.registerToken(
-      accountId: accountId,
-      deviceId: deviceId,
-      platformCode: _platformCode,
-      pushToken: token,
-      isEnabled: true,
-    );
+    try {
+      await _tokenRegistrar.registerToken(
+        accountId: accountId,
+        deviceId: deviceId,
+        platformCode: _platformCode,
+        pushToken: token,
+        isEnabled: true,
+      );
+    } catch (error) {
+      if (_isProfileRequiredError(error)) {
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  bool _isProfileRequiredError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('profile_required');
   }
 }
