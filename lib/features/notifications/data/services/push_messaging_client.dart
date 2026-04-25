@@ -9,27 +9,37 @@ import 'package:sgtp_flutter/features/notifications/domain/repositories/push_mes
 class FirebasePushMessagingClient implements PushMessagingClient {
   FirebasePushMessagingClient();
 
-  final FirebaseMessaging _messaging = FirebaseMessaging.instance;
+  FirebaseMessaging? _messaging;
   bool _available = false;
 
   @override
-  Stream<Map<String, String>> get onForegroundMessage =>
-      FirebaseMessaging.onMessage.map((message) {
-        return message.data.map(
-          (key, value) => MapEntry(key, value?.toString() ?? ''),
-        );
-      });
+  Stream<Map<String, String>> get onForegroundMessage {
+    if (!_available) {
+      return const Stream<Map<String, String>>.empty();
+    }
+    return FirebaseMessaging.onMessage.map((message) {
+      return message.data.map(
+        (key, value) => MapEntry(key, value?.toString() ?? ''),
+      );
+    });
+  }
 
   @override
-  Stream<String> get onTokenRefresh =>
-      FirebaseMessaging.instance.onTokenRefresh;
+  Stream<String> get onTokenRefresh {
+    final messaging = _messaging;
+    if (!_available || messaging == null) {
+      return const Stream<String>.empty();
+    }
+    return messaging.onTokenRefresh;
+  }
 
   @override
   Future<String?> getToken() async {
-    if (!_available) {
+    final messaging = _messaging;
+    if (!_available || messaging == null) {
       return null;
     }
-    return _messaging.getToken();
+    return messaging.getToken();
   }
 
   @override
@@ -42,8 +52,10 @@ class FirebasePushMessagingClient implements PushMessagingClient {
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp();
       }
+      _messaging = FirebaseMessaging.instance;
       _available = true;
     } catch (_) {
+      _messaging = null;
       _available = false;
     }
   }
@@ -56,7 +68,11 @@ class FirebasePushMessagingClient implements PushMessagingClient {
     if (!kIsWeb && Platform.isAndroid) {
       return true;
     }
-    final settings = await _messaging.requestPermission(
+    final messaging = _messaging;
+    if (messaging == null) {
+      return false;
+    }
+    final settings = await messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
