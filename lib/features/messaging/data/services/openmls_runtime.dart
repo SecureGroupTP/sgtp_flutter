@@ -10,13 +10,14 @@ class OpenMlsRuntimeFactory {
   OpenMlsRuntimeFactory({
     required AccountStoragePaths accountStoragePaths,
     required StorageKeyService storageKeyService,
-  })  : _accountStoragePaths = accountStoragePaths,
-        _storageKeyService = storageKeyService;
+  }) : _accountStoragePaths = accountStoragePaths,
+       _storageKeyService = storageKeyService;
 
   final AccountStoragePaths _accountStoragePaths;
   final StorageKeyService _storageKeyService;
 
   Future<OpenMlsRuntime> create(SgtpConfig config) async {
+    await Openmls.init();
     final publicKey = Uint8List.fromList(config.myPublicKey);
     final privateKey = Uint8List.fromList(
       await config.identityKeyPair.extractPrivateKeyBytes(),
@@ -148,7 +149,8 @@ class OpenMlsRuntime {
       groupIdBytes: groupId,
       messageBytes: messageBytes,
     );
-    final shouldMerge = result.messageType == ProcessedMessageType.stagedCommit ||
+    final shouldMerge =
+        result.messageType == ProcessedMessageType.stagedCommit ||
         result.hasStagedCommit;
     if (shouldMerge) {
       await engine.mergePendingCommit(groupIdBytes: groupId);

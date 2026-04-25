@@ -115,6 +115,37 @@ jobs:
         if: matrix.platform == 'windows'
         run: flutter build windows --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}
 
+      - name: Verify Windows native assets
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $releaseDir = Get-Item "build\windows\*\runner\Release" | Select-Object -First 1 -ExpandProperty FullName
+          Write-Host "Windows release directory: $releaseDir"
+          Get-ChildItem -Recurse $releaseDir -Filter *.dll | Select-Object FullName, Length
+
+          $openMlsDll = Get-ChildItem -Recurse $releaseDir -Filter openmls_frb.dll | Select-Object -First 1
+          if ($null -eq $openMlsDll) {
+            Write-Warning "openmls_frb.dll not found in Release bundle. Trying to recover from build/native_assets/windows..."
+            $nativeAssetDll = Get-ChildItem -Recurse "build\native_assets\windows" -Filter openmls_frb.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $nativeAssetDll) {
+              Copy-Item -Path $nativeAssetDll.FullName -Destination (Join-Path $releaseDir "openmls_frb.dll") -Force
+              Write-Host "Copied openmls_frb.dll from native assets: $($nativeAssetDll.FullName)"
+              $openMlsDll = Get-ChildItem -Recurse $releaseDir -Filter openmls_frb.dll | Select-Object -First 1
+            } else {
+              Write-Warning "No openmls_frb.dll found under build/native_assets/windows."
+              if (Test-Path "build\native_assets\windows") {
+                Get-ChildItem -Recurse "build\native_assets\windows" | Select-Object FullName, Length
+              } else {
+                Write-Warning "Directory build/native_assets/windows does not exist."
+              }
+            }
+          }
+
+          if ($null -eq $openMlsDll) {
+            Write-Error "openmls_frb.dll is missing from the Windows release bundle"
+            exit 1
+          }
+
       - name: Build (Linux)
         if: matrix.platform == 'linux'
         run: flutter build linux --release --build-name=${{ env.VERSION }} --build-number=${{ github.run_number }}

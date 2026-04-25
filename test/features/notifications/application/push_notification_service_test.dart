@@ -9,7 +9,27 @@ import 'package:sgtp_flutter/features/notifications/domain/repositories/push_tok
 void main() {
   group('PushNotificationService', () {
     test(
-      'registers active account token and refreshes on token updates',
+      'does not register token before explicit profile-ready sync',
+      () async {
+        final messagingClient = _FakeMessagingClient(initialToken: 'token-1');
+        final registrar = _FakeRegistrar();
+        final service = PushNotificationService(
+          messagingClient: messagingClient,
+          deviceRegistry: _FakeRegistry(deviceId: 'device-1'),
+          tokenRegistrar: registrar,
+          platformCode: 1,
+        );
+
+        await service.activateAccount('acc-1');
+        messagingClient.emitTokenRefresh('token-2');
+        await Future<void>.delayed(Duration.zero);
+
+        expect(registrar.calls, isEmpty);
+      },
+    );
+
+    test(
+      'registers active account token after profile-ready sync and refreshes',
       () async {
         final messagingClient = _FakeMessagingClient(initialToken: 'token-1');
         final registrar = _FakeRegistrar();
@@ -22,6 +42,7 @@ void main() {
 
         await service.ensureInitialized();
         await service.activateAccount('acc-1');
+        await service.syncRegistration();
 
         expect(registrar.calls, hasLength(1));
         expect(registrar.calls.single.accountId, 'acc-1');
@@ -36,24 +57,33 @@ void main() {
       },
     );
 
-    test('defers push registration when server requires profile', () async {
-      final messagingClient = _FakeMessagingClient(initialToken: 'token-1');
-      final registrar = _FakeRegistrar(
-        error: StateError(
-          'profile_required: profile must be completed before using this RPC',
-        ),
-      );
-      final service = PushNotificationService(
-        messagingClient: messagingClient,
-        deviceRegistry: _FakeRegistry(deviceId: 'device-1'),
-        tokenRegistrar: registrar,
-        platformCode: 1,
-      );
+    test(
+      'keeps explicit sync non-fatal when server still requires profile',
+      () async {
+        final messagingClient = _FakeMessagingClient(initialToken: 'token-1');
+        final registrar = _FakeRegistrar(
+          error: StateError(
+            'profile_required: profile must be completed before using this RPC',
+          ),
+        );
+        final service = PushNotificationService(
+          messagingClient: messagingClient,
+          deviceRegistry: _FakeRegistry(deviceId: 'device-1'),
+          tokenRegistrar: registrar,
+          platformCode: 1,
+        );
 
-      await service.activateAccount('acc-1');
+        await service.activateAccount('acc-1');
+        await service.syncRegistration();
 
-      expect(registrar.calls, hasLength(1));
-    });
+        expect(registrar.calls, hasLength(1));
+
+        messagingClient.emitTokenRefresh('token-2');
+        await Future<void>.delayed(Duration.zero);
+
+        expect(registrar.calls, hasLength(1));
+      },
+    );
   });
 }
 

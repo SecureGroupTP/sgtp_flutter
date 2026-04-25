@@ -26,6 +26,7 @@ class PushNotificationService {
 
   bool _initialized = false;
   String? _activeAccountId;
+  bool _registrationEnabled = false;
   StreamSubscription<String>? _tokenRefreshSub;
   StreamSubscription<Map<String, String>>? _foregroundMessagesSub;
 
@@ -35,9 +36,12 @@ class PushNotificationService {
     }
     await _messagingClient.initialize();
     await _messagingClient.requestPermission();
+
     _tokenRefreshSub = _messagingClient.onTokenRefresh.listen((token) {
+      if (!_registrationEnabled) return;
       unawaited(_registerToken(token));
     });
+
     final processor = _messageProcessor;
     if (processor != null) {
       _foregroundMessagesSub = _messagingClient.onForegroundMessage.listen((
@@ -46,13 +50,15 @@ class PushNotificationService {
         unawaited(processor.process(data));
       });
     }
+
     _initialized = true;
   }
 
   Future<void> activateAccount(String accountId) async {
     final normalized = accountId.trim();
     _activeAccountId = normalized.isEmpty ? null : normalized;
-    await syncRegistration();
+    _registrationEnabled = false;
+    await ensureInitialized();
   }
 
   Future<void> deactivateAccount(String accountId) async {
@@ -61,14 +67,18 @@ class PushNotificationService {
       return;
     }
     _activeAccountId = null;
+    _registrationEnabled = false;
   }
 
   Future<void> syncRegistration() async {
+    _registrationEnabled = true;
     await ensureInitialized();
+
     final token = await _messagingClient.getToken();
     if (token == null || token.trim().isEmpty) {
       return;
     }
+
     await _registerToken(token);
   }
 
@@ -82,10 +92,13 @@ class PushNotificationService {
   Future<void> _registerToken(String rawToken) async {
     final accountId = _activeAccountId;
     final token = rawToken.trim();
+
     if (accountId == null || accountId.isEmpty || token.isEmpty) {
       return;
     }
+
     final deviceId = await _deviceRegistry.loadDeviceId(accountId);
+
     try {
       await _tokenRegistrar.registerToken(
         accountId: accountId,
@@ -94,16 +107,13 @@ class PushNotificationService {
         pushToken: token,
         isEnabled: true,
       );
-    } catch (error) {
-      if (_isProfileRequiredError(error)) {
-        return;
-      }
-      rethrow;
+    } on StateError catch (e) {
+      if (!_isProfileRequiredError(e)) rethrow;
+      _registrationEnabled = false;
     }
   }
 
-  bool _isProfileRequiredError(Object error) {
-    final message = error.toString().toLowerCase();
-    return message.contains('profile_required');
+  bool _isProfileRequiredError(StateError error) {
+    return error.message.startsWith('profile_required:');
   }
 }

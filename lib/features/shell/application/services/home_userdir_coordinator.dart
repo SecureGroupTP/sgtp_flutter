@@ -176,7 +176,7 @@ class HomeUserDirCoordinator {
 
     if (result.ok) {
       _lastRegisteredFingerprint = fp;
-      _profileRegisteredOnServer = true;
+      _profileRegisteredOnServer = _support.isProfileComplete(session.nickname);
       return null;
     }
 
@@ -883,7 +883,8 @@ class HomeUserDirCoordinator {
     final obsoletePeers = previousStates.keys
         .where(
           (peerHex) =>
-              previousStates[peerHex]?.statusEnum == FriendStatus.pendingIncoming &&
+              previousStates[peerHex]?.statusEnum ==
+                  FriendStatus.pendingIncoming &&
               !incomingPeers.contains(peerHex),
         )
         .toList(growable: false);
