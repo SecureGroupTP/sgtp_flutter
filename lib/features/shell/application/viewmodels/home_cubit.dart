@@ -235,6 +235,9 @@ class HomeCubit extends Cubit<HomeViewState> {
       _buildUserDirSession(),
       force: true,
     );
+    if (_userDirCoordinator.profileRegisteredOnServer) {
+      await _pushNotificationService.syncRegistration();
+    }
     await _ensureShellKeyPackagesUploaded();
     return error;
   }
@@ -361,6 +364,9 @@ class HomeCubit extends Cubit<HomeViewState> {
     );
     await _ensureShellConnection();
     await _userDirCoordinator.start(_buildUserDirSession());
+    if (_userDirCoordinator.profileRegisteredOnServer) {
+      await _pushNotificationService.syncRegistration();
+    }
     await _ensureShellKeyPackagesUploaded();
   }
 
@@ -453,6 +459,9 @@ class HomeCubit extends Cubit<HomeViewState> {
       _buildUserDirSession(),
       force: force,
     );
+    if (_userDirCoordinator.profileRegisteredOnServer) {
+      await _pushNotificationService.syncRegistration();
+    }
     await _ensureShellKeyPackagesUploaded();
   }
 
@@ -474,7 +483,6 @@ class HomeCubit extends Cubit<HomeViewState> {
     try {
       await _sgtpConnection.configure(_config);
       await _sgtpConnection.ensureConnected();
-      await _pushNotificationService.syncRegistration();
     } catch (e) {
       _connectionError = '$e';
       _buildState();

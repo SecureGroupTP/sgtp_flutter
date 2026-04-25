@@ -22,6 +22,8 @@ class HomeUserDirSupportService {
     return '@$normalized';
   }
 
+  bool isProfileComplete(String nickname) => nickname.trim().isNotEmpty;
+
   String buildProfileFingerprint({
     required Uint8List publicKey,
     required String nickname,
@@ -30,17 +32,20 @@ class HomeUserDirSupportService {
   }) {
     final normalizedUsername = buildUsername(username) ?? '';
     final avatarLen = userAvatar?.length ?? 0;
-    final pubHex =
-        publicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final pubHex = publicKey
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
     return '$pubHex|$normalizedUsername|$nickname|$avatarLen';
   }
 
   Uint8List hexToBytes32(String hex) {
     final clean = hex.trim().toLowerCase();
-    return Uint8List.fromList(List<int>.generate(
-      32,
-      (i) => int.parse(clean.substring(i * 2, i * 2 + 2), radix: 16),
-    ));
+    return Uint8List.fromList(
+      List<int>.generate(
+        32,
+        (i) => int.parse(clean.substring(i * 2, i * 2 + 2), radix: 16),
+      ),
+    );
   }
 
   Map<String, Uint8List> buildContactAvatarsByPubkey({
@@ -59,4 +64,3 @@ class HomeUserDirSupportService {
     return out;
   }
 }
-

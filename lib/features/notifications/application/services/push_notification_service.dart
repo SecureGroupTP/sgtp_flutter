@@ -26,6 +26,7 @@ class PushNotificationService {
 
   bool _initialized = false;
   String? _activeAccountId;
+  bool _registrationEnabled = false;
   StreamSubscription<String>? _tokenRefreshSub;
   StreamSubscription<Map<String, String>>? _foregroundMessagesSub;
 
@@ -36,6 +37,7 @@ class PushNotificationService {
     await _messagingClient.initialize();
     await _messagingClient.requestPermission();
     _tokenRefreshSub = _messagingClient.onTokenRefresh.listen((token) {
+      if (!_registrationEnabled) return;
       unawaited(_registerToken(token));
     });
     final processor = _messageProcessor;
@@ -52,7 +54,8 @@ class PushNotificationService {
   Future<void> activateAccount(String accountId) async {
     final normalized = accountId.trim();
     _activeAccountId = normalized.isEmpty ? null : normalized;
-    await syncRegistration();
+    _registrationEnabled = false;
+    await ensureInitialized();
   }
 
   Future<void> deactivateAccount(String accountId) async {
@@ -61,9 +64,11 @@ class PushNotificationService {
       return;
     }
     _activeAccountId = null;
+    _registrationEnabled = false;
   }
 
   Future<void> syncRegistration() async {
+    _registrationEnabled = true;
     await ensureInitialized();
     final token = await _messagingClient.getToken();
     if (token == null || token.trim().isEmpty) {
@@ -86,12 +91,21 @@ class PushNotificationService {
       return;
     }
     final deviceId = await _deviceRegistry.loadDeviceId(accountId);
-    await _tokenRegistrar.registerToken(
-      accountId: accountId,
-      deviceId: deviceId,
-      platformCode: _platformCode,
-      pushToken: token,
-      isEnabled: true,
-    );
+    try {
+      await _tokenRegistrar.registerToken(
+        accountId: accountId,
+        deviceId: deviceId,
+        platformCode: _platformCode,
+        pushToken: token,
+        isEnabled: true,
+      );
+    } on StateError catch (e) {
+      if (!_isProfileRequiredError(e)) rethrow;
+      _registrationEnabled = false;
+    }
+  }
+
+  bool _isProfileRequiredError(StateError error) {
+    return error.message.startsWith('profile_required:');
   }
 }
