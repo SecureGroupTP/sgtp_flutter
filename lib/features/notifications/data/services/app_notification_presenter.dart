@@ -14,9 +14,9 @@ class AppNotificationPresenter implements NotificationPresenter {
     required SettingsManagementService settingsManagementService,
     required CustomAppNotificationsController customController,
     required LinuxNativeNotificationsAdapter linuxNativeAdapter,
-  })  : _settingsManagementService = settingsManagementService,
-        _customController = customController,
-        _linuxNativeAdapter = linuxNativeAdapter;
+  }) : _settingsManagementService = settingsManagementService,
+       _customController = customController,
+       _linuxNativeAdapter = linuxNativeAdapter;
 
   final SettingsManagementService _settingsManagementService;
   final CustomAppNotificationsController _customController;
@@ -50,7 +50,7 @@ class AppNotificationPresenter implements NotificationPresenter {
         .builder()
         .setImage(projection.safePayload.avatarBytes)
         .setTitle(projection.safePayload.title)
-        .setSubtitle(projection.safePayload.body)
+        .setSubtitle(projection.safePayload.subtitle)
         .setDesktopDuration(const Duration(seconds: 6));
     for (final action in projection.actions) {
       builder.addButton(
@@ -65,7 +65,8 @@ class AppNotificationPresenter implements NotificationPresenter {
   }
 
   Future<String> _showLinux(NotificationProjection projection) async {
-    final settings = await _settingsManagementService.loadLinuxNotificationSettings();
+    final settings = await _settingsManagementService
+        .loadLinuxNotificationSettings();
     await _customController.configure(settings);
     final handleId =
         '${DateTime.now().microsecondsSinceEpoch}-${projection.dedupKey.hashCode.abs()}';
@@ -74,11 +75,9 @@ class AppNotificationPresenter implements NotificationPresenter {
       return handleId;
     }
 
-    final body = _resolveBody(
-      projection: projection,
-      settings: settings,
-    );
-    final canUseNative = settings.mode == LinuxNotificationMode.native &&
+    final body = _resolveBody(projection: projection, settings: settings);
+    final canUseNative =
+        settings.mode == LinuxNotificationMode.native &&
         await _linuxNativeAdapter.isSupported(
           requiresActions: projection.actions.isNotEmpty,
         );
@@ -160,8 +159,4 @@ class AppNotificationPresenter implements NotificationPresenter {
   }
 }
 
-enum _PresentedNotificationMode {
-  legacy,
-  nativeLinux,
-  customLinux,
-}
+enum _PresentedNotificationMode { legacy, nativeLinux, customLinux }

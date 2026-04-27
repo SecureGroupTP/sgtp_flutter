@@ -32,6 +32,7 @@ void main() {
       expect(projection.shouldShow, isTrue);
       expect(projection.kind, NotificationKind.message);
       expect(projection.safePayload.title, 'Alice');
+      expect(projection.safePayload.subtitle, '2 new messages');
       expect(projection.safePayload.body, 'hello there');
       expect(projection.safePayload.avatarBytes, isNotNull);
       expect(projection.safePayload.title, isNot(contains('hello')));
@@ -48,14 +49,12 @@ void main() {
           senderName: 'Alice',
           messageCount: 1,
         ),
-        const NotificationAccountContext(
-          accountId: 'acc-1',
-          genericOnly: true,
-        ),
+        const NotificationAccountContext(accountId: 'acc-1', genericOnly: true),
       );
 
       expect(projection.shouldShow, isTrue);
       expect(projection.safePayload.title, 'New message');
+      expect(projection.safePayload.subtitle, isNull);
       expect(projection.safePayload.body, isNull);
       expect(projection.safePayload.avatarBytes, isNull);
     });
@@ -78,6 +77,7 @@ void main() {
       expect(projection.shouldShow, isTrue);
       expect(projection.kind, NotificationKind.friendRequest);
       expect(projection.safePayload.title, 'Bob');
+      expect(projection.safePayload.subtitle, 'Sent you a friend request');
       expect(projection.safePayload.body, 'Sent you a friend request');
     });
   });

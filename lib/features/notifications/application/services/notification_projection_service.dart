@@ -13,13 +13,13 @@ class NotificationProjectionService {
   ) {
     final dedupKey = '${event.accountId}:${event.eventId}';
     final collapseTarget = switch (event.kind) {
-      NotificationKind.message => event.threadId ?? event.segmentId ?? event.eventId,
+      NotificationKind.message =>
+        event.threadId ?? event.segmentId ?? event.eventId,
       NotificationKind.friendRequest =>
         event.peerId ?? event.segmentId ?? event.eventId,
       NotificationKind.service => event.segmentId ?? event.eventId,
     };
-    final collapseKey =
-        '${event.accountId}:${event.kind.name}:$collapseTarget';
+    final collapseKey = '${event.accountId}:${event.kind.name}:$collapseTarget';
 
     if (accountContext.genericOnly) {
       return NotificationProjection(
@@ -46,18 +46,37 @@ class NotificationProjectionService {
       collapseKey: collapseKey,
       safePayload: NotificationSafePayload(
         title: switch (event.kind) {
-          NotificationKind.message => _normalizeLabel(event.senderName, fallback: 'New message'),
-          NotificationKind.friendRequest =>
-            _normalizeLabel(event.displayName, fallback: 'New activity'),
-          NotificationKind.service =>
-            _normalizeLabel(event.displayName, fallback: 'Service notification'),
+          NotificationKind.message => _normalizeLabel(
+            event.senderName,
+            fallback: 'New message',
+          ),
+          NotificationKind.friendRequest => _normalizeLabel(
+            event.displayName,
+            fallback: 'New activity',
+          ),
+          NotificationKind.service => _normalizeLabel(
+            event.displayName,
+            fallback: 'Service notification',
+          ),
+        },
+        subtitle: switch (event.kind) {
+          NotificationKind.message => _messageSubtitle(event.messageCount),
+          NotificationKind.friendRequest => 'Sent you a friend request',
+          NotificationKind.service => _normalizeLabel(
+            event.body,
+            fallback: 'New service update',
+          ),
         },
         body: switch (event.kind) {
-          NotificationKind.message =>
-            _normalizeLabel(event.body, fallback: _messageSubtitle(event.messageCount)),
+          NotificationKind.message => _normalizeLabel(
+            event.body,
+            fallback: _messageSubtitle(event.messageCount),
+          ),
           NotificationKind.friendRequest => 'Sent you a friend request',
-          NotificationKind.service =>
-            _normalizeLabel(event.body, fallback: 'New service update'),
+          NotificationKind.service => _normalizeLabel(
+            event.body,
+            fallback: 'New service update',
+          ),
         },
         avatarBytes: event.senderAvatarBytes,
       ),

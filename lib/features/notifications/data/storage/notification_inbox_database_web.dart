@@ -40,8 +40,8 @@ class _WebNotificationInboxDatabase implements NotificationInboxDatabase {
   _WebNotificationInboxDatabase({
     required Database db,
     required MainDatabaseCipher cipher,
-  })  : _db = db,
-        _cipher = cipher;
+  }) : _db = db,
+       _cipher = cipher;
 
   final Database _db;
   final MainDatabaseCipher _cipher;
@@ -82,22 +82,19 @@ class _WebNotificationInboxDatabase implements NotificationInboxDatabase {
     final encrypted = await _cipher.encryptJson(record.safePayload.toJson());
     final txn = _db.transaction(_storeName, idbModeReadWrite);
     final store = txn.objectStore(_storeName);
-    await store.put(
-      <String, Object?>{
-        'eventId': record.eventId,
-        'segmentId': record.segmentId,
-        'accountId': record.accountId,
-        'threadId': record.threadId,
-        'peerId': record.peerId,
-        'kind': record.kind.name,
-        'shownAtMs': record.shownAtMs,
-        'dedupKey': record.dedupKey,
-        'collapseKey': record.collapseKey,
-        'nonce': base64Encode(encrypted.nonce),
-        'ciphertext': base64Encode(encrypted.ciphertext),
-      },
-      record.eventId,
-    );
+    await store.put(<String, Object?>{
+      'eventId': record.eventId,
+      'segmentId': record.segmentId,
+      'accountId': record.accountId,
+      'threadId': record.threadId,
+      'peerId': record.peerId,
+      'kind': record.kind.name,
+      'shownAtMs': record.shownAtMs,
+      'dedupKey': record.dedupKey,
+      'collapseKey': record.collapseKey,
+      'nonce': base64Encode(encrypted.nonce),
+      'ciphertext': base64Encode(encrypted.ciphertext),
+    }, record.eventId);
     await txn.completed;
   }
 
@@ -137,12 +134,15 @@ class _WebNotificationInboxDatabase implements NotificationInboxDatabase {
       accountId: value['accountId'] as String? ?? '',
       threadId: value['threadId'] as String?,
       peerId: value['peerId'] as String?,
-      kind: NotificationKind.values.byName(value['kind'] as String? ?? 'message'),
+      kind: NotificationKind.values.byName(
+        value['kind'] as String? ?? 'message',
+      ),
       shownAtMs: (value['shownAtMs'] as num?)?.toInt() ?? 0,
       dedupKey: value['dedupKey'] as String? ?? '',
       collapseKey: value['collapseKey'] as String? ?? '',
       safePayload: NotificationSafePayload(
         title: payload['title'] as String? ?? 'New activity',
+        subtitle: payload['subtitle'] as String?,
         body: payload['body'] as String? ?? payload['subtitle'] as String?,
         avatarBytes: avatarBytes,
       ),

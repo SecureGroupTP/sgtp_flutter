@@ -9,9 +9,12 @@ class NotificationHostService {
   final NotificationHostPlatformAdapter _platformAdapter;
   Future<NotificationHostStatus>? _initializeFuture;
   String? _activeAccountId;
+  NotificationHostStatus? _status;
 
-  Future<NotificationHostStatus> ensureInitialized() {
-    return _initializeFuture ??= _platformAdapter.initialize();
+  Future<NotificationHostStatus> ensureInitialized() async {
+    final status = await (_initializeFuture ??= _platformAdapter.initialize());
+    _status = status;
+    return status;
   }
 
   Future<void> start() async {
@@ -19,7 +22,9 @@ class NotificationHostService {
     if (activeAccountId == null || activeAccountId.isEmpty) {
       return;
     }
-    await ensureInitialized();
+    if (await ensureInitialized() != NotificationHostStatus.supported) {
+      return;
+    }
     await _platformAdapter.startForAccount(activeAccountId);
   }
 
@@ -30,7 +35,9 @@ class NotificationHostService {
     }
     final previous = _activeAccountId;
     _activeAccountId = normalized;
-    await ensureInitialized();
+    if (await ensureInitialized() != NotificationHostStatus.supported) {
+      return;
+    }
     if (previous != null && previous.isNotEmpty) {
       await _platformAdapter.stopForAccount(previous);
     }
@@ -42,19 +49,28 @@ class NotificationHostService {
     if (normalized.isEmpty || normalized != _activeAccountId) {
       return;
     }
-    await ensureInitialized();
+    if (await ensureInitialized() != NotificationHostStatus.supported) {
+      _activeAccountId = null;
+      return;
+    }
     await _platformAdapter.stopForAccount(normalized);
     _activeAccountId = null;
   }
 
   Future<void> stop() async {
-    await ensureInitialized();
+    if (await ensureInitialized() != NotificationHostStatus.supported) {
+      _activeAccountId = null;
+      return;
+    }
     await _platformAdapter.stop();
     _activeAccountId = null;
   }
 
   Future<bool> isRunning() async {
-    await ensureInitialized();
+    if ((_status ?? await ensureInitialized()) !=
+        NotificationHostStatus.supported) {
+      return false;
+    }
     return _platformAdapter.isRunning();
   }
 }

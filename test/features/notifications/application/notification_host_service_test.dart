@@ -28,11 +28,28 @@ void main() {
       expect(adapter.startCalls, 1);
       expect(adapter.stopCalls, 1);
     });
+
+    test('does not start unsupported notification host', () async {
+      final adapter = _FakeNotificationHostPlatformAdapter(
+        status: NotificationHostStatus.unsupported,
+      );
+      final service = NotificationHostService(platformAdapter: adapter);
+
+      await service.activateAccount('acc-1');
+
+      expect(adapter.initializeCalls, 1);
+      expect(adapter.startCalls, 0);
+    });
   });
 }
 
 class _FakeNotificationHostPlatformAdapter
     implements NotificationHostPlatformAdapter {
+  _FakeNotificationHostPlatformAdapter({
+    this.status = NotificationHostStatus.supported,
+  });
+
+  final NotificationHostStatus status;
   int initializeCalls = 0;
   int startCalls = 0;
   int stopCalls = 0;
@@ -40,7 +57,7 @@ class _FakeNotificationHostPlatformAdapter
   @override
   Future<NotificationHostStatus> initialize() async {
     initializeCalls += 1;
-    return NotificationHostStatus.supported;
+    return status;
   }
 
   @override

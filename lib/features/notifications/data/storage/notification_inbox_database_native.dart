@@ -67,8 +67,8 @@ class _NativeNotificationInboxDatabase implements NotificationInboxDatabase {
   _NativeNotificationInboxDatabase({
     required Database db,
     required MainDatabaseCipher cipher,
-  })  : _db = db,
-        _cipher = cipher;
+  }) : _db = db,
+       _cipher = cipher;
 
   final Database _db;
   final MainDatabaseCipher _cipher;
@@ -110,23 +110,19 @@ class _NativeNotificationInboxDatabase implements NotificationInboxDatabase {
   @override
   Future<void> save(NotificationInboxRecord record) async {
     final encrypted = await _cipher.encryptJson(record.safePayload.toJson());
-    await _db.insert(
-      _tableName,
-      <String, Object?>{
-        'event_id': record.eventId,
-        'segment_id': record.segmentId,
-        'account_id': record.accountId,
-        'thread_id': record.threadId,
-        'peer_id': record.peerId,
-        'kind': record.kind.name,
-        'shown_at_ms': record.shownAtMs,
-        'dedup_key': record.dedupKey,
-        'collapse_key': record.collapseKey,
-        'nonce': encrypted.nonce,
-        'ciphertext': encrypted.ciphertext,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert(_tableName, <String, Object?>{
+      'event_id': record.eventId,
+      'segment_id': record.segmentId,
+      'account_id': record.accountId,
+      'thread_id': record.threadId,
+      'peer_id': record.peerId,
+      'kind': record.kind.name,
+      'shown_at_ms': record.shownAtMs,
+      'dedup_key': record.dedupKey,
+      'collapse_key': record.collapseKey,
+      'nonce': encrypted.nonce,
+      'ciphertext': encrypted.ciphertext,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<NotificationInboxRecord> _mapRow(Map<String, Object?> row) async {
@@ -153,6 +149,7 @@ class _NativeNotificationInboxDatabase implements NotificationInboxDatabase {
       collapseKey: row['collapse_key'] as String? ?? '',
       safePayload: NotificationSafePayload(
         title: payload['title'] as String? ?? 'New activity',
+        subtitle: payload['subtitle'] as String?,
         body: payload['body'] as String? ?? payload['subtitle'] as String?,
         avatarBytes: avatarBytes,
       ),
