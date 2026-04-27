@@ -65,9 +65,6 @@ class FirebasePushMessagingClient implements PushMessagingClient {
     if (!_available) {
       return false;
     }
-    if (!kIsWeb && Platform.isAndroid) {
-      return true;
-    }
     final messaging = _messaging;
     if (messaging == null) {
       return false;

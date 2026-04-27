@@ -24,12 +24,12 @@ constexpr float kNotificationUiScale = 0.8f;
 constexpr int kWindowWidth = 432;
 constexpr int kCardHeightImageButtons = 168;
 constexpr int kCardHeightImageNoButtons = 140;
-constexpr int kCardHeightNoImageButtons = 122;
-constexpr int kCardHeightNoImageNoButtons = 98;
+constexpr int kCardHeightNoImageButtons = 136;
+constexpr int kCardHeightNoImageNoButtons = 120;
 constexpr int kMaxCardHeight = kCardHeightImageButtons;
 constexpr int kCardSpacing = 12;
 constexpr int kStackStep = kMaxCardHeight + kCardSpacing;
-constexpr int kRolloverStackStep = 94;
+constexpr int kRolloverStackStep = 108;
 constexpr int kMaxVisibleNotifications = 3;
 constexpr int kPadding = 12;
 constexpr int kMaxButtons = 2;
@@ -800,7 +800,8 @@ void AppNotificationManager::RenderWindow() {
     const bool has_buttons = !item->buttons.empty();
     const auto thumb_size = ScalePx(64.0f, current_dpi_);
     const auto body_top =
-        rect.Y + ScalePx(has_image ? 52.0f : 56.0f, current_dpi_);
+        rect.Y + ScalePx(has_image ? 52.0f : (has_buttons ? 46.0f : 50.0f),
+                         current_dpi_);
     const auto body_left = rect.X + ScalePx(20.0f, current_dpi_);
     const auto text_left =
         has_image ? body_left + thumb_size + ScalePx(16.0f, current_dpi_) : body_left;
@@ -808,6 +809,11 @@ void AppNotificationManager::RenderWindow() {
     const auto text_width = text_right - text_left;
     const auto title_top = body_top + (has_image ? ScalePx(6.0f, current_dpi_) : 0.0f);
     const auto subtitle_top = title_top + ScalePx(28.0f, current_dpi_);
+    const auto subtitle_bottom_padding =
+        ScalePx(has_buttons ? 40.0f : 12.0f, current_dpi_);
+    const auto subtitle_height = std::max(
+        ScalePx(18.0f, current_dpi_),
+        rect.GetBottom() - subtitle_top - subtitle_bottom_padding);
 
     if (has_image) {
       const Gdiplus::RectF thumb_rect(body_left, body_top, thumb_size, thumb_size);
@@ -838,7 +844,7 @@ void AppNotificationManager::RenderWindow() {
           WithAlpha(Gdiplus::Color(255, 255, 255, 255), item->opacity * 0.58));
       graphics.DrawString(secondary_text.c_str(), -1, &subtitle_font,
                           Gdiplus::RectF(text_left, subtitle_top, text_width,
-                                         ScalePx(has_buttons ? 42.0f : 34.0f, current_dpi_)),
+                                         subtitle_height),
                           &ellipsis_format, &subtitle_brush);
     }
 

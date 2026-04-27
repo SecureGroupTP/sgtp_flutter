@@ -24,6 +24,33 @@ class HomeUserDirSupportService {
 
   bool isProfileComplete(String nickname) => nickname.trim().isNotEmpty;
 
+  Map<String, FriendStateRecord> applyLocalFriendResponse({
+    required Map<String, FriendStateRecord> previous,
+    required String peerHex,
+    required bool accept,
+    required int nowSec,
+  }) {
+    final normalizedPeerHex = peerHex.trim().toLowerCase();
+    if (normalizedPeerHex.isEmpty) {
+      return Map<String, FriendStateRecord>.from(previous);
+    }
+
+    final next = Map<String, FriendStateRecord>.from(previous);
+    final existing = next[normalizedPeerHex];
+    if (!accept) {
+      next.remove(normalizedPeerHex);
+      return next;
+    }
+
+    next[normalizedPeerHex] = FriendStateRecord(
+      peerPubkeyHex: normalizedPeerHex,
+      status: FriendStatus.friend.name,
+      roomUUIDHex: existing?.roomUUIDHex,
+      updatedAt: nowSec,
+    );
+    return next;
+  }
+
   String buildProfileFingerprint({
     required Uint8List publicKey,
     required String nickname,

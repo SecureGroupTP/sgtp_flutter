@@ -257,6 +257,14 @@ class HomeUserDirCoordinator {
     );
     if (ok) {
       await _dismissFriendRequestNotification(peerHex);
+      _friendStates = _support.applyLocalFriendResponse(
+        previous: _friendStates,
+        peerHex: peerHex,
+        accept: accept,
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+      await _persistence.saveFriendStates(session.accountId, _friendStates);
+      _emit();
     }
     if (ok && accept) {
       _suppressedContacts.remove(peerHex.toLowerCase());
