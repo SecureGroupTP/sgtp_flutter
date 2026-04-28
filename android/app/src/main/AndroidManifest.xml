@@ -74,6 +74,9 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="sgtp_app_notifications"/>
 
         <!-- flutter_local_notifications: плановые и boot-уведомления -->
         <receiver

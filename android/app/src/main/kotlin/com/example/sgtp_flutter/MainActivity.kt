@@ -22,6 +22,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        NotificationHostService.ensureAppNotificationsChannel(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, videoMergerChannel)
             .setMethodCallHandler { call, result ->
                 if (call.method == "mergeVideoAudio") {
@@ -74,6 +75,7 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "initialize" -> {
                         NotificationHostService.ensureChannel(this)
+                        NotificationHostService.ensureAppNotificationsChannel(this)
                         result.success("supported")
                     }
                     "start" -> {

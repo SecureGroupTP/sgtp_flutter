@@ -49,6 +49,7 @@ class NotificationHostService : Service() {
 
     companion object {
         private const val kChannelId = "sgtp_notification_host"
+        private const val kAppNotificationsChannelId = "sgtp_app_notifications"
         private const val kForegroundNotificationId = 42042
         private const val kExtraAccountId = "account_id"
         private const val kLogTag = "SGTPNotificationHost"
@@ -71,6 +72,23 @@ class NotificationHostService : Service() {
             ).apply {
                 description = "Keeps Android notification host alive for SGTP"
                 setShowBadge(false)
+            }
+            manager.createNotificationChannel(channel)
+        }
+
+        fun ensureAppNotificationsChannel(context: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                return
+            }
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            val channel = NotificationChannel(
+                kAppNotificationsChannelId,
+                "App Notifications",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "General SGTP app notifications"
+                setShowBadge(true)
             }
             manager.createNotificationChannel(channel)
         }

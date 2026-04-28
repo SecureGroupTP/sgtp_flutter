@@ -49,14 +49,23 @@ Future<void> sgtpFirebaseMessagingBackgroundHandler(
       await Firebase.initializeApp();
     }
     _log.info(
-      'Firebase background message received. Id: {id}, keys={keys}',
+      'Firebase background message received. Id: {id}, keys={keys}, systemNotification={systemNotification}',
       parameters: {
         'id': message.messageId ?? '',
         'keys': message.data.keys.join(','),
+        'systemNotification': message.notification != null,
       },
     );
   } catch (e, st) {
     debugPrint('SGTP push background init failed: $e\n$st');
+    return;
+  }
+
+  if (message.notification != null) {
+    _log.info(
+      'Firebase background message left to system notification. Id: {id}',
+      parameters: {'id': message.messageId ?? ''},
+    );
     return;
   }
 

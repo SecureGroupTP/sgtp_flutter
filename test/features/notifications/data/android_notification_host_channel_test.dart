@@ -13,9 +13,24 @@ void main() {
       contains('''
                     "initialize" -> {
                         NotificationHostService.ensureChannel(this)
+                        NotificationHostService.ensureAppNotificationsChannel(this)
                         result.success("supported")
                     }
 '''),
     );
+  });
+
+  test('Android manifest declares FCM default notification channel', () {
+    final source = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync().replaceAll('\r\n', '\n');
+
+    expect(
+      source,
+      contains(
+        'android:name="com.google.firebase.messaging.default_notification_channel_id"',
+      ),
+    );
+    expect(source, contains('android:value="sgtp_app_notifications"'));
   });
 }
