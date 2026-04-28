@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -40,15 +41,24 @@ class LogSetup {
   LogSetup._();
 
   static IOSink? _fileSink;
+  static StreamSubscription<LogRecord>? _recordSubscription;
+  static String? _logFilePath;
 
   /// [logFilePath] — absolute path to the JSONL log file.
   static void init(String logFilePath) {
     Logger.root.level = Level.ALL;
+    if (_recordSubscription != null && _logFilePath == logFilePath) {
+      return;
+    }
+    if (_recordSubscription != null) {
+      return;
+    }
 
     final file = File(logFilePath);
     _fileSink = file.openWrite(mode: FileMode.append);
+    _logFilePath = logFilePath;
 
-    Logger.root.onRecord.listen(_handle);
+    _recordSubscription = Logger.root.onRecord.listen(_handle);
   }
 
   static void _handle(LogRecord record) {
@@ -82,7 +92,8 @@ class LogSetup {
         msgColor,
       );
 
-      consoleLine = '$_dimGrey[$_r$_grey$hour:$minute:$second.$ms$_r '
+      consoleLine =
+          '$_dimGrey[$_r$_grey$hour:$minute:$second.$ms$_r '
           '$lvlColor$badge$_r'
           '$_dimGrey]$_r '
           '$_cyan${record.loggerName}$_r '
@@ -133,14 +144,11 @@ class LogSetup {
     String msgColor,
   ) {
     if (parameters.isEmpty) return template;
-    return template.replaceAllMapped(
-      RegExp(r'\{(\w+)\}'),
-      (m) {
-        final key = m.group(1)!;
-        if (!parameters.containsKey(key)) return m.group(0)!;
-        return '${_colorValue(parameters[key])}$msgColor';
-      },
-    );
+    return template.replaceAllMapped(RegExp(r'\{(\w+)\}'), (m) {
+      final key = m.group(1)!;
+      if (!parameters.containsKey(key)) return m.group(0)!;
+      return '${_colorValue(parameters[key])}$msgColor';
+    });
   }
 
   /// Wraps [value] in the ANSI colour matching its runtime type.
@@ -194,8 +202,11 @@ class LogSetup {
   }
 
   static Future<void> close() async {
+    await _recordSubscription?.cancel();
+    _recordSubscription = null;
     await _fileSink?.flush();
     await _fileSink?.close();
     _fileSink = null;
+    _logFilePath = null;
   }
 }

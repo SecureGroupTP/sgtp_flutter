@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
 import 'package:sgtp_flutter/core/app_notifications/custom_app_notifications_controller.dart';
@@ -8,6 +9,8 @@ import 'package:sgtp_flutter/features/notifications/domain/entities/notification
 import 'package:sgtp_flutter/features/notifications/domain/entities/linux_notification_settings.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/notification_presenter.dart';
 import 'package:sgtp_flutter/features/settings/application/services/settings_management_service.dart';
+
+final _log = AppLog('AppNotificationPresenter');
 
 class AppNotificationPresenter implements NotificationPresenter {
   AppNotificationPresenter({
@@ -50,7 +53,9 @@ class AppNotificationPresenter implements NotificationPresenter {
         .builder()
         .setImage(projection.safePayload.avatarBytes)
         .setTitle(projection.safePayload.title)
-        .setSubtitle(projection.safePayload.body ?? projection.safePayload.subtitle)
+        .setSubtitle(
+          projection.safePayload.body ?? projection.safePayload.subtitle,
+        )
         .setDesktopDuration(const Duration(seconds: 6));
     for (final action in projection.actions) {
       builder.addButton(
@@ -59,9 +64,31 @@ class AppNotificationPresenter implements NotificationPresenter {
         onPressed: action.onInvoked,
       );
     }
-    final handle = await builder.show();
-    _presentationModes[handle.id] = _PresentedNotificationMode.legacy;
-    return handle.id;
+    try {
+      final handle = await builder.show();
+      _presentationModes[handle.id] = _PresentedNotificationMode.legacy;
+      _log.info(
+        'App notification show requested. Kind: {kind}, handle={handle}, title={title}',
+        parameters: {
+          'kind': projection.kind.name,
+          'handle': handle.id,
+          'title': projection.safePayload.title,
+        },
+      );
+      return handle.id;
+    } catch (e, st) {
+      _log.error(
+        'App notification show failed. Kind: {kind}, title={title}, error={error}',
+        parameters: {
+          'kind': projection.kind.name,
+          'title': projection.safePayload.title,
+          'error': e,
+        },
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
+    }
   }
 
   Future<String> _showLinux(NotificationProjection projection) async {

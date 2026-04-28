@@ -5,8 +5,11 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notifications_backend.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
+
+final _log = AppLog('MobileAppNotificationsBackend');
 
 class MobileAppNotificationsBackend implements AppNotificationsBackend {
   MobileAppNotificationsBackend();
@@ -40,6 +43,10 @@ class MobileAppNotificationsBackend implements AppNotificationsBackend {
       ),
       payload: id,
     );
+    _log.info(
+      'Android/iOS local notification show completed. Id: {id}, title={title}',
+      parameters: {'id': id, 'title': request.title ?? ''},
+    );
   }
 
   @override
@@ -66,8 +73,9 @@ class MobileAppNotificationsBackend implements AppNotificationsBackend {
     if (_initialized && !needsDarwinRefresh) {
       return;
     }
-    const androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     final darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -76,18 +84,26 @@ class MobileAppNotificationsBackend implements AppNotificationsBackend {
     );
 
     await _plugin.initialize(
-      InitializationSettings(
-        android: androidSettings,
-        iOS: darwinSettings,
-      ),
+      InitializationSettings(android: androidSettings, iOS: darwinSettings),
       onDidReceiveNotificationResponse: _onDidReceiveNotificationResponse,
     );
 
     if (Platform.isAndroid) {
-      await _plugin
+      final androidPlugin = _plugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      final permissionGranted = await androidPlugin
           ?.requestNotificationsPermission();
+      final notificationsEnabled = await androidPlugin
+          ?.areNotificationsEnabled();
+      _log.info(
+        'Android local notifications initialized. Permission granted: {permissionGranted}, enabled={enabled}',
+        parameters: {
+          'permissionGranted': permissionGranted,
+          'enabled': notificationsEnabled,
+        },
+      );
     }
 
     _initialized = true;
@@ -113,9 +129,9 @@ class MobileAppNotificationsBackend implements AppNotificationsBackend {
         )
         .toList(growable: false);
     if (request.imageBytes != null && request.imageBytes!.isNotEmpty) {
-      final largeIcon =
-          ByteArrayAndroidBitmap.fromBase64String(
-              base64Encode(request.imageBytes!));
+      final largeIcon = ByteArrayAndroidBitmap.fromBase64String(
+        base64Encode(request.imageBytes!),
+      );
       return AndroidNotificationDetails(
         'sgtp_app_notifications',
         'App Notifications',
@@ -164,9 +180,7 @@ class MobileAppNotificationsBackend implements AppNotificationsBackend {
 
   int _notificationIntId(String id) => id.hashCode & 0x7FFFFFFF;
 
-  void _onDidReceiveNotificationResponse(
-    NotificationResponse response,
-  ) {
+  void _onDidReceiveNotificationResponse(NotificationResponse response) {
     final listener = _eventListener;
     if (listener == null) {
       return;
