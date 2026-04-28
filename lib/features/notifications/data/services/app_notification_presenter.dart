@@ -50,7 +50,7 @@ class AppNotificationPresenter implements NotificationPresenter {
         .builder()
         .setImage(projection.safePayload.avatarBytes)
         .setTitle(projection.safePayload.title)
-        .setSubtitle(projection.safePayload.subtitle)
+        .setSubtitle(projection.safePayload.body ?? projection.safePayload.subtitle)
         .setDesktopDuration(const Duration(seconds: 6));
     for (final action in projection.actions) {
       builder.addButton(

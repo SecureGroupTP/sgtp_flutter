@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:sgtp_flutter/core/app/notification_interaction_service.dart';
+import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/notification_dispatcher.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
@@ -35,6 +36,10 @@ class MessageNotificationService {
     String? body,
     int messageCount = 1,
   }) async {
+    final resolvedAvatar = await NotificationAvatarImage.resolve(
+      avatarBytes: avatarBytes,
+      fallbackName: senderName,
+    );
     await _notificationDispatcher.dispatch(
       NotificationEvent.message(
         eventId: eventId,
@@ -43,7 +48,7 @@ class MessageNotificationService {
         threadId: roomId,
         senderId: senderId,
         senderName: senderName,
-        senderAvatarBytes: avatarBytes,
+        senderAvatarBytes: resolvedAvatar,
         body: body,
         messageCount: messageCount,
         onTap: _messageTapCallback(senderPublicKeyHex),

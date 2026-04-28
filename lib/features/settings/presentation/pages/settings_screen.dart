@@ -2702,6 +2702,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildLinuxNotificationsCard(state),
           const SizedBox(height: 16),
         ],
+        if (kDebugMode && _isDesktop) ...[
+          _buildDebugNotificationsCard(),
+          const SizedBox(height: 16),
+        ],
         // ── Ping interval ───────────────────────────────────────────────
         const Padding(
           padding: EdgeInsets.only(bottom: 8),
@@ -3002,6 +3006,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SecondaryActionButton(
               label: 'Test auth success',
               onPressed: () => unawaited(_cubit.sendTestAuthNotification()),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDebugNotificationsCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Debug notification renderer',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _SecondaryActionButton(
+              label: 'No image',
+              onPressed: () => unawaited(_cubit.sendDebugNoImageNotification()),
+            ),
+            _SecondaryActionButton(
+              label: 'Avatar',
+              onPressed: () => unawaited(_cubit.sendDebugAvatarNotification()),
+            ),
+            _SecondaryActionButton(
+              label: 'Long text',
+              onPressed: () => unawaited(_cubit.sendDebugLongTextNotification()),
+            ),
+            _SecondaryActionButton(
+              label: 'Buttons',
+              onPressed: () => unawaited(_cubit.sendDebugButtonsNotification()),
+            ),
+            _SecondaryActionButton(
+              label: 'Stack 3',
+              onPressed: () => unawaited(_cubit.sendDebugNotificationStack()),
             ),
           ],
         ),

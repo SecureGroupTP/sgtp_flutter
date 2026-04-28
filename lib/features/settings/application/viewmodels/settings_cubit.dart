@@ -13,6 +13,8 @@ import 'package:sgtp_flutter/core/storage/local_encryption_service.dart';
 import 'package:sgtp_flutter/core/network/rpc_models/overview_rpc_models.dart';
 import 'package:sgtp_flutter/core/network/sgtp_connection_service.dart';
 import 'package:sgtp_flutter/core/app_notifications/app_notification_models.dart';
+import 'package:sgtp_flutter/core/app_notifications/app_notifications.dart';
+import 'package:sgtp_flutter/core/app_notifications/notification_avatar_image.dart';
 import 'package:sgtp_flutter/features/messaging/application/services/message_notification_service.dart';
 import 'package:sgtp_flutter/features/messaging/domain/entities/sgtp_config.dart';
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_action.dart';
@@ -747,6 +749,68 @@ class SettingsCubit extends Cubit<SettingsViewState> {
       body: 'Authentication successful',
       avatarBytes: _userAvatar,
     );
+  }
+
+  Future<void> sendDebugNoImageNotification() {
+    return AppNotifications.instance
+        .builder()
+        .setTitle('Debug no image')
+        .setSubtitle('No avatar, no buttons. Checks the compact renderer path.')
+        .setDesktopDuration(const Duration(seconds: 8))
+        .show();
+  }
+
+  Future<void> sendDebugAvatarNotification() async {
+    final avatar = await NotificationAvatarImage.resolve(
+      fallbackName: 'Debug sender',
+    );
+    await AppNotifications.instance
+        .builder()
+        .setImage(avatar)
+        .setTitle('Debug avatar')
+        .setSubtitle('Fallback avatar path, matching old message notifications.')
+        .setDesktopDuration(const Duration(seconds: 8))
+        .show();
+  }
+
+  Future<void> sendDebugLongTextNotification() async {
+    final avatar = await NotificationAvatarImage.resolve(
+      fallbackName: 'Long text',
+    );
+    await AppNotifications.instance
+        .builder()
+        .setImage(avatar)
+        .setTitle('Debug long text')
+        .setSubtitle(
+          'This notification has a longer preview so the bottom spacing, clipping, and ellipsis behavior are easier to inspect visually.',
+        )
+        .setDesktopDuration(const Duration(seconds: 8))
+        .show();
+  }
+
+  Future<void> sendDebugButtonsNotification() async {
+    final avatar = await NotificationAvatarImage.resolve(
+      fallbackName: 'Buttons',
+    );
+    await AppNotifications.instance
+        .builder()
+        .setImage(avatar)
+        .setTitle('Debug buttons')
+        .setSubtitle('Two action buttons should leave a comfortable bottom area.')
+        .addButton(label: 'Accept', onPressed: _noopNotificationAction)
+        .addButton(
+          label: 'Decline',
+          color: AppNotificationButtonColor.red,
+          onPressed: _noopNotificationAction,
+        )
+        .setDesktopDuration(const Duration(seconds: 8))
+        .show();
+  }
+
+  Future<void> sendDebugNotificationStack() async {
+    await sendDebugAvatarNotification();
+    await sendDebugLongTextNotification();
+    await sendDebugButtonsNotification();
   }
 
   // ── Intent: Backup/restore ──────────────────────────────────────────────
