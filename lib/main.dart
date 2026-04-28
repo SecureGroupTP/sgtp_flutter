@@ -2,10 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'package:sgtp_flutter/core/app/bootstrap_gate.dart';
+import 'package:sgtp_flutter/core/app/app_runner.dart';
 
 void main() async {
-  runZonedGuarded(() => runApp(const BootstrapGate()), (error, stackTrace) {
-    debugPrint('Unhandled startup error: $error\n$stackTrace');
-  });
+  await runZonedGuarded(
+    () async {
+      await runSgtpApp();
+    },
+    (error, stackTrace) {
+      debugPrint('Unhandled startup error: $error\n$stackTrace');
+    },
+  );
 }

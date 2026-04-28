@@ -10,7 +10,6 @@ import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/interaction_prefs.dart';
 import 'package:sgtp_flutter/core/logging/log_setup.dart';
 import 'package:sgtp_flutter/core/window_size_service.dart';
-import 'package:sgtp_flutter/features/notifications/data/services/push_background_handler.dart';
 
 Future<AppDependencies> bootstrapApp() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,8 +26,6 @@ Future<AppDependencies> bootstrapApp() async {
     await windowManager.ensureInitialized();
     await WindowSizeService.restoreSize();
   }
-
-  await configurePushBackgroundHandling();
 
   final dependencies = await AppInjector.build();
   await dependencies.notificationHostService.ensureInitialized();

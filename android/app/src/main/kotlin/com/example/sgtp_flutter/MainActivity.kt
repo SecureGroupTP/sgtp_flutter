@@ -73,8 +73,8 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "initialize" -> {
-                        NotificationHostService.stop(this)
-                        result.success("unsupported")
+                        NotificationHostService.ensureChannel(this)
+                        result.success("supported")
                     }
                     "start" -> {
                         val accountId = call.argument<String>("accountId")?.trim().orEmpty()

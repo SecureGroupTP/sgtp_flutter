@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
@@ -17,14 +18,17 @@ class NotificationHostService : Service() {
         ensureChannel(this)
         startForeground(kForegroundNotificationId, buildNotification())
         isRunning = true
+        Log.i(kLogTag, "Notification host service started")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         activeAccountId = intent?.getStringExtra(kExtraAccountId)?.trim().orEmpty()
+        Log.i(kLogTag, "Notification host active account=${activeAccountId.take(8)}")
         return START_STICKY
     }
 
     override fun onDestroy() {
+        Log.i(kLogTag, "Notification host service stopped")
         isRunning = false
         activeAccountId = ""
         super.onDestroy()
@@ -47,6 +51,7 @@ class NotificationHostService : Service() {
         private const val kChannelId = "sgtp_notification_host"
         private const val kForegroundNotificationId = 42042
         private const val kExtraAccountId = "account_id"
+        private const val kLogTag = "SGTPNotificationHost"
 
         @Volatile
         var isRunning: Boolean = false

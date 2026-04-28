@@ -78,8 +78,10 @@ class _PendingMedia {
 class _PendingSelfAck {
   final String localMessageId;
   final int createdAtUs;
-  const _PendingSelfAck(
-      {required this.localMessageId, required this.createdAtUs});
+  const _PendingSelfAck({
+    required this.localMessageId,
+    required this.createdAtUs,
+  });
 }
 
 class ServerV2ChatSession implements ISgtpSession {
@@ -131,16 +133,16 @@ class ServerV2ChatSession implements ISgtpSession {
     required SgtpConnectionService connectionService,
     required OpenMlsRuntimeFactory openMlsRuntimeFactory,
     required MainDatabaseFactory mainDatabaseFactory,
-  })  : _config = config,
-        _connectionService = connectionService,
-        _openMlsRuntimeFactory = openMlsRuntimeFactory,
-        _mainDatabaseFactory = mainDatabaseFactory,
-        _metadataRepository = (config.accountId ?? '').trim().isEmpty
-            ? null
-            : ChatMetadataRepository(
-                accountId: config.accountId,
-                mainDatabaseFactory: mainDatabaseFactory,
-              ) {
+  }) : _config = config,
+       _connectionService = connectionService,
+       _openMlsRuntimeFactory = openMlsRuntimeFactory,
+       _mainDatabaseFactory = mainDatabaseFactory,
+       _metadataRepository = (config.accountId ?? '').trim().isEmpty
+           ? null
+           : ChatMetadataRepository(
+               accountId: config.accountId,
+               mainDatabaseFactory: mainDatabaseFactory,
+             ) {
     _isDirectRoom = config.isDirectMessage;
     _directRoomNeedsBootstrap = config.bootstrapDirectRoom;
     _roomUUID = config.roomUUID.every((b) => b == 0)
@@ -166,7 +168,9 @@ class ServerV2ChatSession implements ISgtpSession {
 
   bool get _isMaster {
     if (_isDirectRoom) {
-      final ownerHex = (_directRoomOwnerPublicKeyHex ?? '').trim().toLowerCase();
+      final ownerHex = (_directRoomOwnerPublicKeyHex ?? '')
+          .trim()
+          .toLowerCase();
       if (ownerHex.length == 64) {
         return ownerHex == myUUIDHex;
       }
@@ -181,8 +185,10 @@ class ServerV2ChatSession implements ISgtpSession {
   @override
   Future<void> connect() async {
     if (_eventController.isClosed) {
-      _log.warning('connect called after session close for room {roomId}',
-          parameters: {'roomId': roomUUIDHex});
+      _log.warning(
+        'connect called after session close for room {roomId}',
+        parameters: {'roomId': roomUUIDHex},
+      );
       return;
     }
     if (_connecting || _connected) return;
@@ -301,11 +307,7 @@ class ServerV2ChatSession implements ISgtpSession {
       replyToSender: replyToSender,
     );
     _pendingOutgoingMessagesByLocalId[localId] = optimistic;
-    _eventController.add(
-      SgtpMessageReceived(
-        message: optimistic,
-      ),
-    );
+    _eventController.add(SgtpMessageReceived(message: optimistic));
     try {
       await _sendPayload(payload, localEchoId: localId);
       unawaited(
@@ -449,14 +451,16 @@ class ServerV2ChatSession implements ISgtpSession {
 
   @override
   void sendReaction(String messageId, String emoji, bool adding) {
-    unawaited(_sendPayload({
-      'v': 1,
-      'type': 'reaction',
-      'msg_id': messageId,
-      'emoji': emoji,
-      'add': adding,
-      'pub': myUUIDHex,
-    }));
+    unawaited(
+      _sendPayload({
+        'v': 1,
+        'type': 'reaction',
+        'msg_id': messageId,
+        'emoji': emoji,
+        'add': adding,
+        'pub': myUUIDHex,
+      }),
+    );
   }
 
   @override
@@ -663,12 +667,17 @@ class ServerV2ChatSession implements ISgtpSession {
 
   Future<void> _bootstrapDirectRoomAndMls() async {
     await _ensureRemoteRoomBound();
-    final roomId =
-        (_remoteRoomId ?? '').isNotEmpty ? _remoteRoomId! : roomUUIDHex;
+    final roomId = (_remoteRoomId ?? '').isNotEmpty
+        ? _remoteRoomId!
+        : roomUUIDHex;
     await _resolveDirectRoomPeerAndOwner(roomId);
     if (_directRoomNeedsBootstrap) {
       await _ensureMlsGroupCreated();
       await _publishRoomState();
+      final invited = await _inviteKnownPeers();
+      if (invited) {
+        _directRoomNeedsBootstrap = false;
+      }
       return;
     }
     await _joinFromStoredWelcome(reportMissing: false);
@@ -685,7 +694,8 @@ class ServerV2ChatSession implements ISgtpSession {
         throw StateError('Direct room peer public key is missing');
       }
       final created = await client.createDirectRoom(
-          targetUserPublicKey: targetUserPublicKey);
+        targetUserPublicKey: targetUserPublicKey,
+      );
       final roomId = _normalizeRoomId(created.roomId);
       if (roomId.isEmpty) {
         throw StateError('Server returned an empty direct room id');
@@ -739,8 +749,9 @@ class ServerV2ChatSession implements ISgtpSession {
           return;
         }
         try {
-          final accepted =
-              await client.acceptChatInvitation(invitation.invitationId);
+          final accepted = await client.acceptChatInvitation(
+            invitation.invitationId,
+          );
           _ownsGroupRoom = false;
           await _saveRemoteRoomId(accepted.roomId);
         } catch (e, st) {
@@ -840,8 +851,8 @@ class ServerV2ChatSession implements ISgtpSession {
     }
     final peerHexes = _isDirectRoom
         ? (_directPeerPublicKeyHexEffective.length == 64
-            ? <String>[_directPeerPublicKeyHexEffective]
-            : const <String>[])
+              ? <String>[_directPeerPublicKeyHexEffective]
+              : const <String>[])
         : const <String>[];
     if (peerHexes.isEmpty) {
       _emitReadyIfNeeded(force: true);
@@ -886,8 +897,7 @@ class ServerV2ChatSession implements ISgtpSession {
       } catch (e) {
         // Idempotency: on reconnect we may attempt to invite a peer device that
         // is already a group member. Treat it as success and don't crash.
-        if (_isAlreadyInGroupError(e) ||
-            _isDuplicateInviteProposalError(e)) {
+        if (_isAlreadyInGroupError(e) || _isDuplicateInviteProposalError(e)) {
           _log.debug(
             'MLS invite skipped (already in group) room={roomId} peer={peer} device={device}',
             parameters: {
@@ -897,7 +907,8 @@ class ServerV2ChatSession implements ISgtpSession {
             },
           );
           _invitedPeerDevices.add(peerDeviceKey);
-          _directRoomInviteComplete = _directRoomInviteComplete || _isDirectRoom;
+          _directRoomInviteComplete =
+              _directRoomInviteComplete || _isDirectRoom;
           continue;
         }
         rethrow;
@@ -1033,7 +1044,10 @@ class ServerV2ChatSession implements ISgtpSession {
       _eventController.add(
         SgtpMessageReceived(
           message: echoMessage.copyWith(
-              id: fileId, isSending: true, sendProgress: 0),
+            id: fileId,
+            isSending: true,
+            sendProgress: 0,
+          ),
         ),
       );
     }
@@ -1179,7 +1193,7 @@ class ServerV2ChatSession implements ISgtpSession {
       'Draining queued MLS messages room={roomId} count={count}',
       parameters: {
         'roomId': _remoteRoomId ?? roomUUIDHex,
-        'count': queued.length
+        'count': queued.length,
       },
     );
     for (final pending in queued) {
@@ -1211,8 +1225,10 @@ class ServerV2ChatSession implements ISgtpSession {
       _mlsGroupReady = true;
       _remoteRoomBindRetryTimer?.cancel();
       _remoteRoomBindRetryTimer = null;
-      _log.info('Joined MLS group from welcome for room {roomId}',
-          parameters: {'roomId': _remoteRoomId ?? roomUUIDHex});
+      _log.info(
+        'Joined MLS group from welcome for room {roomId}',
+        parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
+      );
       _emitReadyIfNeeded(force: true);
       await _drainPendingInboundMessages();
     } catch (e, st) {
@@ -1249,10 +1265,12 @@ class ServerV2ChatSession implements ISgtpSession {
         error: e,
         stackTrace: st,
       );
-      _eventController.add(SgtpError(
-        error:
-            'MLS welcome failed: $e. Ask the other participant to reconnect or recreate the chat.',
-      ));
+      _eventController.add(
+        SgtpError(
+          error:
+              'MLS welcome failed: $e. Ask the other participant to reconnect or recreate the chat.',
+        ),
+      );
     }
   }
 
@@ -1303,7 +1321,8 @@ class ServerV2ChatSession implements ISgtpSession {
   }
 
   Future<bool> _handleIncomingMessage(
-      MlsMessageReceivedNetworkEvent event) async {
+    MlsMessageReceivedNetworkEvent event,
+  ) async {
     final senderHex = _hex(event.senderPublicKey);
     // Server echoes our own MLS application messages back to us. The local MLS
     // rejects decrypting self-sent messages with "Cannot decrypt own messages."
@@ -1384,15 +1403,13 @@ class ServerV2ChatSession implements ISgtpSession {
       if (pending == null) continue;
       matched = true;
       _pendingSelfAckFingerprintByLocalId.remove(pending.localMessageId);
-      final msg =
-          _pendingOutgoingMessagesByLocalId.remove(pending.localMessageId);
+      final msg = _pendingOutgoingMessagesByLocalId.remove(
+        pending.localMessageId,
+      );
       if (msg != null) {
         _eventController.add(
           SgtpMessageReceived(
-            message: msg.copyWith(
-              isSending: false,
-              sendProgress: 1,
-            ),
+            message: msg.copyWith(isSending: false, sendProgress: 1),
           ),
         );
       }
@@ -1480,11 +1497,13 @@ class ServerV2ChatSession implements ISgtpSession {
     if (inFlight != null) return;
     final future = _recoverFromBadEpoch();
     _badEpochRecoveryInFlight = future;
-    unawaited(future.whenComplete(() {
-      if (identical(_badEpochRecoveryInFlight, future)) {
-        _badEpochRecoveryInFlight = null;
-      }
-    }));
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_badEpochRecoveryInFlight, future)) {
+          _badEpochRecoveryInFlight = null;
+        }
+      }),
+    );
   }
 
   Future<void> _recoverFromBadEpoch() async {
@@ -1550,11 +1569,13 @@ class ServerV2ChatSession implements ISgtpSession {
       final expiresAt = DateTime.now().toUtc().add(const Duration(days: 30));
       await client.uploadKeyPackages(
         generated
-            .map((item) => KeyPackageDto(
-                  keyPackageBytes: item,
-                  isLastResort: false,
-                  expiresAtUs: expiresAt.microsecondsSinceEpoch,
-                ))
+            .map(
+              (item) => KeyPackageDto(
+                keyPackageBytes: item,
+                isLastResort: false,
+                expiresAtUs: expiresAt.microsecondsSinceEpoch,
+              ),
+            )
             .toList(),
       );
     } catch (e, st) {
@@ -1599,54 +1620,60 @@ class ServerV2ChatSession implements ISgtpSession {
     // broadcast by the server (same bytes come back to the sender).
     final fingerprint = _ciphertextFingerprint(ciphertext);
     final nowUs = DateTime.now().microsecondsSinceEpoch;
-    _pendingSelfAcksByFingerprint[fingerprint] =
-        _PendingSelfAck(localMessageId: localMessageId, createdAtUs: nowUs);
+    _pendingSelfAcksByFingerprint[fingerprint] = _PendingSelfAck(
+      localMessageId: localMessageId,
+      createdAtUs: nowUs,
+    );
     _pendingSelfAckFingerprintByLocalId[localMessageId] = fingerprint;
     _schedulePendingSelfAckCleanup();
   }
 
   void _dropPendingSelfAckForLocalId(String localMessageId) {
-    final fingerprint =
-        _pendingSelfAckFingerprintByLocalId.remove(localMessageId);
+    final fingerprint = _pendingSelfAckFingerprintByLocalId.remove(
+      localMessageId,
+    );
     if (fingerprint != null) {
       _pendingSelfAcksByFingerprint.remove(fingerprint);
     }
   }
 
   void _schedulePendingSelfAckCleanup() {
-    _pendingSelfAckCleanupTimer ??=
-        Timer.periodic(const Duration(seconds: 10), (_) {
-      if (_pendingSelfAcksByFingerprint.isEmpty) {
-        _pendingSelfAckCleanupTimer?.cancel();
-        _pendingSelfAckCleanupTimer = null;
-        return;
-      }
-      final nowUs = DateTime.now().microsecondsSinceEpoch;
-      const ttlUs = 60 * 1000 * 1000; // 60s
-      final expired = <String>[];
-      for (final e in _pendingSelfAcksByFingerprint.entries) {
-        if (nowUs - e.value.createdAtUs > ttlUs) expired.add(e.key);
-      }
-      for (final key in expired) {
-        final pending = _pendingSelfAcksByFingerprint.remove(key);
-        if (pending != null) {
-          _pendingSelfAckFingerprintByLocalId.remove(pending.localMessageId);
-          // Mark as no longer "sending" so the UI doesn't spin forever.
-          final msg =
-              _pendingOutgoingMessagesByLocalId.remove(pending.localMessageId);
-          if (msg != null) {
-            _eventController.add(
-              SgtpMessageReceived(
-                message: msg.copyWith(
-                  isSending: false,
-                  sendError: 'No ACK from server',
-                ),
-              ),
+    _pendingSelfAckCleanupTimer ??= Timer.periodic(
+      const Duration(seconds: 10),
+      (_) {
+        if (_pendingSelfAcksByFingerprint.isEmpty) {
+          _pendingSelfAckCleanupTimer?.cancel();
+          _pendingSelfAckCleanupTimer = null;
+          return;
+        }
+        final nowUs = DateTime.now().microsecondsSinceEpoch;
+        const ttlUs = 60 * 1000 * 1000; // 60s
+        final expired = <String>[];
+        for (final e in _pendingSelfAcksByFingerprint.entries) {
+          if (nowUs - e.value.createdAtUs > ttlUs) expired.add(e.key);
+        }
+        for (final key in expired) {
+          final pending = _pendingSelfAcksByFingerprint.remove(key);
+          if (pending != null) {
+            _pendingSelfAckFingerprintByLocalId.remove(pending.localMessageId);
+            // Mark as no longer "sending" so the UI doesn't spin forever.
+            final msg = _pendingOutgoingMessagesByLocalId.remove(
+              pending.localMessageId,
             );
+            if (msg != null) {
+              _eventController.add(
+                SgtpMessageReceived(
+                  message: msg.copyWith(
+                    isSending: false,
+                    sendError: 'No ACK from server',
+                  ),
+                ),
+              );
+            }
           }
         }
-      }
-    });
+      },
+    );
   }
 
   String _ciphertextFingerprint(Uint8List ciphertext) =>
@@ -1965,17 +1992,18 @@ class ServerV2ChatSession implements ISgtpSession {
       serverAddress: _config.serverAddr,
     );
     final now = DateTime.now();
-    final metadata = (existing ??
-            ChatMetadata(
-              uuid: roomUUIDHex,
-              name: _config.chatName,
-              serverAddress: _config.serverAddr,
-              remoteRoomId: normalized,
-              isDirectMessage: _isDirectRoom,
-              createdAt: now,
-              updatedAt: now,
-            ))
-        .copyWith(remoteRoomId: normalized, updatedAt: now);
+    final metadata =
+        (existing ??
+                ChatMetadata(
+                  uuid: roomUUIDHex,
+                  name: _config.chatName,
+                  serverAddress: _config.serverAddr,
+                  remoteRoomId: normalized,
+                  isDirectMessage: _isDirectRoom,
+                  createdAt: now,
+                  updatedAt: now,
+                ))
+            .copyWith(remoteRoomId: normalized, updatedAt: now);
     await repo.saveChat(metadata);
   }
 
@@ -1993,6 +2021,17 @@ class ServerV2ChatSession implements ISgtpSession {
     _inviteRetryTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!_connected) return;
       if (_isDirectRoom && _directRoomNeedsBootstrap) {
+        try {
+          final invited = await _inviteKnownPeers();
+          if (invited) {
+            _directRoomNeedsBootstrap = false;
+          }
+        } catch (e) {
+          _log.warning(
+            'direct invite retry failed: {error}',
+            parameters: {'error': e},
+          );
+        }
         return;
       }
       if (_isDirectRoom && !_directRoomNeedsBootstrap && !_mlsGroupReady) {
@@ -2094,10 +2133,12 @@ class ServerV2ChatSession implements ISgtpSession {
         error: e,
         stackTrace: st,
       );
-      _eventController.add(SgtpError(
-        error:
-            'Direct chat recovery failed: $e. Ask the other participant to reopen the chat.',
-      ));
+      _eventController.add(
+        SgtpError(
+          error:
+              'Direct chat recovery failed: $e. Ask the other participant to reopen the chat.',
+        ),
+      );
     }
   }
 
@@ -2108,11 +2149,13 @@ class ServerV2ChatSession implements ISgtpSession {
     }
     final future = _recoverDirectWelcome();
     _directWelcomeRecoveryInFlight = future;
-    unawaited(future.whenComplete(() {
-      if (identical(_directWelcomeRecoveryInFlight, future)) {
-        _directWelcomeRecoveryInFlight = null;
-      }
-    }));
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_directWelcomeRecoveryInFlight, future)) {
+          _directWelcomeRecoveryInFlight = null;
+        }
+      }),
+    );
   }
 
   void _scheduleRemoteRoomBind() {
@@ -2159,8 +2202,9 @@ class ServerV2ChatSession implements ISgtpSession {
       'Waiting for remote room invitation for room {roomId}',
       parameters: {'roomId': roomUUIDHex},
     );
-    _remoteRoomBindRetryTimer =
-        Timer.periodic(const Duration(seconds: 3), (_) async {
+    _remoteRoomBindRetryTimer = Timer.periodic(const Duration(seconds: 3), (
+      _,
+    ) async {
       if (!_connected || _mlsGroupReady) {
         _remoteRoomBindRetryTimer?.cancel();
         _remoteRoomBindRetryTimer = null;
@@ -2271,10 +2315,10 @@ class _PendingInboundMessage {
   });
 
   _PendingInboundMessage bump() => _PendingInboundMessage(
-        event: event,
-        createdAtUs: createdAtUs,
-        attempts: attempts + 1,
-      );
+    event: event,
+    createdAtUs: createdAtUs,
+    attempts: attempts + 1,
+  );
 
   bool get shouldDrop {
     final nowUs = DateTime.now().microsecondsSinceEpoch;
