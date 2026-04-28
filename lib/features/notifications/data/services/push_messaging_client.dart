@@ -4,7 +4,10 @@ import 'dart:io';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/push_messaging_client.dart';
+
+final _log = AppLog('FirebasePushMessagingClient');
 
 class FirebasePushMessagingClient implements PushMessagingClient {
   FirebasePushMessagingClient();
@@ -39,7 +42,17 @@ class FirebasePushMessagingClient implements PushMessagingClient {
     if (!_available || messaging == null) {
       return null;
     }
-    return messaging.getToken();
+    try {
+      return await messaging.getToken();
+    } catch (e, st) {
+      _log.warning(
+        'Firebase getToken failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+      return null;
+    }
   }
 
   @override
@@ -54,7 +67,13 @@ class FirebasePushMessagingClient implements PushMessagingClient {
       }
       _messaging = FirebaseMessaging.instance;
       _available = true;
-    } catch (_) {
+    } catch (e, st) {
+      _log.warning(
+        'Firebase messaging initialization failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
       _messaging = null;
       _available = false;
     }
@@ -69,14 +88,24 @@ class FirebasePushMessagingClient implements PushMessagingClient {
     if (messaging == null) {
       return false;
     }
-    final settings = await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
-    return settings.authorizationStatus == AuthorizationStatus.authorized ||
-        settings.authorizationStatus == AuthorizationStatus.provisional;
+    try {
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        provisional: false,
+      );
+      return settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+    } catch (e, st) {
+      _log.warning(
+        'Firebase notification permission request failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+      return false;
+    }
   }
 
   bool _supportsCurrentPlatform() {

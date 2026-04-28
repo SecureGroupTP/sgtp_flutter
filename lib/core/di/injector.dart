@@ -29,6 +29,7 @@ import 'package:sgtp_flutter/features/notifications/data/repositories/notificati
 import 'package:sgtp_flutter/features/notifications/data/services/notification_host_platform_adapter_factory.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/app_notification_presenter.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/message_notification_sink.dart';
+import 'package:sgtp_flutter/features/notifications/data/services/push_platform.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/push_messaging_client.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/settings_notification_account_context_resolver.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/settings_push_device_registry.dart';
@@ -206,7 +207,7 @@ class AppInjector {
           messageNotificationService: messageNotificationService,
         ),
       ),
-      platformCode: 2,
+      platformCode: PushPlatform.currentCode(),
     );
     final chatStorageGateway = DefaultChatStorageGateway(
       mainDatabaseFactory: mainDatabaseFactory,

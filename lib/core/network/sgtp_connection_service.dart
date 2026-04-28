@@ -18,9 +18,8 @@ import 'package:sgtp_flutter/features/notifications/application/services/notific
 import 'package:sgtp_flutter/features/notifications/domain/entities/notification_event.dart';
 
 class SgtpConnectionService {
-  SgtpConnectionService({
-    NotificationDispatcher? notificationDispatcher,
-  }) : _notificationDispatcher = notificationDispatcher;
+  SgtpConnectionService({NotificationDispatcher? notificationDispatcher})
+    : _notificationDispatcher = notificationDispatcher;
 
   final _log = AppLog('SgtpConnectionService');
   final NotificationDispatcher? _notificationDispatcher;
@@ -333,6 +332,8 @@ class SgtpConnectionService {
 
   bool _isSameConnection(SgtpConfig a, SgtpConfig b) {
     return a.serverAddr.trim() == b.serverAddr.trim() &&
+        (a.accountId ?? '').trim() == (b.accountId ?? '').trim() &&
+        a.deviceId.trim() == b.deviceId.trim() &&
         a.transport == b.transport &&
         a.useTls == b.useTls &&
         a.fakeSni.trim() == b.fakeSni.trim() &&

@@ -84,6 +84,42 @@ void main() {
         expect(registrar.calls, hasLength(1));
       },
     );
+
+    test('does not register token for unsupported platform code', () async {
+      final messagingClient = _FakeMessagingClient(initialToken: 'token-1');
+      final registrar = _FakeRegistrar();
+      final service = PushNotificationService(
+        messagingClient: messagingClient,
+        deviceRegistry: _FakeRegistry(deviceId: 'device-1'),
+        tokenRegistrar: registrar,
+        platformCode: 0,
+      );
+
+      await service.activateAccount('acc-1');
+      await service.syncRegistration();
+      messagingClient.emitTokenRefresh('token-2');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(registrar.calls, isEmpty);
+    });
+
+    test('keeps sync non-fatal when messaging token lookup fails', () async {
+      final messagingClient = _FakeMessagingClient(
+        tokenError: StateError('firebase unavailable'),
+      );
+      final registrar = _FakeRegistrar();
+      final service = PushNotificationService(
+        messagingClient: messagingClient,
+        deviceRegistry: _FakeRegistry(deviceId: 'device-1'),
+        tokenRegistrar: registrar,
+        platformCode: 1,
+      );
+
+      await service.activateAccount('acc-1');
+      await service.syncRegistration();
+
+      expect(registrar.calls, isEmpty);
+    });
   });
 }
 
@@ -105,9 +141,10 @@ class _FakeRegistry implements PushDeviceRegistry {
 }
 
 class _FakeMessagingClient implements PushMessagingClient {
-  _FakeMessagingClient({this.initialToken});
+  _FakeMessagingClient({this.initialToken, this.tokenError});
 
   final String? initialToken;
+  final Object? tokenError;
   final StreamController<String> _tokenRefreshController =
       StreamController<String>.broadcast();
   bool initialized = false;
@@ -124,7 +161,11 @@ class _FakeMessagingClient implements PushMessagingClient {
   }
 
   @override
-  Future<String?> getToken() async => initialToken;
+  Future<String?> getToken() async {
+    final error = tokenError;
+    if (error != null) throw error;
+    return initialToken;
+  }
 
   @override
   Future<void> initialize() async {

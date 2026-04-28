@@ -1,9 +1,12 @@
 import 'dart:async';
 
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/push_message_processor.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/push_device_registry.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/push_messaging_client.dart';
 import 'package:sgtp_flutter/features/notifications/domain/repositories/push_token_registrar.dart';
+
+final _log = AppLog('PushNotificationService');
 
 class PushNotificationService {
   PushNotificationService({
@@ -74,7 +77,23 @@ class PushNotificationService {
     _registrationEnabled = true;
     await ensureInitialized();
 
-    final token = await _messagingClient.getToken();
+    if (_platformCode <= 0) {
+      _log.debug('Push token registration skipped: unsupported platform');
+      return;
+    }
+
+    final String? token;
+    try {
+      token = await _messagingClient.getToken();
+    } catch (e, st) {
+      _log.warning(
+        'Push token lookup failed: {error}',
+        parameters: {'error': e},
+        error: e,
+        stackTrace: st,
+      );
+      return;
+    }
     if (token == null || token.trim().isEmpty) {
       return;
     }
@@ -93,7 +112,10 @@ class PushNotificationService {
     final accountId = _activeAccountId;
     final token = rawToken.trim();
 
-    if (accountId == null || accountId.isEmpty || token.isEmpty) {
+    if (accountId == null ||
+        accountId.isEmpty ||
+        token.isEmpty ||
+        _platformCode <= 0) {
       return;
     }
 
