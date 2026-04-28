@@ -37,6 +37,10 @@ class PushNotificationService {
     if (_initialized) {
       return;
     }
+    _log.info(
+      'Push notification service initializing. Platform code: {platform}',
+      parameters: {'platform': _platformCode},
+    );
     await _messagingClient.initialize();
     await _messagingClient.requestPermission();
 
@@ -55,12 +59,17 @@ class PushNotificationService {
     }
 
     _initialized = true;
+    _log.info('Push notification service initialized');
   }
 
   Future<void> activateAccount(String accountId) async {
     final normalized = accountId.trim();
     _activeAccountId = normalized.isEmpty ? null : normalized;
     _registrationEnabled = false;
+    _log.info(
+      'Push account activated: {account}',
+      parameters: {'account': _short(normalized)},
+    );
     await ensureInitialized();
   }
 
@@ -120,6 +129,15 @@ class PushNotificationService {
     }
 
     final deviceId = await _deviceRegistry.loadDeviceId(accountId);
+    _log.info(
+      'Registering push token. Account: {account}, device={device}, platform={platform}, tokenLength={tokenLength}',
+      parameters: {
+        'account': _short(accountId),
+        'device': _short(deviceId),
+        'platform': _platformCode,
+        'tokenLength': token.length,
+      },
+    );
 
     try {
       await _tokenRegistrar.registerToken(
@@ -129,13 +147,26 @@ class PushNotificationService {
         pushToken: token,
         isEnabled: true,
       );
+      _log.info(
+        'Push token registered. Account: {account}, device={device}',
+        parameters: {'account': _short(accountId), 'device': _short(deviceId)},
+      );
     } on StateError catch (e) {
       if (!_isProfileRequiredError(e)) rethrow;
+      _log.warning(
+        'Push token registration postponed: profile is required first',
+      );
       _registrationEnabled = false;
     }
   }
 
   bool _isProfileRequiredError(StateError error) {
     return error.message.startsWith('profile_required:');
+  }
+
+  String _short(String value) {
+    final normalized = value.trim();
+    if (normalized.length <= 8) return normalized;
+    return normalized.substring(0, 8);
   }
 }

@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:sgtp_flutter/core/app_log.dart';
 import 'package:sgtp_flutter/core/di/injector.dart';
 import 'package:sgtp_flutter/core/logging/log_setup.dart';
 import 'package:sgtp_flutter/features/notifications/application/services/push_message_payload_parser.dart';
@@ -13,8 +14,11 @@ import 'package:sgtp_flutter/features/notifications/application/services/push_me
 import 'package:sgtp_flutter/features/notifications/data/services/message_notification_sink.dart';
 import 'package:sgtp_flutter/features/notifications/data/services/settings_push_device_registry.dart';
 
+final _log = AppLog('PushBackgroundHandler');
+
 Future<void> configurePushBackgroundHandling() async {
   if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) {
+    debugPrint('SGTP push background skipped: unsupported platform');
     return;
   }
   try {
@@ -24,7 +28,10 @@ Future<void> configurePushBackgroundHandling() async {
     FirebaseMessaging.onBackgroundMessage(
       sgtpFirebaseMessagingBackgroundHandler,
     );
-  } catch (_) {}
+    debugPrint('SGTP push background handler registered');
+  } catch (e, st) {
+    debugPrint('SGTP push background registration failed: $e\n$st');
+  }
 }
 
 @pragma('vm:entry-point')
@@ -41,6 +48,13 @@ Future<void> sgtpFirebaseMessagingBackgroundHandler(
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp();
     }
+    _log.info(
+      'Firebase background message received. Id: {id}, keys={keys}',
+      parameters: {
+        'id': message.messageId ?? '',
+        'keys': message.data.keys.join(','),
+      },
+    );
   } catch (e, st) {
     debugPrint('SGTP push background init failed: $e\n$st');
     return;
@@ -61,11 +75,29 @@ Future<void> sgtpFirebaseMessagingBackgroundHandler(
       message.data.map((key, value) => MapEntry(key, value?.toString() ?? '')),
     );
     if (!processed) {
+      _log.warning(
+        'Firebase background message dropped. Id: {id}, keys={keys}',
+        parameters: {
+          'id': message.messageId ?? '',
+          'keys': message.data.keys.join(','),
+        },
+      );
       debugPrint(
         'SGTP push background message dropped: keys=${message.data.keys.toList()}',
       );
+    } else {
+      _log.info(
+        'Firebase background message processed. Id: {id}',
+        parameters: {'id': message.messageId ?? ''},
+      );
     }
   } catch (e, st) {
+    _log.error(
+      'Firebase background handler failed: {error}',
+      parameters: {'error': e},
+      error: e,
+      stackTrace: st,
+    );
     debugPrint('SGTP push background handler failed: $e\n$st');
   }
 }

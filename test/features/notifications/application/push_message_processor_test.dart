@@ -49,6 +49,28 @@ void main() {
       expect(sink.messageEvents, isEmpty);
       expect(sink.friendRequestEvents, isEmpty);
     });
+
+    test('resolves account by device id and forwards friend request', () async {
+      final sink = _FakeSink();
+      final processor = PushMessageProcessor(
+        payloadParser: const PushMessagePayloadParser(),
+        deviceRegistry: _FakeRegistry(resolvedAccountId: 'acc-1'),
+        notificationSink: sink,
+      );
+
+      final processed = await processor.process(<String, String>{
+        'eventType': 'friend.requestReceived',
+        'eventId': 'evt-2',
+        'deviceId': 'device-1',
+        'peerId': 'peer-7',
+        'displayName': 'Bob',
+      });
+
+      expect(processed, isTrue);
+      expect(sink.friendRequestEvents, hasLength(1));
+      expect(sink.friendRequestEvents.single.accountId, 'acc-1');
+      expect(sink.friendRequestEvents.single.peerId, 'peer-7');
+    });
   });
 }
 

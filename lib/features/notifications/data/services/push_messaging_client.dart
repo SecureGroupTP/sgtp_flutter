@@ -21,6 +21,13 @@ class FirebasePushMessagingClient implements PushMessagingClient {
       return const Stream<Map<String, String>>.empty();
     }
     return FirebaseMessaging.onMessage.map((message) {
+      _log.info(
+        'Firebase foreground message received. Id: {id}, keys={keys}',
+        parameters: {
+          'id': message.messageId ?? '',
+          'keys': message.data.keys.join(','),
+        },
+      );
       return message.data.map(
         (key, value) => MapEntry(key, value?.toString() ?? ''),
       );
@@ -33,7 +40,13 @@ class FirebasePushMessagingClient implements PushMessagingClient {
     if (!_available || messaging == null) {
       return const Stream<String>.empty();
     }
-    return messaging.onTokenRefresh;
+    return messaging.onTokenRefresh.map((token) {
+      _log.info(
+        'Firebase token refreshed. Length: {length}',
+        parameters: {'length': token.length},
+      );
+      return token;
+    });
   }
 
   @override
@@ -58,6 +71,7 @@ class FirebasePushMessagingClient implements PushMessagingClient {
   @override
   Future<void> initialize() async {
     if (!_supportsCurrentPlatform()) {
+      _log.info('Firebase messaging skipped: unsupported platform');
       _available = false;
       return;
     }
@@ -67,6 +81,7 @@ class FirebasePushMessagingClient implements PushMessagingClient {
       }
       _messaging = FirebaseMessaging.instance;
       _available = true;
+      _log.info('Firebase messaging initialized');
     } catch (e, st) {
       _log.warning(
         'Firebase messaging initialization failed: {error}',
@@ -94,6 +109,10 @@ class FirebasePushMessagingClient implements PushMessagingClient {
         badge: true,
         sound: true,
         provisional: false,
+      );
+      _log.info(
+        'Firebase notification permission status: {status}',
+        parameters: {'status': settings.authorizationStatus.name},
       );
       return settings.authorizationStatus == AuthorizationStatus.authorized ||
           settings.authorizationStatus == AuthorizationStatus.provisional;
