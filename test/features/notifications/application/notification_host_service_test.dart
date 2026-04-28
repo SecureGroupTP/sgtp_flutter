@@ -40,6 +40,23 @@ void main() {
       expect(adapter.initializeCalls, 1);
       expect(adapter.startCalls, 0);
     });
+
+    test('disabled host stops legacy service and never starts', () async {
+      final adapter = _FakeNotificationHostPlatformAdapter();
+      final service = NotificationHostService(
+        platformAdapter: adapter,
+        enabled: false,
+      );
+
+      final status = await service.ensureInitialized();
+      await service.activateAccount('acc-1');
+      await service.start();
+
+      expect(status, NotificationHostStatus.unsupported);
+      expect(adapter.initializeCalls, 1);
+      expect(adapter.stopCalls, 1);
+      expect(adapter.startCalls, 0);
+    });
   });
 }
 

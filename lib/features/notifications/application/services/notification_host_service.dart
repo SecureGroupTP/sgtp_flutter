@@ -4,17 +4,33 @@ import 'package:sgtp_flutter/features/notifications/domain/repositories/notifica
 class NotificationHostService {
   NotificationHostService({
     required NotificationHostPlatformAdapter platformAdapter,
-  }) : _platformAdapter = platformAdapter;
+    bool enabled = true,
+  }) : _platformAdapter = platformAdapter,
+       _enabled = enabled;
 
   final NotificationHostPlatformAdapter _platformAdapter;
+  final bool _enabled;
   Future<NotificationHostStatus>? _initializeFuture;
   String? _activeAccountId;
   NotificationHostStatus? _status;
 
   Future<NotificationHostStatus> ensureInitialized() async {
+    if (!_enabled) {
+      _initializeFuture ??= _stopDisabledHost();
+      return _initializeFuture!;
+    }
     final status = await (_initializeFuture ??= _platformAdapter.initialize());
     _status = status;
     return status;
+  }
+
+  Future<NotificationHostStatus> _stopDisabledHost() async {
+    try {
+      await _platformAdapter.initialize();
+      await _platformAdapter.stop();
+    } catch (_) {}
+    _status = NotificationHostStatus.unsupported;
+    return _status!;
   }
 
   Future<void> start() async {

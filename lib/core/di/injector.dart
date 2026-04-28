@@ -187,6 +187,7 @@ class AppInjector {
     );
     final notificationHostService = NotificationHostService(
       platformAdapter: createNotificationHostPlatformAdapter(),
+      enabled: PushPlatform.currentCode() != 2,
     );
     final sgtpConnectionService = SgtpConnectionService(
       notificationDispatcher: notificationDispatcher,
