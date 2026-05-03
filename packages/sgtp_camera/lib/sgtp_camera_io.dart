@@ -41,8 +41,9 @@ final class _NativeDeviceInfo extends Struct {
 
 DynamicLibrary _loadLib() {
   if (Platform.isWindows) return DynamicLibrary.open('sgtp_camera.dll');
-  if (Platform.isMacOS) return DynamicLibrary.open('libsgtp_camera.dylib');
-  if (Platform.isIOS) return DynamicLibrary.process();
+  if (Platform.isMacOS || Platform.isIOS) {
+    return DynamicLibrary.open('sgtp_camera.framework/sgtp_camera');
+  }
   return DynamicLibrary.open('libsgtp_camera.so');
 }
 

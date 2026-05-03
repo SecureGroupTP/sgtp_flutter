@@ -102,12 +102,6 @@
 @import url_launcher_ios;
 #endif
 
-#if __has_include(<volume_controller/VolumeControllerPlugin.h>)
-#import <volume_controller/VolumeControllerPlugin.h>
-#else
-@import volume_controller;
-#endif
-
 #if __has_include(<wakelock_plus/WakelockPlusPlugin.h>)
 #import <wakelock_plus/WakelockPlusPlugin.h>
 #else
@@ -133,7 +127,6 @@
   [SqflitePlugin registerWithRegistrar:[registry registrarForPlugin:@"SqflitePlugin"]];
   [Sqlite3FlutterLibsPlugin registerWithRegistrar:[registry registrarForPlugin:@"Sqlite3FlutterLibsPlugin"]];
   [URLLauncherPlugin registerWithRegistrar:[registry registrarForPlugin:@"URLLauncherPlugin"]];
-  [VolumeControllerPlugin registerWithRegistrar:[registry registrarForPlugin:@"VolumeControllerPlugin"]];
   [WakelockPlusPlugin registerWithRegistrar:[registry registrarForPlugin:@"WakelockPlusPlugin"]];
 }
 

@@ -1,7 +1,7 @@
 #include "sgtp_camera.h"
 
-static const char* kAndroidStubMessage =
-    "sgtp_camera: GStreamer Android bundle is missing; feature disabled";
+static const char* kStubMessage =
+    "sgtp_camera: GStreamer runtime is missing; feature disabled";
 
 SGTP_CAM_EXPORT void sgtp_camera_init(void) {}
 
@@ -27,7 +27,7 @@ SGTP_CAM_EXPORT int32_t sgtp_camera_open(
   (void)preview_width;
   (void)preview_height;
   (void)on_frame;
-  if (on_error) on_error(kAndroidStubMessage);
+  if (on_error) on_error(kStubMessage);
   return -1;
 }
 
