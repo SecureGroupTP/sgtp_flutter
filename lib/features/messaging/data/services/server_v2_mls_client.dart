@@ -344,7 +344,19 @@ class ServerV2MlsClient {
         _events.add(MlsCommitReceivedNetworkEvent.fromParameters(parameters));
         break;
       case 'mlsWelcomeReceived':
-        _events.add(MlsWelcomeReceivedNetworkEvent.fromParameters(parameters));
+        final deferredEventId = event[SgtpRpcClient.eventIdKey];
+        final deferredSegmentId = event[SgtpRpcClient.segmentIdKey];
+        _events.add(
+          MlsWelcomeReceivedNetworkEvent.fromParameters(
+            parameters,
+            deferredEventId: deferredEventId is Uint8List
+                ? deferredEventId
+                : null,
+            deferredSegmentId: deferredSegmentId is String
+                ? deferredSegmentId
+                : null,
+          ),
+        );
         break;
       case 'mlsExternalCommitReceived':
         _events.add(
@@ -358,5 +370,28 @@ class ServerV2MlsClient {
         _log.debug('Ignoring server event: {eventType}',
             parameters: {'eventType': eventType});
     }
+  }
+
+  /// Sends an explicit ack for a server-pushed event whose auto-ack was
+  /// deferred at the transport layer. Used for `mlsWelcomeReceived` to keep
+  /// the outbox event alive until [ServerV2ChatSession] finishes joining.
+  Future<void> acknowledgeServerEvent({
+    required Uint8List eventId,
+    required String eventType,
+    String? segmentId,
+  }) async {
+    final rpc = _rpc;
+    if (rpc == null) {
+      _log.warning(
+        'Cannot ack {eventType}: no RPC client',
+        parameters: {'eventType': eventType},
+      );
+      return;
+    }
+    await rpc.acknowledgeServerEvent(
+      eventId: eventId,
+      eventType: eventType,
+      segmentId: segmentId,
+    );
   }
 }

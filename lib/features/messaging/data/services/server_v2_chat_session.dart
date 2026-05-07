@@ -1139,7 +1139,28 @@ class ServerV2ChatSession implements ISgtpSession {
         await _handleCommit(event.commitBytes);
       case MlsWelcomeReceivedNetworkEvent():
         if (!_isWelcomeForMe(event.targetUserPublicKey)) return;
-        await _handleWelcome(event.welcomeBytes);
+        final ackable = await _handleWelcome(event.welcomeBytes);
+        final deferredEventId = event.deferredEventId;
+        final client = _rpcChat;
+        if (ackable && deferredEventId != null && client != null) {
+          try {
+            await client.acknowledgeServerEvent(
+              eventId: deferredEventId,
+              eventType: event.type,
+              segmentId: event.deferredSegmentId,
+            );
+          } catch (e, st) {
+            _log.warning(
+              'Failed to ack mlsWelcomeReceived for room {roomId}: {error}',
+              parameters: {
+                'roomId': _remoteRoomId ?? roomUUIDHex,
+                'error': e,
+              },
+              error: e,
+              stackTrace: st,
+            );
+          }
+        }
         _scheduleRemoteRoomBind();
       case MlsMessageReceivedNetworkEvent():
         if (!_ownsRemoteRoom(event.roomId)) return;
@@ -1217,9 +1238,13 @@ class ServerV2ChatSession implements ISgtpSession {
     await _handleGroupMessage(commitBytes);
   }
 
-  Future<void> _handleWelcome(Uint8List welcomeBytes) async {
+  /// Processes a Welcome payload. Returns `true` when the outcome is terminal
+  /// — successfully joined, locally already-joined, or verifiably stale — and
+  /// the corresponding outbox event (if any) may be acknowledged. Returns
+  /// `false` on transient failures, so the server keeps retransmitting.
+  Future<bool> _handleWelcome(Uint8List welcomeBytes) async {
     final mls = _mls;
-    if (mls == null) return;
+    if (mls == null) return false;
     try {
       await mls.joinFromWelcome(welcomeBytes);
       _mlsGroupReady = true;
@@ -1231,6 +1256,7 @@ class ServerV2ChatSession implements ISgtpSession {
       );
       _emitReadyIfNeeded(force: true);
       await _drainPendingInboundMessages();
+      return true;
     } catch (e, st) {
       if (_isGroupAlreadyExistsError(e)) {
         _mlsGroupReady = true;
@@ -1242,7 +1268,7 @@ class ServerV2ChatSession implements ISgtpSession {
         );
         _emitReadyIfNeeded(force: true);
         await _drainPendingInboundMessages();
-        return;
+        return true;
       }
       if (_isMissingKeyPackageForWelcomeError(e) && _isDirectRoom) {
         if (_shouldRecoverDirectWelcomeAsOwner) {
@@ -1257,7 +1283,10 @@ class ServerV2ChatSession implements ISgtpSession {
             parameters: {'roomId': _remoteRoomId ?? roomUUIDHex},
           );
         }
-        return;
+        // Stale welcome bytes will not become joinable on retransmit — recovery
+        // happens via a fresh sendWelcome from the inviter, which produces a
+        // new outbox event. Ack the current one so the outbox can flush.
+        return true;
       }
       _log.warning(
         'MLS welcome failed for room {roomId}: {error}',
@@ -1271,6 +1300,9 @@ class ServerV2ChatSession implements ISgtpSession {
               'MLS welcome failed: $e. Ask the other participant to reconnect or recreate the chat.',
         ),
       );
+      // Unknown / transient failure: leave the event un-acked so the server
+      // retransmits and we get another attempt.
+      return false;
     }
   }
 

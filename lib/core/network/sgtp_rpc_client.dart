@@ -31,6 +31,19 @@ class _QueuedCall {
 }
 
 class SgtpRpcClient {
+  /// Event types whose ack must be sent only after the application layer
+  /// finished processing the payload. For these, [_emitServerEvent] skips the
+  /// auto-ack and exposes the eventId/segmentId on the dispatched event map
+  /// under [eventIdKey] / [segmentIdKey] so handlers can ack via
+  /// [acknowledgeServerEvent] once processing succeeded.
+  static const Set<String> _eventsRequiringExplicitAck = {'mlsWelcomeReceived'};
+
+  /// Key under which deferred-ack events expose the raw event id bytes.
+  static const String eventIdKey = '_deferredEventId';
+
+  /// Key under which deferred-ack events expose the segment id (or null).
+  static const String segmentIdKey = '_deferredSegmentId';
+
   final IProtocolTransport _transport;
   final _eventCallbacks = <int, void Function(Map<String, dynamic> event)>{};
   int _nextEventCallbackId = 0;
@@ -450,15 +463,23 @@ class SgtpRpcClient {
         },
       );
     }
+    final eventType = eventTypeValue.toString();
+    final segmentId = _extractSegmentId(paramsValue);
+    final deferAck = _eventsRequiringExplicitAck.contains(eventType) &&
+        requestIdBytes != null &&
+        requestId != null &&
+        requestId.isNotEmpty;
     final event = <String, dynamic>{
       if (requestId != null) 'requestId': requestId,
-      'eventType': eventTypeValue.toString(),
+      'eventType': eventType,
       'parameters': _fromCborMap(paramsValue),
+      if (deferAck) eventIdKey: requestIdBytes,
+      if (deferAck) segmentIdKey: segmentId,
     };
     _log.debug(
       'RPC event received. EventType: {eventType}. RequestId: {requestIdShort}. Parameters: {parameters}',
       parameters: {
-        'eventType': eventTypeValue.toString(),
+        'eventType': eventType,
         'requestIdShort': requestId == null ? '-' : requestId.substring(0, 8),
         'parameters': _jsonEncode(_cborToJsonLog(paramsValue)),
       },
@@ -472,16 +493,31 @@ class SgtpRpcClient {
         Zone.current.handleUncaughtError(e, st);
       }
     }
-    if (requestIdBytes != null && requestId != null && requestId.isNotEmpty) {
-      final segmentId = _extractSegmentId(paramsValue);
+    if (!deferAck &&
+        requestIdBytes != null &&
+        requestId != null &&
+        requestId.isNotEmpty) {
       unawaited(
         _acknowledgeEvent(
           requestIdBytes,
-          eventTypeValue.toString(),
+          eventType,
           segmentId: segmentId,
         ),
       );
     }
+  }
+
+  /// Sends an explicit ack for a server event whose auto-ack was deferred.
+  ///
+  /// Used for events listed in [_eventsRequiringExplicitAck] (e.g.
+  /// `mlsWelcomeReceived`) so the outbox retains the event for retransmission
+  /// until the application layer confirms successful processing.
+  Future<void> acknowledgeServerEvent({
+    required Uint8List eventId,
+    required String eventType,
+    String? segmentId,
+  }) {
+    return _acknowledgeEvent(eventId, eventType, segmentId: segmentId);
   }
 
   // ── Logging ────────────────────────────────────────────────────────────────
